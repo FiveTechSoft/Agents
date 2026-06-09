@@ -159,19 +159,26 @@ async function ghPush(){ const repo=document.getElementById('ghrepo').value.trim
    Mini command shell + optional LLM agent (DeepSeek, function calling).
    Shell commands operate directly on the virtual disk.
    ===================================================================== */
+const HINTS=['Prueba /plan para generar un plan…','Pide: "crea notas.txt con…" (el agente escribe en el disco)',
+  'ls · read &lt;f&gt; · write &lt;f&gt; &lt;txt&gt; · del &lt;f&gt;','/cost para ver el gasto de sesión',
+  'Edita un fichero existente y verás el diff','/goal para fijar un objetivo, luego /plan',
+  '/compact para resumir el historial','/run para ejecutar el plan','Toca 💾 para ver el disco virtual'];
+let hintIdx=0;
+function nextHint(){ hintIdx=(hintIdx+1)%HINTS.length; const p=document.getElementById('prompt'); const t=document.createElement('textarea'); t.innerHTML=HINTS[hintIdx]; p.placeholder=t.value; }
+
 async function run(){
   const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
-  if(v[0]==='/'){ await slashCmd(v); return; }
+  if(v[0]==='/'){ await slashCmd(v); nextHint(); return; }
   const m=v.match(/^(ls|read|write|del|cat|rm)\b\s*(.*)$/i);
   if(m){ const cmd=m[1].toLowerCase(), rest=m[2];
     if(cmd==='ls'){ const f=await fsList(); tool(f.length?f.map(x=>x.path).join('\n'):'(disco vacío)'); }
     else if(cmd==='read'||cmd==='cat'){ const f=await fsGet(rest.trim()); tool(f?f.content:'no existe: '+rest); }
     else if(cmd==='del'||cmd==='rm'){ await fsDel(rest.trim()); refreshDisk(); tool('borrado '+rest); }
     else if(cmd==='write'){ const sp=rest.indexOf(' '); const p=sp<0?rest:rest.slice(0,sp); const c=sp<0?'':rest.slice(sp+1); const old=await fsGet(p); await fsPut(p,c); refreshDisk(); tool('escrito '+p+' ('+c.length+' B)'); if(old && old.content!==c) diffCard(p, diffLines(old.content,c)); }
-    return;
+    nextHint(); return;
   }
   // otherwise: send to the LLM agent
-  await agent(v);
+  await agent(v); nextHint();
 }
 
 /* ---- LLM agent with tools over the disk ---- */
