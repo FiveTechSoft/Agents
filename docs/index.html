@@ -52,9 +52,12 @@
         <span id="agi" class="inline-block">😎</span> Agents — Web
       </span>
       <div class="flex items-center gap-1.5 text-xs">
-        <select id="lang" onchange="setLang(this.value)" title="Idioma" class="bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs cursor-pointer">
-          <option value="es">🇪🇸 ES</option><option value="en">🇬🇧 EN</option><option value="fr">🇫🇷 FR</option><option value="de">🇩🇪 DE</option><option value="pt">🇵🇹 PT</option><option value="it">🇮🇹 IT</option>
-        </select>
+        <div class="relative">
+          <button id="langbtn" onclick="toggleLangMenu(event)" title="Idioma" class="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs">
+            <img id="langflag" class="w-4 h-3 object-cover rounded-[1px]" alt=""><span id="langcode" class="font-medium"></span>
+          </button>
+          <div id="langmenu" class="hidden absolute right-0 mt-1 bg-gray-800 border border-gray-700 rounded shadow-lg z-50 overflow-hidden min-w-[120px]"></div>
+        </div>
         <button onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
         <button onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
         <button onclick="clearChat()" title="Limpiar" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
@@ -424,8 +427,19 @@ let agentAbort=null;
 let workN=0;                  // blink the 😎 icon while Agents is working
 function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getElementById('agi'); if(e) e.classList.toggle('blink',workN>0); }
 const LANGS={es:'español',en:'English',fr:'français',de:'Deutsch',pt:'português',it:'italiano'};
+const LANGCC={es:'es',en:'gb',fr:'fr',de:'de',pt:'pt',it:'it'};   // flag country code
 let curLang=(()=>{ try{ return localStorage.getItem('lang')||'es'; }catch(e){ return 'es'; } })();
-function setLang(v){ curLang=v; try{ localStorage.setItem('lang',v); }catch(e){} tool('Idioma: '+(LANGS[v]||v)); }
+function flagUrl(code){ return 'https://flagcdn.com/24x18/'+(LANGCC[code]||'es')+'.png'; }
+function renderLangBtn(){ const f=document.getElementById('langflag'), c=document.getElementById('langcode');
+  if(f) f.src=flagUrl(curLang); if(c) c.textContent=curLang.toUpperCase(); }
+function buildLangMenu(){ const m=document.getElementById('langmenu'); if(!m) return; m.innerHTML='';
+  Object.keys(LANGS).forEach(code=>{ const b=el('<button class="flex items-center gap-2 w-full text-left px-2 py-1.5 text-xs hover:bg-gray-700"></button>');
+    const img=document.createElement('img'); img.src=flagUrl(code); img.className='w-4 h-3 object-cover rounded-[1px]';
+    const sp=document.createElement('span'); sp.textContent=code.toUpperCase()+' · '+LANGS[code];
+    b.appendChild(img); b.appendChild(sp); b.onclick=()=>{ setLang(code); m.classList.add('hidden'); }; m.appendChild(b); }); }
+function toggleLangMenu(e){ if(e)e.stopPropagation(); const m=document.getElementById('langmenu'); if(m) m.classList.toggle('hidden'); }
+document.addEventListener('click',()=>{ const m=document.getElementById('langmenu'); if(m) m.classList.add('hidden'); });
+function setLang(v){ curLang=v; try{ localStorage.setItem('lang',v); }catch(e){} renderLangBtn(); tool('Idioma: '+(LANGS[v]||v)); }
 function saveSession(){ try{ localStorage.setItem('convo',JSON.stringify(convo)); localStorage.setItem('usage',JSON.stringify(usage)); }catch(e){} }
 function restoreSession(){ try{
   const su=JSON.parse(localStorage.getItem('usage')||'null'); if(su) usage=su;
@@ -704,7 +718,7 @@ document.addEventListener('keydown',(e)=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); clearChat(); clearDivider(); }
   else if(e.key==='Escape'){ stopAgent(); } });
 
-{ const ls=document.getElementById('lang'); if(ls) ls.value=curLang; }
+buildLangMenu(); renderLangBtn();
 refreshDisk();
 if(!restoreSession()) bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
 </script>
