@@ -6,7 +6,9 @@
 <title>Agents — Web (virtual disk)</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<!-- cross-origin isolation (SharedArrayBuffer) for the Wasmer clang toolchain on static hosting -->
+<!-- cross-origin isolation (SharedArrayBuffer) for the Wasmer clang toolchain on static hosting.
+     credentialless COEP so cross-origin CDN scripts/images keep loading without CORP headers. -->
+<script>window.coi={ coepCredentialless:()=>true, shouldRegister:()=>true, doReload:()=>window.location.reload() };</script>
 <script src="https://cdn.jsdelivr.net/gh/gzuidhof/coi-serviceworker@7b1d2a092d0d2dd2b7270b6f12c023b6e26d12da/coi-serviceworker.min.js"></script>
 <!-- real git in the browser -->
 <script src="https://unpkg.com/@isomorphic-git/lightning-fs@4.6.0/dist/lightning-fs.min.js"></script>
@@ -173,7 +175,8 @@ async function newFile(){ let p=document.getElementById('newpath').value.trim();
    pipes (|) and output redirect (> >>). cwd persists in SHCWD.
    ===================================================================== */
 let SHCWD='';   // disk-relative cwd ('' = root)
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py']);
+let SH_EXIT=0;  // last command exit code (for && ||)
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py']);
 function shNorm(p){ const out=[]; (p||'').split('/').forEach(s=>{ if(s===''||s==='.')return; if(s==='..')out.pop(); else out.push(s); }); return out.join('/'); }
 function shResolve(arg){ if(!arg) return shNorm(SHCWD); return shNorm(arg.startsWith('/')?arg:(SHCWD+'/'+arg)); }
 async function shList(dir){ const items=await fsList(); const pre=dir?dir+'/':''; const dirs=new Set(), files=[];
@@ -183,41 +186,52 @@ async function shOne(cmd, stdin){
   const t=cmd.trim().match(/^(\S+)\s*([\s\S]*)$/); if(!t) return '';
   const name=t[1], rest=t[2]; const toks=rest.length?(rest.match(/(?:[^\s"]+|"[^"]*")+/g)||[]).map(s=>s.replace(/^"|"$/g,'')):[];
   const a0=toks.filter(x=>!x.startsWith('-')); const flags=toks.filter(x=>x.startsWith('-')).join('');
+  SH_EXIT=0;
   switch(name){
     case 'pwd': return '/'+shNorm(SHCWD);
     case 'echo': return toks.join(' ');
     case 'whoami': return 'agent';
     case 'date': return new Date().toString();
-    case 'env': return 'CWD=/'+shNorm(SHCWD)+'\nMODEL='+MODEL;
+    case 'env': return 'CWD=/'+shNorm(SHCWD)+'\nMODEL='+MODEL+'\nLANG='+curLang;
     case 'clear': clearChat(); return '';
-    case 'help': return 'ls cat echo pwd cd mkdir touch rm[-r] mv cp grep head tail wc find date whoami env | > >>';
+    case 'which': { const found=a0.filter(x=>SHELL_CMDS.has(x)); SH_EXIT=(a0.length&&found.length===a0.length)?0:1; return found.map(x=>'/usr/bin/'+x).join('\n'); }
+    case 'help': return 'ls cat echo pwd cd mkdir touch rm[-r] mv cp grep head tail wc find which date whoami env cc python | > >> && || ;';
     case 'ls': { const d=shResolve(a0[0]||''); const {dirs,files}=await shList(d);
       if(flags.includes('l')){ const fl=[]; for(const x of files){ const f=await fsGet((d?d+'/':'')+x); fl.push('-rw-r--r-- '+String((f&&f.content||'').length).padStart(6)+' '+x); } return dirs.map(x=>'drwxr-xr-x      - '+x+'/').concat(fl).join('\n'); }
       const all=dirs.map(x=>x+'/').concat(files); return all.length?all.join('  '):''; }
     case 'cd': { SHCWD=shResolve(a0[0]||''); return ''; }
-    case 'cat': case 'read': { if(!a0.length) return stdin||''; const out=[]; for(const x of a0){ const f=await fsGet(shResolve(x)); out.push(f?f.content:'cat: '+x+': No such file'); } return out.join('\n'); }
+    case 'cat': case 'read': { if(!a0.length) return stdin||''; const out=[]; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f) out.push(f.content); else { SH_EXIT=1; out.push('cat: '+x+': '+T('no existe','No such file')); } } return out.join('\n'); }
     case 'touch': { for(const x of a0){ const k=shResolve(x); if(!(await fsGet(k))) await fsPut(k,''); } refreshDisk(); return ''; }
     case 'mkdir': { for(const x of a0) await fsPut(shResolve(x)+'/.keep',''); refreshDisk(); return ''; }
     case 'rm': case 'del': { for(const x of a0){ const k=shResolve(x); if(flags.includes('r')){ const all=await fsList(); for(const f of all){ if(f.path===k||f.path.startsWith(k+'/')) await fsDel(f.path); } } else await fsDel(k); } refreshDisk(); return ''; }
-    case 'mv': { if(a0.length<2)return 'mv: faltan args'; const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f)return 'mv: no existe '+a0[0]; await fsPut(d,f.content); await fsDel(s); refreshDisk(); return ''; }
-    case 'cp': { if(a0.length<2)return 'cp: faltan args'; const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f)return 'cp: no existe '+a0[0]; await fsPut(d,f.content); refreshDisk(); return ''; }
+    case 'mv': { if(a0.length<2){SH_EXIT=1;return 'mv: '+T('faltan argumentos','missing args');} const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f){SH_EXIT=1;return 'mv: '+T('no existe ','no such file ')+a0[0];} await fsPut(d,f.content); await fsDel(s); refreshDisk(); return ''; }
+    case 'cp': { if(a0.length<2){SH_EXIT=1;return 'cp: '+T('faltan argumentos','missing args');} const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f){SH_EXIT=1;return 'cp: '+T('no existe ','no such file ')+a0[0];} await fsPut(d,f.content); refreshDisk(); return ''; }
     case 'grep': { const pat=a0[0]||''; let text=stdin; if(a0.length>1){ const f=await fsGet(shResolve(a0[1])); text=f?f.content:''; } let re; try{re=new RegExp(pat,'i');}catch(e){re=null;} return (text||'').split('\n').filter(l=> re?re.test(l):l.indexOf(pat)>=0).join('\n'); }
     case 'head': case 'tail': { let n=10; const ni=toks.indexOf('-n'); if(ni>=0)n=parseInt(toks[ni+1])||10; let text=stdin; const file=a0.find(x=>x!==String(n)); if(file){ const f=await fsGet(shResolve(file)); text=f?f.content:''; } const L=(text||'').split('\n'); return (name==='head'?L.slice(0,n):L.slice(Math.max(0,L.length-n))).join('\n'); }
     case 'wc': { let text=stdin; if(a0[0]){ const f=await fsGet(shResolve(a0[0])); text=f?f.content:''; } const x=text||''; return (x?x.split('\n').length:0)+' '+x.split(/\s+/).filter(Boolean).length+' '+x.length; }
     case 'find': { const items=await fsList(); const base=shResolve(a0[0]||''); return items.filter(f=>!base||f.path===base||f.path.startsWith(base+'/')).map(f=>'/'+f.path).join('\n'); }
     case 'write': { const fn=a0[0]||'untitled'; const i=rest.indexOf(fn); const c=rest.slice(i+fn.length).trim(); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
-    case 'cc': case 'clang': case 'gcc': { if(!a0[0]) return 'uso: cc <fichero.c>'; const f=await fsGet(shResolve(a0[0])); if(!f) return 'cc: no existe '+a0[0]; return await ccRun(f.content); }
-    case 'python': case 'python3': case 'py': { if(!a0[0]) return 'uso: python <fichero.py>'; const f=await fsGet(shResolve(a0[0])); if(!f) return 'python: no existe '+a0[0]; return await runPython(f.content); }
-    default: return name+': command not found';
+    case 'cc': case 'clang': case 'gcc': { if(!a0[0]){SH_EXIT=1;return T('uso: cc <fichero.c>','usage: cc <file.c>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'cc: '+T('no existe ','no such file ')+a0[0];} return await ccRun(f.content); }
+    case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
+    default: SH_EXIT=1; return name+': '+T('orden no encontrada','command not found');
   }
 }
-async function shRun(line){
+async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>)
   line=(line||'').trim(); if(!line) return '';
   let redir=null, app=false; const rm=line.match(/\s(>>?)\s*(\S+)\s*$/); if(rm){ app=rm[1]==='>>'; redir=rm[2]; line=line.slice(0,rm.index); }
   let stdin=null, out='';
   for(const st of line.split('|').map(s=>s.trim()).filter(Boolean)){ out=await shOne(st, stdin); stdin=out; }
   if(redir){ const k=shResolve(redir); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev?'\n':'')+out):out); refreshDisk(); return ''; }
   return out;
+}
+async function shRun(line){   // handle ; && || (with exit codes) + strip stderr redirects
+  line=(line||'').replace(/\s*2>\s*\/dev\/null/g,'').replace(/\s*2>&1/g,'').replace(/\s*1>&2/g,'').trim(); if(!line) return '';
+  const parts=line.split(/\s*(&&|\|\||;)\s*/); const acc=[];
+  for(let i=0;i<parts.length;i+=2){ const op=parts[i-1], seg=parts[i]; if(!seg)continue;
+    if(op==='&&' && SH_EXIT!==0) continue;
+    if(op==='||' && SH_EXIT===0) continue;
+    const o=await shPipe(seg); if(o) acc.push(o); }
+  return acc.join('\n');
 }
 function termLine(cmd, out, cwd){
   const c=el('<div class="bg-black/60 border border-gray-700 rounded-lg p-3 font-mono text-xs max-w-[90%] overflow-x-auto"></div>');
@@ -824,15 +838,15 @@ async function slashCmd(v){
     case '/cost': costCard(usage); break;
     case '/compact': await compactNow(); break;
     case '/init': { const p='CLAUDE.md'; const ex=await fsGet(p); if(!ex) await fsPut(p,'# Reglas del proyecto\n\n- Estilo de codigo: ...\n- No tocar: ...\n- Tests: ...\n'); refreshDisk(); initCard(p); break; }
-    case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool('API key guardada en este navegador.'); } else tool('Uso: /key <api-key>'); break;
-    case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool('GitHub token puesto (push/pull).'); } else tool('Uso: /ghtoken <token>'); break;
+    case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool(T('API key guardada en este navegador.','API key saved in this browser.')); } else tool(T('Uso: /key <api-key>','Usage: /key <api-key>')); break;
+    case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool(T('Token de GitHub puesto (push/pull).','GitHub token set (push/pull).')); } else tool(T('Uso: /ghtoken <token>','Usage: /ghtoken <token>')); break;
     case '/goal': { const g=arg||localStorage.getItem('goal')||'Explorar y organizar los ficheros del disco virtual con ayuda de la IA, y sincronizarlos con GitHub.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
     case '/plan':
       if(arg){ await planReal(arg); }                          // explicit task
       else if(lastPlan){ planCard(lastPlan); tool('(plan actual)'); }   // show current
       else { await planReal(null); }                            // invent from goal/conversation
       break;
-    case '/loop': { if(!arg){ loopCard({iter:3,max:15,cmds:8}); tool('Uso: /loop <objetivo> [maxIter]  — ej: /loop crea un README y documenta el disco 8'); break; }
+    case '/loop': { if(!arg){ loopCard({iter:3,max:15,cmds:8}); tool(T('Uso: /loop <objetivo> [maxIter]  — ej: /loop crea un README y documenta el disco 8','Usage: /loop <goal> [maxIter]  — e.g.: /loop create a README and document the disk 8')); break; }
       const mm=arg.match(/^(.*?)\s+(\d+)$/); const goal=mm?mm[1]:arg, mx=mm?parseInt(mm[2]):10; await loopRun(goal, mx); break; }
     case '/run': await executePlan(lastPlan); break;
     case '/clone': await gitClone(arg||GIT_REPO||document.getElementById('ghrepo').value.trim()||'FiveTechSoft/Agents'); break;
@@ -842,7 +856,7 @@ async function slashCmd(v){
     case '/sh': case '/shell': case '/bash': { const cwd=SHCWD; const out=await shRun(arg); termLine(arg||'', out, cwd); break; }
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
     case '/cc': { let code=arg; if(/^[\w./-]+\.c$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await ccRun(code); setWorking(false); termLine('clang '+( /\.c$/.test(arg.trim())?arg:'‹code›'), out, SHCWD); break; }
-    default: tool('Comando desconocido: '+cmd+'. Prueba /help.');
+    default: tool(T('Comando desconocido: ','Unknown command: ')+cmd+'. '+T('Prueba /help.','Try /help.'));
   }
 }
 
@@ -1059,7 +1073,7 @@ function skillCard(skills){
   c.appendChild(body); chat().appendChild(c); down();
 }
 async function runSkill(name,task){
-  const p=await skillPrompt(name); if(p==null){ tool('skill no existe: '+name+'. Escribe /skill para listar.'); return; }
+  const p=await skillPrompt(name); if(p==null){ tool(T('skill no existe: ','skill not found: ')+name+'. '+T('Escribe /skill para listar.','Type /skill to list.')); return; }
   tool('▸ skill: '+name);
   await agent('Sigue esta SKILL "'+name+'":\n'+p+'\n\nTarea: '+(task||'aplícala al contexto actual del disco.'));
 }
@@ -1087,7 +1101,7 @@ function toolsCard(){
 async function toolCmd(arg){
   if(!arg){ toolsCard(); return; }
   const sp=arg.indexOf(' '); const name=sp<0?arg:arg.slice(0,sp); const js=sp<0?'{}':arg.slice(sp+1).trim();
-  if(!TOOLS.some(t=>t.function.name===name)){ tool('herramienta desconocida: '+name+'. /tool para listar.'); return; }
+  if(!TOOLS.some(t=>t.function.name===name)){ tool(T('herramienta desconocida: ','unknown tool: ')+name+'. /tool '+T('para listar.','to list.')); return; }
   tool('▸ '+name+' '+js); const out=await execTool(name, js); tool(String(out));
 }
 async function skillCmd(arg){
