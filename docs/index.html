@@ -182,22 +182,22 @@ async function runDemo(){
 }
 async function runDemoLLM(){
   tool('▶ Demo (con LLM): el agente procesará la conversación de verdad.'); await sleep(400);
-  const seq=['/goal Migrar la autenticación de JWT a sesiones con cookies','/plan',
-    'Crea un fichero auth.js con una función login(user,pass) que valide credenciales y guárdalo en el disco',
-    'Ahora edita auth.js para que tambien rechace passwords vacios','/cost'];
+  const seq=['/goal Mostrar las capacidades de Agents Web: gestionar ficheros en un disco virtual con IA, generar y ejecutar planes, y sincronizar con GitHub','/plan',
+    'Crea un fichero bienvenida.md que explique qué es Agents Web y guárdalo en el disco virtual',
+    'Ahora edita bienvenida.md y añade una sección con los comandos disponibles','/cost'];
   for(const p of seq){ const i=document.getElementById('prompt'); i.value=p; await run(); await sleep(900); }
   tool('✓ Demo (LLM) completada.');
 }
 async function runDemoSim(){
   tool('▶ Demo (simulada — sin API key): cards de muestra.'); await sleep(400);
-  user('/goal Migrar la autenticación de JWT a sesiones con cookies'); goalCard('Migrar todo el sistema de autenticacion de JWT a sesiones basadas en cookies y asegurar que la cobertura de pruebas no baje del 90%.'); await sleep(800);
-  user('/plan'); planCard([{title:'Analizar dependencias actuales',state:'done'},{title:'Implementar middleware de cookies',state:'active',note:'Modificando src/middleware/auth.js…'},{title:'Actualizar tests unitarios',state:'pending'}]); await sleep(900);
-  user('Crea auth.js y luego edítalo'); curPanel=null;
-  const r1=addActionRow('write_file',{path:'auth.js'}); await sleep(500); markDone(r1);
-  const r2=addActionRow('read_file',{path:'auth.js'}); await sleep(400); markDone(r2);
-  const r3=addActionRow('write_file',{path:'auth.js'}); await sleep(500); markDone(r3);
-  await fsPut('auth.js','function login(u,p){\n  if(!u||!p) return false;\n  return true;\n}'); refreshDisk();
-  diffCard('auth.js', diffLines('function login(u,p){\n  if(!u||!p) return false;\n  return true;\n}','function login(u,p){\n  if(!u) return false;\n  return check(u,p);\n}')); await sleep(900);
+  user('/goal'); goalCard('Mostrar las capacidades de Agents Web: gestionar ficheros en un disco virtual (IndexedDB) con un agente IA, generar y ejecutar planes, y sincronizar con un repo de GitHub.'); await sleep(800);
+  user('/plan'); planCard([{title:'Crear ficheros en el disco virtual',state:'done'},{title:'Editar un fichero y mostrar el diff de cambios',state:'active',note:'Modificando bienvenida.md…'},{title:'Sincronizar el disco con GitHub (Push)',state:'pending'}]); await sleep(900);
+  user('Crea bienvenida.md y luego edítalo'); curPanel=null;
+  const r1=addActionRow('write_file',{path:'bienvenida.md'}); await sleep(500); markDone(r1);
+  const r2=addActionRow('read_file',{path:'bienvenida.md'}); await sleep(400); markDone(r2);
+  const r3=addActionRow('write_file',{path:'bienvenida.md'}); await sleep(500); markDone(r3);
+  await fsPut('bienvenida.md','# Agents Web\n\nDisco virtual con IA.\n'); refreshDisk();
+  diffCard('bienvenida.md', diffLines('# Agents Web\n\nDisco virtual con IA.\n','# Agents Web\n\nDisco virtual con IA en el navegador.\n\n## Comandos\n- /plan, /cost, /init\n')); await sleep(900);
   askPermit('ejecutar el comando','npm run build').then(()=>{}); await sleep(300);
   askUser('¿Qué backend de sesiones prefieres?',['Redis','Cookies firmadas','Base de datos']).then(()=>{}); await sleep(700);
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
