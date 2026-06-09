@@ -785,7 +785,14 @@ async function agent(text){
   const msgs=[{role:'system',content:'Eres Agents Web. Responde SIEMPRE en '+(LANGS[curLang]||'español')+'. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
   try{
-    for(let step=0; step<8; step++){
+    let step=0, limit=14;
+    while(true){
+      if(step>=limit){
+        const ans=await askUser('Límite de '+limit+' pasos alcanzado. ¿Continuar?',[{label:'Sí, +12 pasos'},{label:'Detener'}]);
+        if(/detener|stop|^no/i.test(ans)){ tool('Detenido por el usuario.'); break; }
+        limit+=12;
+      }
+      step++;
       let wait=bot('<span class="text-gray-400">pensando…</span>'); let res;
       try{ res=await streamChat(msgs, wait); }
       catch(e){ if(e.name==='AbortError'){ wait.innerHTML='<span class="text-gray-500">(detenido)</span>'; return; }
@@ -805,7 +812,6 @@ async function agent(text){
       if(/[?¿]/.test(res.content||'')){ const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus(); doneLine('Esperando respuesta del usuario…'); }
       return;
     }
-    tool('(límite de pasos)');
   } finally{ setWorking(false); saveSession(); }
 }
 
