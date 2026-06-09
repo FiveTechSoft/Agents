@@ -788,9 +788,9 @@ async function agent(text){
     let step=0, limit=14;
     while(true){
       if(step>=limit){
-        const ans=await askUser('Límite de '+limit+' pasos alcanzado. ¿Continuar?',[{label:'Sí, +12 pasos'},{label:'Detener'}]);
+        const ans=await askUser('Límite de '+limit+' pasos alcanzado. ¿Continuar?',[{label:'Sí, +14 pasos'},{label:'Detener'}]);
         if(/detener|stop|^no/i.test(ans)){ tool('Detenido por el usuario.'); break; }
-        limit+=12;
+        limit+=14;
       }
       step++;
       let wait=bot('<span class="text-gray-400">pensando…</span>'); let res;
