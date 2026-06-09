@@ -122,12 +122,11 @@ public class MainActivity extends Activity {
        thread, so blocking network here is fine). Plugged into ccharbour via
        hOpts["transport"]. Non-streaming first cut: returns the whole body and
        the status as "<status>\n<body>". ---- */
-    public String httpPost( String url, String headers, String body, int timeoutSec ) {
+    public String httpRequest( String method, String url, String headers, String body, int timeoutSec ) {
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL( url ).openConnection();
-            c.setRequestMethod( "POST" );
-            c.setDoOutput( true );
+            c.setRequestMethod( method );
             c.setConnectTimeout( timeoutSec * 1000 );
             c.setReadTimeout( timeoutSec * 1000 );
             if( headers != null ) {
@@ -137,10 +136,14 @@ public class MainActivity extends Activity {
                                                       h.substring( p + 1 ).trim() );
                 }
             }
-            byte[] payload = body.getBytes( StandardCharsets.UTF_8 );
-            OutputStream os = c.getOutputStream();
-            os.write( payload );
-            os.close();
+            boolean hasBody = body != null && body.length() > 0 && ! method.equals( "GET" );
+            if( hasBody ) {
+                c.setDoOutput( true );
+                byte[] payload = body.getBytes( StandardCharsets.UTF_8 );
+                OutputStream os = c.getOutputStream();
+                os.write( payload );
+                os.close();
+            }
 
             int status = c.getResponseCode();
             InputStream is = ( status >= 200 && status < 400 )

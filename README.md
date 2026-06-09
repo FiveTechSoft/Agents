@@ -50,6 +50,9 @@ desktop FiveWin app and the `cc.exe` console agent.
   bubbles, and **colored diffs** (green `+` / red `−`) for every write/edit.
 - 🔐 **Permission gate** — with *Auto-approve* off, every mutating tool
   (`shell`/`write`/`edit`) shows a permit / reject card and blocks until you decide.
+- 🐙 **GitHub over the REST API** — `github_read` / `github_list` / `github_write`
+  tools talk to api.github.com over HTTPS (no git or ssh binary). Token via
+  `/ghtoken <token>` or a local file; the agent proposes setup when it is missing.
 - 🗣️ **Voice dictation** — a mic button feeds speech-to-text into the prompt
   (where the WebView supports it).
 - ⚙️ **In-app settings** — text size, new agent, clear chat, and an *About* dialog,

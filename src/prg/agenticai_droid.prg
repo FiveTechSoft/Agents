@@ -21,6 +21,7 @@
 #define MAX_AGENTS  8
 
 STATIC s_aAgents := {}        // per-agent state hashes, indexed by id
+STATIC s_cGhToken             // runtime GitHub token (/ghtoken overrides the file)
 
 THREAD STATIC t_nId           // this thread's agent id
 THREAD STATIC t_oClient, t_aMessages, t_aSchemas, t_bExec, t_bTransport
@@ -191,10 +192,17 @@ STATIC FUNCTION SlashCommand( cLine )
          WCall( "addNote", "API key set." )
          WCall( "setStatus", "Ready.", "idle" )
       ENDIF
+   CASE cCmd == "/ghtoken"
+      IF Empty( cArg )
+         WCall( "addNote", "Usage: /ghtoken <github-personal-access-token>" )
+      ELSE
+         s_cGhToken := cArg
+         WCall( "addNote", "GitHub token set. github_read/list/write enabled." )
+      ENDIF
    CASE cCmd == "/clear"
       ClearAll()
    CASE cCmd == "/help"
-      WCall( "addNote", "Commands: /key <api-key>  /clear  /help" )
+      WCall( "addNote", "Commands: /key <api-key>  /ghtoken <token>  /clear  /help" )
    OTHERWISE
       WCall( "addNote", "Unknown command. Try /key, /clear, /help." )
    ENDCASE
@@ -232,6 +240,9 @@ STATIC FUNCTION BuildTools( lTeam )
    CCTOOLS_Register( oReg, CCTool_WebFetch() )
    CCTOOLS_Register( oReg, CCTool_Memory( "memory_" + LTrim( Str( t_nId ) ) + ".md" ) )
    CCTOOLS_Register( oReg, GuiAskUser() )
+   CCTOOLS_Register( oReg, CCTool_GhRead() )
+   CCTOOLS_Register( oReg, CCTool_GhList() )
+   CCTOOLS_Register( oReg, CCTool_GhWrite() )
    IF lTeam
       CCTOOLS_Register( oReg, TeamTool() )   // dispatch_team (coordinator only)
    ENDIF
@@ -392,7 +403,17 @@ RETURN "The user selected: " + t_cAskAnswer
 
 // In-app changelog (kept in sync with Android/whatsnew.txt on the PC).
 STATIC FUNCTION WhatsNew()
-   RETURN "v1.0 (2026-06-09) - Primer release publico." + Chr( 10 ) + ;
+   RETURN "v1.5 (2026-06-09)" + Chr( 10 ) + ;
+          "- GitHub via REST API: tools github_read / github_list / github_write." + Chr( 10 ) + ;
+          "  Token con /ghtoken; si falta, el agente propone configurarlo." + Chr( 10 ) + Chr( 10 ) + ;
+          "v1.4 (2026-06-09)" + Chr( 10 ) + ;
+          "- Modo horizontal: las pestanas pasan a barra lateral izquierda." + Chr( 10 ) + ;
+          "- Card renombrada 'Whatsnew'." + Chr( 10 ) + Chr( 10 ) + ;
+          "v1.2 (2026-06-09)" + Chr( 10 ) + ;
+          "- Multi-agente sincronizado: tool dispatch_team reparte una tarea en" + Chr( 10 ) + ;
+          "  2-4 sub-agentes en paralelo y los une (hb_threadJoin)." + Chr( 10 ) + ;
+          "- Toggle Auto-aprobar en el menu; tabs mas pequenos." + Chr( 10 ) + Chr( 10 ) + ;
+          "v1.0 (2026-06-09) - Primer release publico." + Chr( 10 ) + ;
           "- Tabs 'Agent N'; gafas del fondo oscuras (como el icono)." + Chr( 10 ) + Chr( 10 ) + ;
           "v0.9 (2026-06-09)" + Chr( 10 ) + ;
           "- Acerca de: version Harbour, (c) FiveTech Software 2026, contacto." + Chr( 10 ) + ;
@@ -465,7 +486,7 @@ STATIC FUNCTION DroidTransport( hReq, bOnChunk )
       cHeaders += cH + Chr( 10 )
    NEXT
 
-   hHttp := AWV_Http( hReq[ "url" ], cHeaders, hReq[ "body" ], ;
+   hHttp := AWV_Http( "POST", hReq[ "url" ], cHeaders, hReq[ "body" ], ;
                       iif( hb_HHasKey( hReq, "timeout" ), hReq[ "timeout" ], 120 ) )
 
    IF hHttp[ "ok" ]
@@ -475,6 +496,135 @@ STATIC FUNCTION DroidTransport( hReq, bOnChunk )
    RETURN { "ok" => hHttp[ "ok" ], "status" => hHttp[ "status" ], ;
             "curl_code" => iif( hHttp[ "ok" ], 0, 1 ), ;
             "error" => iif( hHttp[ "ok" ], NIL, "http error" ) }
+
+// ---------------------------------------------------------------------------
+// GitHub tools over the REST API (HTTPS via the Java transport). No git binary,
+// no SSH - clone/read/write files through api.github.com.
+// ---------------------------------------------------------------------------
+STATIC FUNCTION GhToken()
+   LOCAL c
+   IF s_cGhToken != NIL .AND. !Empty( s_cGhToken )
+      RETURN s_cGhToken
+   ENDIF
+   c := hb_MemoRead( "/data/local/tmp/github.token" )
+   IF Empty( c )
+      c := hb_MemoRead( "/sdcard/Download/github.token" )
+   ENDIF
+RETURN AllTrim( StrTran( StrTran( hb_CStr( c ), Chr( 13 ), "" ), Chr( 10 ), "" ) )
+
+// Proposed setup text returned when the token is missing.
+STATIC FUNCTION GhNeedToken()
+   RETURN "No GitHub token configured. To enable GitHub, set a personal access " + ;
+          "token (repo scope) either by telling the user to run " + ;
+          "'/ghtoken <token>' in the app, or push it with " + ;
+          "'adb push token /data/local/tmp/github.token'. Ask the user to do " + ;
+          "this, then retry."
+
+STATIC FUNCTION GhHttp( cMethod, cUrl, cBody )
+   LOCAL cTok := GhToken(), cHdr
+   cHdr := "Accept: application/vnd.github+json" + Chr( 10 ) + ;
+           "User-Agent: Agents-app" + Chr( 10 ) + ;
+           "X-GitHub-Api-Version: 2022-11-28" + Chr( 10 ) + ;
+           "Content-Type: application/json"
+   IF !Empty( cTok )
+      cHdr += Chr( 10 ) + "Authorization: Bearer " + cTok
+   ENDIF
+RETURN AWV_Http( cMethod, cUrl, cHdr, iif( cBody == NIL, "", cBody ), 60 )
+
+STATIC FUNCTION GhContentsUrl( cRepo, cPath )
+   RETURN "https://api.github.com/repos/" + cRepo + "/contents/" + cPath
+
+STATIC FUNCTION CCTool_GhRead()
+   RETURN { "name" => "github_read", ;
+            "description" => "Read a file from a GitHub repo via the REST API. " + ;
+               "repo is 'owner/name', path is the file path in the repo.", ;
+            "parameters" => { "type" => "object", "properties" => { ;
+               "repo" => { "type" => "string", "description" => "owner/name" }, ;
+               "path" => { "type" => "string", "description" => "file path" } }, ;
+               "required" => { "repo", "path" } }, ;
+            "handler" => {| h | GhReadRun( h ) } }
+
+STATIC FUNCTION GhReadRun( hArgs )
+   LOCAL hHttp, hJ := NIL, cB64
+   hHttp := GhHttp( "GET", GhContentsUrl( hArgs[ "repo" ], hArgs[ "path" ] ) )
+   IF hHttp[ "status" ] == 404
+      RETURN "Not found: " + hArgs[ "path" ] + " in " + hArgs[ "repo" ]
+   ENDIF
+   IF !hHttp[ "ok" ]
+      RETURN "GitHub error " + LTrim( Str( hHttp[ "status" ] ) ) + ": " + Left( hHttp[ "body" ], 200 )
+   ENDIF
+   hb_jsonDecode( hHttp[ "body" ], @hJ )
+   IF ValType( hJ ) == "H" .AND. hb_HHasKey( hJ, "content" )
+      cB64 := StrTran( StrTran( hb_CStr( hJ[ "content" ] ), Chr( 10 ), "" ), Chr( 13 ), "" )
+      RETURN hb_base64Decode( cB64 )
+   ENDIF
+RETURN "Unexpected response: " + Left( hHttp[ "body" ], 200 )
+
+STATIC FUNCTION CCTool_GhList()
+   RETURN { "name" => "github_list", ;
+            "description" => "List a directory of a GitHub repo (REST API). " + ;
+               "repo 'owner/name', path is the directory ('' for root).", ;
+            "parameters" => { "type" => "object", "properties" => { ;
+               "repo" => { "type" => "string" }, "path" => { "type" => "string" } }, ;
+               "required" => { "repo" } }, ;
+            "handler" => {| h | GhListRun( h ) } }
+
+STATIC FUNCTION GhListRun( hArgs )
+   LOCAL hHttp, aJ := NIL, cOut := "", e
+   hHttp := GhHttp( "GET", GhContentsUrl( hArgs[ "repo" ], hb_HGetDef( hArgs, "path", "" ) ) )
+   IF !hHttp[ "ok" ]
+      RETURN "GitHub error " + LTrim( Str( hHttp[ "status" ] ) ) + ": " + Left( hHttp[ "body" ], 200 )
+   ENDIF
+   hb_jsonDecode( hHttp[ "body" ], @aJ )
+   IF ValType( aJ ) != "A"
+      RETURN "Not a directory or empty."
+   ENDIF
+   FOR EACH e IN aJ
+      cOut += hb_HGetDef( e, "type", "?" ) + "  " + hb_HGetDef( e, "name", "?" ) + Chr( 10 )
+   NEXT
+RETURN cOut
+
+STATIC FUNCTION CCTool_GhWrite()
+   RETURN { "name" => "github_write", ;
+            "description" => "Create or update a file in a GitHub repo (REST API), " + ;
+               "i.e. commit+push a single file. Needs a configured token.", ;
+            "parameters" => { "type" => "object", "properties" => { ;
+               "repo" => { "type" => "string", "description" => "owner/name" }, ;
+               "path" => { "type" => "string" }, ;
+               "content" => { "type" => "string", "description" => "new file content" }, ;
+               "message" => { "type" => "string", "description" => "commit message" } }, ;
+               "required" => { "repo", "path", "content", "message" } }, ;
+            "handler" => {| h | GhWriteRun( h ) } }
+
+STATIC FUNCTION GhWriteRun( hArgs )
+   LOCAL cUrl, hGet, hJ := NIL, cSha := "", hBody, cBodyJson, hPut
+
+   IF Empty( GhToken() )
+      RETURN GhNeedToken()
+   ENDIF
+   cUrl := GhContentsUrl( hArgs[ "repo" ], hArgs[ "path" ] )
+
+   hGet := GhHttp( "GET", cUrl )          // existing file -> need its sha to update
+   IF hGet[ "ok" ]
+      hb_jsonDecode( hGet[ "body" ], @hJ )
+      IF ValType( hJ ) == "H"
+         cSha := hb_HGetDef( hJ, "sha", "" )
+      ENDIF
+   ENDIF
+
+   hBody := { "message" => hArgs[ "message" ], ;
+              "content" => hb_base64Encode( hb_CStr( hArgs[ "content" ] ) ) }
+   IF !Empty( cSha )
+      hBody[ "sha" ] := cSha
+   ENDIF
+   cBodyJson := hb_jsonEncode( hBody )
+
+   hPut := GhHttp( "PUT", cUrl, cBodyJson )
+   IF hPut[ "status" ] == 200 .OR. hPut[ "status" ] == 201
+      RETURN "Committed " + hArgs[ "path" ] + " to " + hArgs[ "repo" ] + ;
+             iif( Empty( cSha ), " (created)", " (updated)" )
+   ENDIF
+RETURN "GitHub write error " + LTrim( Str( hPut[ "status" ] ) ) + ": " + Left( hPut[ "body" ], 200 )
 
 // ---------------------------------------------------------------------------
 // PRG -> page. AWV_Eval routes the JS to the (single) WebView; the JS helpers
@@ -519,11 +669,22 @@ STATIC FUNCTION ChatHtml()
   .tab-on  { background:#0b141a; color:#fff; border:1px solid #374151; border-bottom:1px solid #0b141a; font-weight:600; }
   .tab-off { background:#273244; color:#9ca3af; border:1px solid transparent; }
   .fbtn { width:30px; height:30px; border-radius:8px; background:#273244; color:#cbd5e1; font-weight:700; }
+
+  /* Landscape: tabs become a vertical sidebar on the left, chat fills the right */
+  @media (orientation: landscape) {
+    #app { flex-direction: row; }
+    #tabs { flex-direction: column; align-items: stretch;
+            width: 150px; max-width: 38vw; overflow-y: auto; overflow-x: hidden;
+            border-right: 1px solid #374151; border-bottom: none; padding: 8px 6px 60px 6px; gap: 4px; }
+    #tabs .tab { border-radius: 8px; margin-bottom: 0; text-align: left; }
+    #tabs .tab-on { border-bottom: 1px solid #374151; }
+  }
 </style>
 </head>
 <body class="bg-gray-900 text-gray-100 h-screen overflow-hidden font-sans text-sm">
-<div class="flex flex-col h-full">
+<div id="app" class="flex flex-col h-full">
   <div id="tabs" class="flex items-center gap-1 px-2 pt-2 bg-gray-800 border-b border-gray-700 shrink-0 overflow-x-auto"></div>
+  <div id="main" class="flex-1 flex flex-col min-w-0 min-h-0">
   <div id="panels" class="flex-1 relative overflow-hidden"></div>
   <div class="p-2 border-t border-gray-700 bg-gray-900 shrink-0 flex items-center gap-2">
     <button id="micbtn" onclick="toggleMic()" class="shrink-0 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg w-11 h-11 flex items-center justify-center">
@@ -538,6 +699,7 @@ STATIC FUNCTION ChatHtml()
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
       </button>
     </div>
+  </div>
   </div>
 </div>
 <script>
@@ -604,7 +766,7 @@ STATIC FUNCTION ChatHtml()
     const ver=(text.split(String.fromCharCode(10))[0]||'').trim();   // "v0.5 (..)"
     const card=el('<div class="bg-blue-900/30 border border-blue-700/50 rounded-lg overflow-hidden"></div>');
     const btn=el('<button class="w-full text-left px-3 py-2 text-sm font-semibold text-blue-200 flex justify-between items-center"></button>');
-    const t=document.createElement('span'); t.textContent='Novedades  ·  '+ver;
+    const t=document.createElement('span'); t.textContent='Whatsnew  ·  '+ver;
     const chev=document.createElement('span'); chev.textContent='▼'; btn.appendChild(t); btn.appendChild(chev);
     const body=el('<div class="px-3 pb-3 text-xs text-gray-300 whitespace-pre-wrap"></div>'); body.textContent=text;
     btn.onclick=function(){ body.style.display=(body.style.display==='none'?'block':'none'); };

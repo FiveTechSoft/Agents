@@ -1,6 +1,22 @@
 Agents (Android) - What's new
 =============================
 
+v1.5 (2026-06-09)
+-----------------
+* GitHub over the REST API: github_read / github_list / github_write tools (no
+  git/ssh binary). Token via /ghtoken or a local file; the agent proposes setup
+  when missing. Verified read+list against FiveTechSoft/Agents on-device.
+
+v1.4 (2026-06-09)
+-----------------
+* Landscape: tabs move to a left vertical sidebar; back to top in portrait
+  (reactive CSS, no Activity recreation thanks to configChanges). "Whatsnew" card.
+
+v1.2 (2026-06-09)
+-----------------
+* Synchronized multi-agent dispatch (dispatch_team: 2-4 parallel sub-agents,
+  hb_threadJoin). Auto-approve toggle in the config menu; smaller "Agent N" tabs.
+
 v1.0 (2026-06-09)
 -----------------
 * First public release. Tabs labelled "Agent N"; background sunglasses match the

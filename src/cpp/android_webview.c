@@ -41,7 +41,7 @@ static char      g_filesDir[ 1024 ] = "";   /* app-private writable dir */
 static jclass    g_actClass = NULL;
 static jmethodID m_setHtml;           /* (String)V */
 static jmethodID m_evalJs;            /* (String)V */
-static jmethodID m_httpPost;          /* (String,String,String,I)String */
+static jmethodID m_httpReq;           /* (method,url,headers,body,int)String */
 
 /* ---- per-agent event queue ---- */
 typedef struct ev_s { char * action; char * text; struct ev_s * next; } ev_t;
@@ -152,16 +152,17 @@ HB_FUNC( AWV_WAITEVENT )
    free( e->action ); free( e->text ); free( e );
 }
 
-/* AWV_Http( cUrl, cHeaders, cBody, nTimeout ) -> { ok, status, body }
+/* AWV_Http( cMethod, cUrl, cHeaders, cBody, nTimeout ) -> { ok, status, body }
    cHeaders is a single string, one "Key: Value" per line. */
 HB_FUNC( AWV_HTTP )
 {
    int att; JNIEnv * env = get_env( &att );
-   jstring jUrl = (*env)->NewStringUTF( env, hb_parcx( 1 ) );
-   jstring jHdr = (*env)->NewStringUTF( env, hb_parcx( 2 ) );
-   jstring jBody= (*env)->NewStringUTF( env, hb_parcx( 3 ) );
-   jstring jRes = (jstring) (*env)->CallObjectMethod( env, g_activity, m_httpPost,
-                              jUrl, jHdr, jBody, hb_parni( 4 ) );
+   jstring jMet = (*env)->NewStringUTF( env, hb_parcx( 1 ) );
+   jstring jUrl = (*env)->NewStringUTF( env, hb_parcx( 2 ) );
+   jstring jHdr = (*env)->NewStringUTF( env, hb_parcx( 3 ) );
+   jstring jBody= (*env)->NewStringUTF( env, hb_parcx( 4 ) );
+   jstring jRes = (jstring) (*env)->CallObjectMethod( env, g_activity, m_httpReq,
+                              jMet, jUrl, jHdr, jBody, hb_parni( 5 ) );
    const char * res = jRes ? (*env)->GetStringUTFChars( env, jRes, NULL ) : "0\n";
 
    /* res = "<status>\n<body...>" */
@@ -180,6 +181,7 @@ HB_FUNC( AWV_HTTP )
    hb_hashAdd( hRes, k, v ); hb_itemRelease( k ); hb_itemRelease( v );
 
    if( jRes ) { (*env)->ReleaseStringUTFChars( env, jRes, res ); (*env)->DeleteLocalRef( env, jRes ); }
+   (*env)->DeleteLocalRef( env, jMet );
    (*env)->DeleteLocalRef( env, jUrl );
    (*env)->DeleteLocalRef( env, jHdr );
    (*env)->DeleteLocalRef( env, jBody );
@@ -231,8 +233,8 @@ Java_com_harbour_agenticai_MainActivity_nativeInit( JNIEnv * env, jobject thiz, 
 
    m_setHtml  = (*env)->GetMethodID( env, cls, "setHtml",  "(Ljava/lang/String;)V" );
    m_evalJs   = (*env)->GetMethodID( env, cls, "evalJs",   "(Ljava/lang/String;)V" );
-   m_httpPost = (*env)->GetMethodID( env, cls, "httpPost",
-                  "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;" );
+   m_httpReq = (*env)->GetMethodID( env, cls, "httpRequest",
+                  "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;" );
    (*env)->DeleteLocalRef( env, cls );
 
    /* Register our extra C symbols (s_symbols is non-const so hb_vmProcessSymbols
