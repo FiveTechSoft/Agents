@@ -173,7 +173,7 @@ async function newFile(){ let p=document.getElementById('newpath').value.trim();
    pipes (|) and output redirect (> >>). cwd persists in SHCWD.
    ===================================================================== */
 let SHCWD='';   // disk-relative cwd ('' = root)
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','clear','help','date','whoami','read','del','write','env']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py']);
 function shNorm(p){ const out=[]; (p||'').split('/').forEach(s=>{ if(s===''||s==='.')return; if(s==='..')out.pop(); else out.push(s); }); return out.join('/'); }
 function shResolve(arg){ if(!arg) return shNorm(SHCWD); return shNorm(arg.startsWith('/')?arg:(SHCWD+'/'+arg)); }
 async function shList(dir){ const items=await fsList(); const pre=dir?dir+'/':''; const dirs=new Set(), files=[];
@@ -206,6 +206,8 @@ async function shOne(cmd, stdin){
     case 'wc': { let text=stdin; if(a0[0]){ const f=await fsGet(shResolve(a0[0])); text=f?f.content:''; } const x=text||''; return (x?x.split('\n').length:0)+' '+x.split(/\s+/).filter(Boolean).length+' '+x.length; }
     case 'find': { const items=await fsList(); const base=shResolve(a0[0]||''); return items.filter(f=>!base||f.path===base||f.path.startsWith(base+'/')).map(f=>'/'+f.path).join('\n'); }
     case 'write': { const fn=a0[0]||'untitled'; const i=rest.indexOf(fn); const c=rest.slice(i+fn.length).trim(); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
+    case 'cc': case 'clang': case 'gcc': { if(!a0[0]) return 'uso: cc <fichero.c>'; const f=await fsGet(shResolve(a0[0])); if(!f) return 'cc: no existe '+a0[0]; return await ccRun(f.content); }
+    case 'python': case 'python3': case 'py': { if(!a0[0]) return 'uso: python <fichero.py>'; const f=await fsGet(shResolve(a0[0])); if(!f) return 'python: no existe '+a0[0]; return await runPython(f.content); }
     default: return name+': command not found';
   }
 }
