@@ -167,7 +167,7 @@ async function run(){
     if(cmd==='ls'){ const f=await fsList(); tool(f.length?f.map(x=>x.path).join('\n'):'(disco vacío)'); }
     else if(cmd==='read'||cmd==='cat'){ const f=await fsGet(rest.trim()); tool(f?f.content:'no existe: '+rest); }
     else if(cmd==='del'||cmd==='rm'){ await fsDel(rest.trim()); refreshDisk(); tool('borrado '+rest); }
-    else if(cmd==='write'){ const sp=rest.indexOf(' '); const p=sp<0?rest:rest.slice(0,sp); const c=sp<0?'':rest.slice(sp+1); await fsPut(p,c); refreshDisk(); tool('escrito '+p+' ('+c.length+' B)'); }
+    else if(cmd==='write'){ const sp=rest.indexOf(' '); const p=sp<0?rest:rest.slice(0,sp); const c=sp<0?'':rest.slice(sp+1); const old=await fsGet(p); await fsPut(p,c); refreshDisk(); tool('escrito '+p+' ('+c.length+' B)'); if(old && old.content!==c) diffCard(p, diffLines(old.content,c)); }
     return;
   }
   // otherwise: send to the LLM agent
@@ -184,7 +184,9 @@ const TOOLS=[
 async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
   if(name==='list_files'){ return (await fsList()).map(f=>f.path).join('\n')||'(empty)'; }
   if(name==='read_file'){ const f=await fsGet(args.path); return f?f.content:'not found'; }
-  if(name==='write_file'){ await fsPut(args.path,args.content||''); refreshDisk(); return 'wrote '+args.path; }
+  if(name==='write_file'){ const old=await fsGet(args.path); await fsPut(args.path,args.content||''); refreshDisk();
+    if(old && old.content!==(args.content||'')) diffCard(args.path, diffLines(old.content,args.content||''));
+    return 'wrote '+args.path; }
   if(name==='delete_file'){ await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
   return 'unknown tool'; }
 
@@ -265,6 +267,33 @@ function loopCard(d){ d=d||{};
     '<div class="flex items-center justify-between bg-gray-900 p-2.5 rounded border border-gray-700"><div class="flex items-center gap-2"><span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500"></span></span><span class="text-xs text-gray-300">Bucle en ejecucion</span></div><button onclick="stopAgent()" class="text-[10px] bg-red-900/50 text-red-300 hover:bg-red-800/60 px-2 py-1 rounded border border-red-800/50">Interrumpir</button></div>';
   chat().appendChild(c); down();
 }
+/* ---- line diff (LCS) + colored diff card ---- */
+function diffLines(a,b){ a=(a||'').split('\n'); b=(b||'').split('\n');
+  const n=a.length,m=b.length, C=Array.from({length:n+1},()=>new Array(m+1).fill(0));
+  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--) C[i][j]=a[i]===b[j]?C[i+1][j+1]+1:Math.max(C[i+1][j],C[i][j+1]);
+  const out=[]; let i=0,j=0;
+  while(i<n&&j<m){ if(a[i]===b[j]){ out.push({t:' ',x:a[i]}); i++;j++; }
+    else if(C[i+1][j]>=C[i][j+1]){ out.push({t:'-',x:a[i]}); i++; } else { out.push({t:'+',x:b[j]}); j++; } }
+  while(i<n) out.push({t:'-',x:a[i++]}); while(j<m) out.push({t:'+',x:b[j++]}); return out; }
+
+function diffCard(path, ops){
+  const add=ops.filter(o=>o.t==='+').length, del=ops.filter(o=>o.t==='-').length;
+  const bar=el('<div class="flex items-center justify-between bg-gray-800 border border-gray-700 p-3 rounded-lg max-w-[90%]"></div>');
+  const left=el('<div class="flex items-center gap-2"></div>');
+  left.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
+  const lbl=document.createElement('span'); lbl.className='text-sm font-medium'; lbl.textContent='Código generado: '+path; left.appendChild(lbl);
+  const btn=el('<button class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded border border-gray-600">Ver Cambios (Diff)</button>');
+  bar.appendChild(left); bar.appendChild(btn);
+  const box=document.createElement('div'); box.style.cssText='display:none;margin-top:.5rem;background:#0b1020;font-size:12px;padding:10px;border-radius:8px;overflow-x:auto;font-family:Consolas,monospace;line-height:1.35;max-width:90%';
+  const hdr=document.createElement('div'); hdr.style.cssText='color:#e5e7eb;font-weight:600;margin-bottom:4px'; hdr.textContent='Added '+add+' lines, removed '+del+' lines'; box.appendChild(hdr);
+  ops.forEach(o=>{ const r=document.createElement('div'); r.style.whiteSpace='pre-wrap';
+    if(o.t==='+'){ r.style.color='#86efac'; r.style.background='rgba(34,197,94,.18)'; r.textContent='+ '+o.x; }
+    else if(o.t==='-'){ r.style.color='#fca5a5'; r.style.background='rgba(239,68,68,.18)'; r.textContent='- '+o.x; }
+    else { r.style.color='#9ca3af'; r.textContent='  '+o.x; } box.appendChild(r); });
+  btn.onclick=()=>{ box.style.display=box.style.display==='none'?'block':'none'; down(); };
+  chat().appendChild(bar); chat().appendChild(box); down();
+}
+
 async function planReal(task){
   const key=getKey(); if(!key){ tool('Sin API key para /plan (usa /key).'); return; }
   const wait=bot('<span class="text-gray-400">generando plan…</span>'); agentAbort=new AbortController();
