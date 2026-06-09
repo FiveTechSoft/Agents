@@ -291,7 +291,7 @@ async function shRun(line){   // for/while/if, ; && ||, $() $(()) vars, exit cod
   const wm=line.match(/^while\s+([\s\S]+?)\s*;\s*do\s+([\s\S]+?)\s*;?\s*done\s*$/);
   if(wm){ const out=[]; let g=0; while(g++<2000){ await shRun(wm[1]); if(SH_EXIT!==0)break; const o=await shRun(wm[2]); if(o)out.push(o); } if(g>=2000)out.push('while: '+T('límite de iteraciones','iteration limit')); return out.join('\n'); }
   // if COND; then BODY; [else BODY2;] fi
-  const im=line.match(/^if\s+([\s\S]+?)\s*;\s*then\s+([\s\S]+??)(?:\s*;\s*else\s+([\s\S]+?))?\s*;?\s*fi\s*$/);
+  const im=line.match(/^if\s+([\s\S]+?)\s*;\s*then\s+([\s\S]+?)(?:\s*;\s*else\s+([\s\S]+?))?\s*;?\s*fi\s*$/);
   if(im){ await shRun(im[1]); if(SH_EXIT===0) return await shRun(im[2]); if(im[3]) return await shRun(im[3]); return ''; }
   const parts=line.split(/\s*(&&|\|\||;)\s*/); const acc=[];
   for(let i=0;i<parts.length;i+=2){ const op=parts[i-1], seg=parts[i]; if(!seg)continue;
