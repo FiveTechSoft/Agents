@@ -457,7 +457,10 @@ async function runDemoSim(){
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
   user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
-  user('ls -l'); termLine('ls -l', await shRun('ls -l'), SHCWD); await sleep(400);
+  user('terminal: crea y lee un fichero');
+  for(const sc of ['mkdir src','echo "hola mundo" > src/readme.txt','cat src/readme.txt','grep hola src/readme.txt | wc','ls -l src']){ const cwd=SHCWD; termLine(sc, await shRun(sc), cwd); await sleep(350); }
+  user('Busca en la web qué es Harbour'); curPanel=null; { const rw=addActionRow('web_search',{query:'qué es Harbour'}); await sleep(700); markDone(rw); } bot('🔎 Harbour es un compilador open-source del lenguaje xBase (Clipper), multiplataforma.'); await sleep(500);
+  user('/clone'); await gitCard(); await sleep(300);
   user('/git'); await gitCard(); await sleep(400);
   user('/skill'); skillCard(await listSkills()); await sleep(400);
   user('/tool'); toolsCard(); await sleep(400);
@@ -685,7 +688,9 @@ function restoreSession(){ try{
 }catch(e){} return false; }
 let lastPlan=null;            // last generated plan (steps[]) -> /plan with no arg shows it
 const convo=[];              // running conversation, used to invent a plan from context
-function stopAgent(){ if(agentAbort){ agentAbort.abort(); tool('Detenido.'); } }
+let loopStop=false;
+function stopLoop(){ loopStop=true; if(agentAbort) agentAbort.abort(); }
+function stopAgent(){ loopStop=true; if(agentAbort){ agentAbort.abort(); tool('Detenido.'); } }
 function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; try{localStorage.removeItem('convo');}catch(e){} }
 
 // Streamed chat completion (SSE). Updates `wait` live with the text as it arrives;
@@ -762,7 +767,8 @@ async function slashCmd(v){
       else if(lastPlan){ planCard(lastPlan); tool('(plan actual)'); }   // show current
       else { await planReal(null); }                            // invent from goal/conversation
       break;
-    case '/loop': loopCard({iter:3,max:15,cmds:8}); break;
+    case '/loop': { if(!arg){ loopCard({iter:3,max:15,cmds:8}); tool('Uso: /loop <objetivo> [maxIter]  — ej: /loop crea un README y documenta el disco 8'); break; }
+      const mm=arg.match(/^(.*?)\s+(\d+)$/); const goal=mm?mm[1]:arg, mx=mm?parseInt(mm[2]):10; await loopRun(goal, mx); break; }
     case '/run': await executePlan(lastPlan); break;
     case '/clone': await gitClone(arg||GIT_REPO||document.getElementById('ghrepo').value.trim()||'FiveTechSoft/Agents'); break;
     case '/git': await gitCmd(arg); break;
@@ -832,6 +838,42 @@ function loopCard(d){ d=d||{};
     '<div class="flex items-center justify-between bg-gray-900 p-2.5 rounded border border-gray-700"><div class="flex items-center gap-2"><span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500"></span></span><span class="text-xs text-gray-300">Bucle en ejecucion</span></div><button onclick="stopAgent()" class="text-[10px] bg-red-900/50 text-red-300 hover:bg-red-800/60 px-2 py-1 rounded border border-red-800/50">Interrumpir</button></div>';
   chat().appendChild(c); down();
 }
+// live telemetry card for a running autonomous loop
+function liveLoopCard(maxIter){
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-4 flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-orange-400"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.5"></path></svg>Telemetria del Bucle</h4>'+
+    '<div class="grid grid-cols-2 gap-3 mb-4"><div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-gray-100"><span class="li">0</span> <span class="text-xs text-gray-500 font-normal">/ '+maxIter+'</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Iteracion Actual</div></div>'+
+    '<div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-orange-400"><span class="lc">0</span> <span class="text-xs text-gray-500 font-normal">cmds</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Comandos</div></div></div>'+
+    '<div class="flex items-center justify-between bg-gray-900 p-2.5 rounded border border-gray-700"><div class="flex items-center gap-2"><span class="ldot relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500"></span></span><span class="lstxt text-xs text-gray-300">Bucle en ejecucion</span></div><button class="lstop text-[10px] bg-red-900/50 text-red-300 hover:bg-red-800/60 px-2 py-1 rounded border border-red-800/50">Interrumpir</button></div>';
+  chat().appendChild(c); down(); c.querySelector('.lstop').onclick=()=>stopLoop();
+  return { setIter:n=>{c.querySelector('.li').textContent=n;}, setCmds:n=>{c.querySelector('.lc').textContent=n;},
+    setState:s=>{ c.querySelector('.ldot').innerHTML='<span class="relative inline-flex rounded-full h-2.5 w-2.5 '+(s==='done'?'bg-green-500':s==='run'?'bg-orange-500':'bg-gray-500')+'"></span>'; c.querySelector('.lstxt').textContent=({done:'Completado',stopped:'Interrumpido',limit:'Limite alcanzado',run:'Bucle en ejecucion'})[s]||s; c.querySelector('.lstop').disabled=(s!=='run'); } };
+}
+// real autonomous loop: keep running the agent toward a goal until DONE / limit / stop
+async function loopRun(goal, maxIter){
+  if(!getKey()){ tool('Sin API key (/key).'); return; }
+  maxIter=maxIter||10; loopStop=false; curPanel=null;
+  const card=liveLoopCard(maxIter); setWorking(true);
+  const msgs=[{role:'system',content:'Eres Agents Web en modo BUCLE AUTONOMO. Responde en '+(LANGS[curLang]||'español')+'. Objetivo: '+goal+'. En cada turno AVANZA usando las tools del disco/shell/web. NO pidas confirmacion. Cuando el objetivo este COMPLETO responde una linea que empiece exactamente con "DONE".'},{role:'user',content:'Empieza a trabajar en el objetivo.'}];
+  let iter=0, cmds=0;
+  try{
+    while(iter<maxIter && !loopStop){
+      iter++; card.setIter(iter); agentAbort=new AbortController();
+      let wait=bot('<span class="text-gray-400">iteración '+iter+'…</span>'); let res;
+      try{ res=await streamChat(msgs, wait); }catch(e){ if(e.name==='AbortError'){ wait.innerHTML='(detenido)'; break; } wait.remove(); errorCard('Bucle: error',String(e),'',null); break; }
+      if(res.usage){ usage.pin+=res.usage.prompt_tokens||0; usage.pout+=res.usage.completion_tokens||0; }
+      const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
+      if(res.tool_calls.length){
+        if(!res.content) wait.remove();
+        for(const tc of res.tool_calls){ let a={}; try{a=JSON.parse(tc.function.arguments||'{}');}catch(e){} const ref=addActionRow(tc.function.name,a); const out=await execTool(tc.function.name,tc.function.arguments); markDone(ref,/^(error|rechaz)/i.test(out)); msgs.push({role:'tool',tool_call_id:tc.id,content:out}); cmds++; card.setCmds(cmds); }
+        msgs.push({role:'user',content:'Continúa. Si el objetivo ya está completo responde DONE.'}); continue;
+      }
+      if(/^\s*DONE\b/i.test(res.content||'')){ card.setState('done'); tool('✓ Bucle completado en '+iter+' iteraciones, '+cmds+' comandos.'); setWorking(false); curPanel=null; saveSession(); return; }
+      msgs.push({role:'user',content:'Sigue avanzando hacia el objetivo. Si ya está completo responde DONE.'});
+    }
+    card.setState(loopStop?'stopped':'limit'); tool(loopStop?'Bucle interrumpido.':'Bucle: límite de '+maxIter+' iteraciones.');
+  } finally{ setWorking(false); curPanel=null; saveSession(); }
+}
 /* ---- line diff (LCS) + colored diff card ---- */
 function diffLines(a,b){ a=(a||'').split('\n'); b=(b||'').split('\n');
   const n=a.length,m=b.length, C=Array.from({length:n+1},()=>new Array(m+1).fill(0));
@@ -893,7 +935,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell)'],['/loop','Telemetría'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
