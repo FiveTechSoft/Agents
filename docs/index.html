@@ -49,7 +49,11 @@
         <button onclick="toggleDisk()" class="md:hidden bg-gray-800 border border-gray-700 rounded px-2 py-1" title="Disco">💾</button>
         😎 Agents — Web
       </span>
-      <button onclick="toggleHelp()" class="text-xs text-gray-400 hover:text-gray-200">/help</button>
+      <div class="flex items-center gap-1.5 text-xs">
+        <button onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
+        <button onclick="clearChat()" title="Limpiar" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
+        <button onclick="toggleHelp()" class="text-gray-400 hover:text-gray-200 px-1">/help</button>
+      </div>
     </div>
     <div id="chat" class="flex-1 overflow-y-auto scroll p-4 space-y-4"></div>
     <div class="p-3 border-t border-gray-800 flex gap-2">
@@ -185,16 +189,23 @@ async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){
 
 function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
 
+let agentAbort=null;
+function stopAgent(){ if(agentAbort){ agentAbort.abort(); tool('Detenido.'); } }
+function clearChat(){ chat().innerHTML=''; }
+
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
   const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Responde breve.'},{role:'user',content:text}];
   const wait=bot('<span class="text-gray-400">pensando…</span>');
+  agentAbort=new AbortController();
   for(let step=0; step<8; step++){
     let r;
     try{ r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      signal:agentAbort.signal,
       body:JSON.stringify({model:'deepseek-chat',messages:msgs,tools:TOOLS})}); }
-    catch(e){ wait.innerHTML='Error de red/CORS: '+e+'. (DeepSeek puede bloquear peticiones de navegador; usa un proxy CORS o el disco con comandos ls/read/write.)'; return; }
+    catch(e){ if(e.name==='AbortError'){ wait.innerHTML='<span class="text-gray-500">(detenido)</span>'; return; }
+      wait.innerHTML='Error de red/CORS: '+e+'. (DeepSeek puede bloquear peticiones de navegador; usa un proxy CORS o el disco con comandos ls/read/write.)'; return; }
     if(!r.ok){ wait.innerHTML='Error LLM '+r.status; return; }
     const j=await r.json(); const mo=j.choices[0].message; msgs.push(mo);
     if(mo.tool_calls&&mo.tool_calls.length){
