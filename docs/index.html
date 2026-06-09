@@ -205,14 +205,66 @@ function askUser(question, options){
 async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
   if(name==='list_files'){ return (await fsList()).map(f=>f.path).join('\n')||'(empty)'; }
   if(name==='read_file'){ const f=await fsGet(args.path); return f?f.content:'not found'; }
-  if(name==='write_file'){ const old=await fsGet(args.path); await fsPut(args.path,args.content||''); refreshDisk();
+  if(name==='write_file'){ if(!(await askPermit('escribir el archivo',args.path))) return 'Rechazado por el usuario.';
+    const old=await fsGet(args.path); await fsPut(args.path,args.content||''); refreshDisk();
     if(old && old.content!==(args.content||'')) diffCard(args.path, diffLines(old.content,args.content||''));
     return 'wrote '+args.path; }
-  if(name==='delete_file'){ await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
+  if(name==='delete_file'){ if(!(await askPermit('borrar el archivo',args.path))) return 'Rechazado por el usuario.';
+    await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
   if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
   return 'unknown tool'; }
 
 function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
+
+/* ===== collapsible "N acciones" panel with per-tool icons + check (mockup 1) ===== */
+const SVG=(cls,b)=>'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'+cls+'">'+b+'</svg>';
+const IC_FILE=SVG('text-blue-400 shrink-0','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
+const IC_SEARCH=SVG('text-purple-400 shrink-0','<circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>');
+const IC_TRASH=SVG('text-red-400 shrink-0','<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>');
+const IC_ASK=SVG('text-yellow-400 shrink-0','<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>');
+const IC_CHECK=SVG('text-green-500 shrink-0','<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>');
+const IC_X=SVG('text-red-500 shrink-0','<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>');
+const IC_CHEV=SVG('mr-1.5','<polyline points="6 9 12 15 18 9"></polyline>');
+function toolMeta(n){ return ({
+  list_files:{v:'Listando',i:IC_SEARCH,a:''}, read_file:{v:'Leyendo',i:IC_FILE,a:'path'},
+  write_file:{v:'Escribiendo',i:IC_FILE,a:'path'}, delete_file:{v:'Borrando',i:IC_TRASH,a:'path'},
+  ask_user:{v:'Preguntando',i:IC_ASK,a:'question'} }[n]||{v:n,i:IC_FILE,a:''}); }
+let curPanel=null;
+function actionPanel(){ const p=el('<div class="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden max-w-[90%]"></div>');
+  const btn=el('<button class="w-full flex items-center p-2.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-700"></button>');
+  btn.innerHTML=IC_CHEV+'<span class="count font-medium">Acciones</span>';
+  const body=el('<div class="p-3 border-t border-gray-700 space-y-3 text-xs"></div>');
+  btn.onclick=()=>{ body.style.display=body.style.display==='none'?'':'none'; };
+  p.appendChild(btn); p.appendChild(body); p._body=body; p._btn=btn; p._n=0; chat().appendChild(p); return p; }
+function addActionRow(name,args){ if(!curPanel)curPanel=actionPanel(); const m=toolMeta(name);
+  const row=el('<div class="flex items-center text-gray-300"></div>'); const ic=el('<span class="mr-2.5"></span>'); ic.innerHTML=m.i;
+  const txt=el('<span class="flex-1 min-w-0 truncate"></span>'); const verb=document.createElement('span'); verb.textContent=m.v+' ';
+  const code=el('<code class="px-1.5 py-0.5 rounded border border-gray-800 bg-gray-900 text-pink-400 break-all"></code>');
+  code.textContent=(args&&(args[m.a]||args.path||args.query||args.question))||''; txt.appendChild(verb); txt.appendChild(code);
+  const chk=el('<span class="ml-2 shrink-0 text-gray-500 animate-pulse">●</span>'); row.appendChild(ic); row.appendChild(txt); row.appendChild(chk);
+  curPanel._body.appendChild(row); down(); return {chk}; }
+function markDone(ref,err){ if(ref){ ref.chk.innerHTML=err?IC_X:IC_CHECK; ref.chk.classList.remove('animate-pulse','text-gray-500'); }
+  if(curPanel){ curPanel._n++; curPanel._btn.querySelector('.count').textContent=curPanel._n+(curPanel._n===1?' accion completada':' acciones completadas'); } }
+
+/* ===== permit/reject gate (mockup 1) ===== */
+let autoApprove=false;
+function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
+  return new Promise(res=>{
+    const card=el('<div class="bg-[#2a1f0c] border border-yellow-700/50 p-3 rounded-lg max-w-[90%]"></div>');
+    const head=el('<div class="flex items-start gap-2 mb-2"></div>');
+    head.innerHTML=SVG('text-yellow-500 shrink-0 mt-0.5','<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>');
+    const tx=document.createElement('div'); tx.innerHTML='<h4 class="text-yellow-500 text-sm font-semibold">Requiere confirmación</h4>';
+    const p=document.createElement('p'); p.className='text-xs text-gray-300 mt-1'; p.textContent='El agente desea '+action+': ';
+    const c=document.createElement('code'); c.className='text-yellow-200 bg-yellow-900/40 px-1 rounded break-all'; c.textContent=detail; p.appendChild(c);
+    tx.appendChild(p); head.appendChild(tx); card.appendChild(head);
+    const btns=el('<div class="flex gap-2"></div>');
+    const ok=el('<button class="flex-1 bg-yellow-600 hover:bg-yellow-500 text-white text-xs py-2 rounded">Permitir Ejecución</button>');
+    const al=el('<button class="bg-yellow-700/40 hover:bg-yellow-700/60 text-yellow-100 text-xs py-2 px-2 rounded">Siempre</button>');
+    const no=el('<button class="flex-1 bg-gray-700 hover:bg-gray-600 text-white text-xs py-2 rounded">Rechazar</button>');
+    const dis=()=>btns.querySelectorAll('button').forEach(b=>b.disabled=true);
+    ok.onclick=()=>{ dis(); res(true); }; al.onclick=()=>{ autoApprove=true; dis(); res(true); }; no.onclick=()=>{ dis(); res(false); };
+    btns.appendChild(ok); btns.appendChild(al); btns.appendChild(no); card.appendChild(btns); chat().appendChild(card); down();
+  }); }
 
 let agentAbort=null;
 let lastPlan=null;            // last generated plan (steps[]) -> /plan with no arg shows it
@@ -222,7 +274,7 @@ function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; }
 
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
-  convo.push({role:'user',content:text});
+  convo.push({role:'user',content:text}); curPanel=null;
   const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. IMPORTANTE: si necesitas CUALQUIER decision o dato del usuario, DEBES llamar a la tool ask_user (con 2-4 opciones cuando sea posible) y esperar; NUNCA hagas preguntas en texto. Responde breve.'},{role:'user',content:text}];
   let wait=bot('<span class="text-gray-400">pensando…</span>');
   agentAbort=new AbortController();
@@ -235,10 +287,13 @@ async function agent(text){
     catch(e){ if(e.name==='AbortError'){ wait.innerHTML='<span class="text-gray-500">(detenido)</span>'; return; }
       wait.innerHTML='Error de red/CORS: '+e+'. (DeepSeek puede bloquear peticiones de navegador; usa un proxy CORS o el disco con comandos ls/read/write.)'; return; }
     if(!r.ok){ wait.innerHTML='Error LLM '+r.status; return; }
-    const j=await r.json(); const mo=j.choices[0].message; msgs.push(mo);
+    const j=await r.json(); if(j.usage){ usage.pin+=j.usage.prompt_tokens||0; usage.pout+=j.usage.completion_tokens||0; }
+    const mo=j.choices[0].message; msgs.push(mo);
     if(mo.tool_calls&&mo.tool_calls.length){
-      for(const tc of mo.tool_calls){ tool('▸ '+tc.function.name+' '+tc.function.arguments);
+      for(const tc of mo.tool_calls){ let a={}; try{a=JSON.parse(tc.function.arguments||'{}');}catch(e){}
+        const ref=addActionRow(tc.function.name,a);
         const out=await execTool(tc.function.name,tc.function.arguments);
+        markDone(ref,/^(error|rechaz)/i.test(out));
         msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
       continue;
     }
@@ -261,8 +316,11 @@ async function agent(text){
 async function slashCmd(v){
   const sp=v.indexOf(' '); const cmd=(sp<0?v:v.slice(0,sp)).toLowerCase(); const arg=sp<0?'':v.slice(sp+1).trim();
   switch(cmd){
-    case '/help': toggleHelp(); break;
-    case '/clear': clearChat(); break;
+    case '/help': helpCard(); break;
+    case '/clear': clearChat(); clearDivider(); break;
+    case '/cost': costCard(usage); break;
+    case '/compact': await compactNow(); break;
+    case '/init': { const p='CLAUDE.md'; const ex=await fsGet(p); if(!ex) await fsPut(p,'# Reglas del proyecto\n\n- Estilo de codigo: ...\n- No tocar: ...\n- Tests: ...\n'); refreshDisk(); initCard(p); break; }
     case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool('API key guardada en este navegador.'); } else tool('Uso: /key <api-key>'); break;
     case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool('GitHub token puesto (push/pull).'); } else tool('Uso: /ghtoken <token>'); break;
     case '/goal': { const g=arg||localStorage.getItem('goal')||'Migrar todo el sistema de autenticacion de JWT a sesiones basadas en cookies y asegurar que la cobertura de pruebas no baje del 90%.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
@@ -284,23 +342,34 @@ function goalCard(text){
     '<div><h4 class="text-indigo-300 font-semibold text-xs uppercase tracking-wider mb-1">Objetivo Activo</h4><p class="text-gray-200 leading-relaxed gt"></p></div></div>';
   c.querySelector('.gt').textContent=text; chat().appendChild(c); down();
 }
+let curPlanCard=null;
+function cycleState(s){ s.state = s.state==='pending'?'active':(s.state==='active'?'done':'pending'); }
 function planCard(steps){
-  steps=steps||[]; const done=steps.filter(s=>s.state==='done').length;
+  steps=steps||[]; lastPlan=steps; const done=steps.filter(s=>s.state==='done').length;
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700"><h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-blue-400"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>Plan de Accion</h4><span class="text-[10px] bg-blue-900/50 text-blue-300 px-2 py-1 rounded font-medium">'+done+' / '+steps.length+' Completado</span></div><div class="pb space-y-4 relative before:absolute before:inset-0 before:ml-2.5 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-green-500 before:via-blue-500 before:to-gray-700"></div>';
   const body=c.querySelector('.pb');
-  steps.forEach(s=>{ let dot,cls;
-    if(s.state==='done'){ dot='<div class="h-5 w-5 rounded-full bg-green-500 border-4 border-gray-800 flex items-center justify-center shrink-0 z-10"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg></div>'; cls='text-xs font-semibold text-gray-300 line-through'; }
-    else if(s.state==='active'){ dot='<div class="h-5 w-5 rounded-full bg-blue-500 border-4 border-gray-800 shrink-0 z-10 animate-pulse"></div>'; cls='text-xs font-semibold text-blue-400'; }
-    else { dot='<div class="h-5 w-5 rounded-full bg-gray-700 border-4 border-gray-800 shrink-0 z-10"></div>'; cls='text-xs font-medium text-gray-500'; }
-    const row=el('<div class="relative flex items-start gap-4">'+dot+'<div class="pt-0.5"><h5 class="'+cls+'"></h5></div></div>');
-    row.querySelector('h5').textContent=s.title||'';
-    if(s.note){ const p=document.createElement('p'); p.className='text-[10px] text-gray-400 mt-1'; p.textContent=s.note; row.querySelector('h5').parentNode.appendChild(p); }
+  steps.forEach((s,idx)=>{ let dot,cls;
+    if(s.state==='done'){ dot='<div class="dot h-5 w-5 rounded-full bg-green-500 border-4 border-gray-800 flex items-center justify-center shrink-0 z-10 cursor-pointer"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg></div>'; cls='text-xs font-semibold text-gray-300 line-through'; }
+    else if(s.state==='active'){ dot='<div class="dot h-5 w-5 rounded-full bg-blue-500 border-4 border-gray-800 shrink-0 z-10 animate-pulse cursor-pointer"></div>'; cls='text-xs font-semibold text-blue-400'; }
+    else { dot='<div class="dot h-5 w-5 rounded-full bg-gray-700 border-4 border-gray-800 shrink-0 z-10 cursor-pointer"></div>'; cls='text-xs font-medium text-gray-500'; }
+    const row=el('<div class="relative flex items-start gap-3"><div class="shrink-0">'+dot+'</div><div class="pt-0.5 flex-1 min-w-0 flex items-start gap-2"><h5 class="'+cls+' flex-1 outline-none" contenteditable="true"></h5><button class="del text-red-400 hover:text-red-300 text-xs shrink-0">✕</button></div></div>');
+    const h5=row.querySelector('h5'); h5.textContent=s.title||'';
+    h5.onblur=()=>{ s.title=h5.textContent.trim(); };
+    h5.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); h5.blur(); } };
+    row.querySelector('.dot').onclick=()=>{ cycleState(s); planCard(steps); };
+    row.querySelector('.del').onclick=()=>{ steps.splice(idx,1); planCard(steps); };
+    if(s.note){ const p=document.createElement('p'); p.className='text-[10px] text-gray-400 mt-1'; p.textContent=s.note; row.querySelector('.pt-0\\.5').appendChild(p); }
     body.appendChild(row); });
-  if(steps.length){ const run=document.createElement('button');
-    run.className='mt-3 w-full bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded';
+
+  const add=document.createElement('button'); add.className='mt-3 w-full bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs py-1.5 rounded border border-dashed border-gray-600';
+  add.textContent='+ Añadir paso'; add.onclick=()=>{ steps.push({title:'Nuevo paso',state:'pending'}); planCard(steps); };
+  c.appendChild(add);
+  if(steps.length){ const run=document.createElement('button'); run.className='mt-2 w-full bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded';
     run.textContent='▶ Ejecutar plan'; run.onclick=()=>executePlan(steps); c.appendChild(run); }
-  chat().appendChild(c); down();
+
+  if(curPlanCard && curPlanCard.isConnected){ curPlanCard.replaceWith(c); } else { chat().appendChild(c); }
+  curPlanCard=c; down();
 }
 
 // Run the plan step by step: each step is sent to the agent (tools over the disk).
@@ -349,6 +418,58 @@ function diffCard(path, ops){
     else { r.style.color='#9ca3af'; r.textContent='  '+o.x; } box.appendChild(r); });
   btn.onclick=()=>{ box.style.display=box.style.display==='none'?'block':'none'; down(); };
   chat().appendChild(bar); chat().appendChild(box); down();
+}
+
+/* ===== session usage + /cost /compact /init /help cards (mockup 3) ===== */
+let usage={pin:0,pout:0};
+function estCost(u){ return (u.pin/1e6*0.14 + u.pout/1e6*0.28); }   // ~DeepSeek pricing
+function costCard(u){
+  const tot=u.pin+u.pout||1, pi=Math.round(u.pin/tot*100), po=100-pi;
+  const c=el('<div class="bg-gradient-to-br from-emerald-900/40 to-gray-800 border border-emerald-800/50 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex justify-between items-center mb-3"><h4 class="text-emerald-400 font-semibold flex items-center gap-2">'+
+    SVG('','<line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>')+'Métricas de Sesión</h4><span class="text-xl font-bold text-white">$'+estCost(u).toFixed(2)+'</span></div>'+
+    '<div class="space-y-2 text-xs"><div><div class="flex justify-between text-gray-400 mb-1"><span>Input (contexto)</span><span class="text-gray-200">'+u.pin.toLocaleString()+' tokens</span></div><div class="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden"><div class="h-full bg-blue-500" style="width:'+pi+'%"></div></div></div>'+
+    '<div><div class="flex justify-between text-gray-400 mb-1"><span>Output (generado)</span><span class="text-gray-200">'+u.pout.toLocaleString()+' tokens</span></div><div class="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden"><div class="h-full bg-emerald-500" style="width:'+po+'%"></div></div></div></div>';
+  chat().appendChild(c); down();
+}
+function compactCard(before,after){
+  const c=el('<div class="bg-gray-800 border border-purple-800/50 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex items-center gap-3 mb-2"><div class="p-2 bg-purple-900/50 text-purple-400 rounded-lg">'+
+    SVG('','<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>')+'</div>'+
+    '<div><h4 class="text-purple-400 font-semibold text-sm">Contexto Compactado</h4><p class="text-xs text-gray-400">Historial resumido con éxito.</p></div></div>'+
+    '<div class="mt-3 flex items-center justify-between bg-gray-900 rounded border border-gray-700 p-2 text-xs"><span class="text-red-400 line-through decoration-red-900">'+before.toLocaleString()+' tokens</span>'+
+    SVG('text-gray-500','<path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path>')+'<span class="text-green-400 font-bold">'+after.toLocaleString()+' tokens</span></div>';
+  chat().appendChild(c); down();
+}
+function initCard(path){
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-3 rounded-xl flex items-center justify-between max-w-[90%]"></div>');
+  const left=el('<div class="flex items-center gap-3"></div>'); const ic=el('<span></span>'); ic.innerHTML=IC_FILE;
+  const tx=document.createElement('div'); tx.innerHTML='<h4 class="text-sm font-semibold text-gray-200">'+path+'</h4><p class="text-[10px] text-gray-400">Reglas del proyecto inicializadas</p>';
+  left.appendChild(ic); left.appendChild(tx);
+  const btn=el('<button class="bg-gray-700 hover:bg-gray-600 text-xs px-3 py-1.5 rounded border border-gray-600 text-white">Editar</button>');
+  btn.onclick=()=>openEd(path); c.appendChild(left); c.appendChild(btn); chat().appendChild(c); down();
+}
+function clearDivider(){
+  const d=el('<div class="relative flex py-2 items-center"><div class="flex-grow border-t border-gray-700"></div><span class="mx-4 text-gray-500 text-[10px] uppercase tracking-widest font-semibold flex items-center gap-1"></span><div class="flex-grow border-t border-gray-700"></div></div>');
+  d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
+}
+function helpCard(){
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/loop','Telemetría'],['/ghtoken','Token GitHub']];
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
+  const g=c.querySelector('.chc');
+  cmds.forEach(([cm,ds])=>{ const b=el('<button class="flex flex-col text-left p-2 rounded bg-gray-900 border border-gray-700 hover:border-gray-500"></button>');
+    b.innerHTML='<span class="text-blue-400 font-mono text-xs"></span><span class="text-[10px] text-gray-400 mt-0.5"></span>';
+    b.children[0].textContent=cm; b.children[1].textContent=ds; b.onclick=()=>{ document.getElementById('prompt').value=cm+' '; document.getElementById('prompt').focus(); };
+    g.appendChild(b); });
+  chat().appendChild(c); down();
+}
+async function compactNow(){
+  const before=usage.pin+usage.pout;
+  if(convo.length>2){ const summary=convo.slice(0,-2).map(m=>m.role+': '+m.content).join(' | ').slice(0,1200);
+    convo.length=0; convo.push({role:'system',content:'Resumen previo: '+summary}); }
+  const after=Math.round((before||14000)*0.2);
+  compactCard(before||84500, after);
 }
 
 async function planReal(task){
