@@ -177,7 +177,19 @@ function promptKey(e){ const i=e.target;
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function runDemo(){
-  clearChat(); tool('▶ Demo: probando las cards automáticamente…'); await sleep(400);
+  clearChat();
+  if(localStorage.getItem('ds_key')){ await runDemoLLM(); } else { await runDemoSim(); }
+}
+async function runDemoLLM(){
+  tool('▶ Demo (con LLM): el agente procesará la conversación de verdad.'); await sleep(400);
+  const seq=['/goal Migrar la autenticación de JWT a sesiones con cookies','/plan',
+    'Crea un fichero auth.js con una función login(user,pass) que valide credenciales y guárdalo en el disco',
+    'Ahora edita auth.js para que tambien rechace passwords vacios','/cost'];
+  for(const p of seq){ const i=document.getElementById('prompt'); i.value=p; await run(); await sleep(900); }
+  tool('✓ Demo (LLM) completada.');
+}
+async function runDemoSim(){
+  tool('▶ Demo (simulada — sin API key): cards de muestra.'); await sleep(400);
   user('/goal Migrar la autenticación de JWT a sesiones con cookies'); goalCard('Migrar todo el sistema de autenticacion de JWT a sesiones basadas en cookies y asegurar que la cobertura de pruebas no baje del 90%.'); await sleep(800);
   user('/plan'); planCard([{title:'Analizar dependencias actuales',state:'done'},{title:'Implementar middleware de cookies',state:'active',note:'Modificando src/middleware/auth.js…'},{title:'Actualizar tests unitarios',state:'pending'}]); await sleep(900);
   user('Crea auth.js y luego edítalo'); curPanel=null;
