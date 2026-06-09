@@ -7,6 +7,9 @@
 *The same agentic engine that powers the `cc` console, on your phone:
 streaming chat, real tool-calling, and multiple agents running in parallel.*
 
+**🌐 Live web demo (simulated disk on IndexedDB + GitHub sync):**
+**https://fivetechsoft.github.io/Agents/**
+
 </div>
 
 ---
