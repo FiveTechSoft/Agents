@@ -294,7 +294,7 @@ async function shOne(cmd, stdin){
     case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
     case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?(url.split('/').pop()||'index.html'):null);
       if(!url){SH_EXIT=1;return name+': '+T('falta URL','missing URL');}
-      const cands=[url,'https://corsproxy.io/?url='+encodeURIComponent(url),'https://api.allorigins.win/raw?url='+encodeURIComponent(url),'https://r.jina.ai/'+url];
+      const cands=[]; if(PROXY)cands.push(PROXY+'/?url='+encodeURIComponent(url)); cands.push(url,'https://corsproxy.io/?url='+encodeURIComponent(url),'https://api.allorigins.win/raw?url='+encodeURIComponent(url),'https://r.jina.ai/'+url);
       let got=null,ct='';
       for(const c of cands){ try{ const r=await fetch(c); if(!r.ok)continue; ct=r.headers.get('content-type')||''; if(/^text|json|xml|javascript|charset|svg/i.test(ct)||!ct){ got={text:await r.text()}; } else { got={buf:new Uint8Array(await r.arrayBuffer())}; } break; }catch(e){} }
       if(!got){ SH_EXIT=1; return name+': '+T('descarga falló (CORS/red)','download failed (CORS/network)'); }
@@ -510,6 +510,8 @@ const GFS = (typeof LightningFS!=='undefined') ? new LightningFS('agitfs') : nul
 const GP = GFS ? GFS.promises : null;
 const GITDIR='/repo', CORSPX='https://cors.isomorphic-git.org';
 let GIT_REPO=(()=>{ try{return localStorage.getItem('gitrepo')||null;}catch(e){return null;} })();
+let PROXY=(()=>{ try{return localStorage.getItem('corsproxy')||'';}catch(e){return '';} })();   // Cloudflare Worker CORS proxy
+function setProxy(u){ PROXY=(u||'').replace(/\/+$/,''); try{localStorage.setItem('corsproxy',PROXY);}catch(e){} }
 function gitReady(){ return (typeof git!=='undefined' && GFS && typeof GitHttp!=='undefined'); }
 function ghTok(){ const e=document.getElementById('ghtok'); return e?e.value.trim():''; }
 function gitAuthor(){ return {name:'Agents Web', email:'agents@web.local'}; }
@@ -538,8 +540,16 @@ async function gitCard(){
 }
 // Clone over the GitHub API (CORS-friendly, no proxy): fetch the tree + blobs,
 // write them to LightningFS + the disk, then init a local real git repo + commit.
+async function gitCloneSmart(repo){   // real git smart-http through the CORS proxy
+  GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
+  tool('git clone '+repo+' (smart-http via proxy)…'); setWorking(true);
+  try{ try{ await GP.rmdir(GITDIR,{recursive:true}); }catch(e){}
+    await git.clone({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:PROXY,url:'https://github.com/'+repo+'.git',singleBranch:true,depth:25,onAuth:gitOnAuth()});
+    const n=await mirrorToDisk(); gitCard(); tool('clonado (git real): '+n+' ficheros.');
+  }catch(e){ errorCard('git clone falló', String(e), 'proxy: '+PROXY, null); } finally{ setWorking(false); } }
 async function gitClone(repo){
   if(!gitReady()){ tool('isomorphic-git no cargó (revisa conexión).'); return; }
+  if(PROXY) return await gitCloneSmart(repo);   // use real git if a proxy is configured
   GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
   tool('Clonando '+repo+' (GitHub API)…'); setWorking(true);
   try{
@@ -573,6 +583,9 @@ async function gitCommit(msg){ if(!gitReady()){tool('git no listo.');return;} aw
 // Push over the GitHub API (CORS-friendly): commit changed files via Contents API.
 async function gitPush(){ if(!GIT_REPO){ tool('clona primero (/clone <repo>).'); return; }
   if(!ghTok()){ tool('push necesita token (/ghtoken).'); return; }
+  if(PROXY){ tool('git push (smart-http via proxy)…'); setWorking(true);
+    try{ await gitCommit('push'); const r=await git.push({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:PROXY,onAuth:gitOnAuth()}); tool('push (git real) '+((r&&r.ok)?'ok':'enviado')); }
+    catch(e){ errorCard('git push falló', String(e),'proxy: '+PROXY,null); } finally{ setWorking(false); } return; }
   tool('Push (GitHub API) → '+GIT_REPO+' …'); setWorking(true);
   try{ const items=await fsList(); let n=0;
     for(const f of items){ const url='https://api.github.com/repos/'+GIT_REPO+'/contents/'+encodeURI(f.path);
@@ -997,6 +1010,7 @@ async function slashCmd(v){
     case '/loop': { if(!arg){ loopCard({iter:3,max:15,cmds:8}); tool(T('Uso: /loop <objetivo> [maxIter]  — ej: /loop crea un README y documenta el disco 8','Usage: /loop <goal> [maxIter]  — e.g.: /loop create a README and document the disk 8')); break; }
       const mm=arg.match(/^(.*?)\s+(\d+)$/); const goal=mm?mm[1]:arg, mx=mm?parseInt(mm[2]):10; await loopRun(goal, mx); break; }
     case '/run': await executePlan(lastPlan); break;
+    case '/proxy': if(arg){ setProxy(arg); tool(T('Proxy CORS: ','CORS proxy: ')+PROXY+' '+T('(git smart-http + binarios)','(git smart-http + binaries)')); } else tool(PROXY?('proxy: '+PROXY):T('Sin proxy. Uso: /proxy <url-del-worker>. Ver docs/cloudflare-worker.js','No proxy. Usage: /proxy <worker-url>. See docs/cloudflare-worker.js')); break;
     case '/clone': await gitClone(arg||GIT_REPO||document.getElementById('ghrepo').value.trim()||'FiveTechSoft/Agents'); break;
     case '/git': await gitCmd(arg); break;
     case '/skill': await skillCmd(arg); break;
@@ -1164,7 +1178,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
