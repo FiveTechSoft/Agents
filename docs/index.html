@@ -9,7 +9,7 @@
 <!-- cross-origin isolation (SharedArrayBuffer) for the Wasmer clang toolchain on static hosting.
      credentialless COEP so cross-origin CDN scripts/images keep loading without CORP headers. -->
 <script>window.coi={ coepCredentialless:()=>true, shouldRegister:()=>true, doReload:()=>window.location.reload() };</script>
-<script src="https://cdn.jsdelivr.net/gh/gzuidhof/coi-serviceworker@7b1d2a092d0d2dd2b7270b6f12c023b6e26d12da/coi-serviceworker.min.js"></script>
+<script src="coi-serviceworker.min.js"></script>
 <!-- real git in the browser -->
 <script src="https://unpkg.com/@isomorphic-git/lightning-fs@4.6.0/dist/lightning-fs.min.js"></script>
 <script src="https://unpkg.com/isomorphic-git@1.27.1/index.umd.min.js"></script>
