@@ -554,9 +554,8 @@ async function gitClone(repo){
     await mkdirp(GITDIR); await git.init({fs:GFS,dir:GITDIR,defaultBranch:branch});
     let n=0;
     for(const b of blobs){
-      const bl=await (await fetch('https://api.github.com/repos/'+repo+'/git/blobs/'+b.sha,{headers:ghHeaders()})).json();
-      let content=''; const raw=(bl.content||'').replace(/\n/g,'');
-      try{ content=decodeURIComponent(escape(atob(raw))); }catch(e){ try{ content=atob(raw); }catch(e2){ content=''; } }
+      // fetch file content from raw.githubusercontent.com (CDN, CORS *, NOT API-rate-limited)
+      let content=''; try{ const r=await fetch('https://raw.githubusercontent.com/'+repo+'/'+branch+'/'+b.path.split('/').map(encodeURIComponent).join('/')); if(r.ok) content=await r.text(); }catch(e){}
       await fsPut(b.path, content);
       const full=GITDIR+'/'+b.path; await mkdirp(full.slice(0,full.lastIndexOf('/'))); await GP.writeFile(full, content,'utf8');
       await git.add({fs:GFS,dir:GITDIR,filepath:b.path}); n++;
