@@ -241,6 +241,7 @@ async function slashCmd(v){
       else { await planReal(null); }                            // invent from goal/conversation
       break;
     case '/loop': loopCard({iter:3,max:15,cmds:8}); break;
+    case '/run': await executePlan(lastPlan); break;
     default: tool('Comando desconocido: '+cmd+'. Prueba /help.');
   }
 }
@@ -265,8 +266,25 @@ function planCard(steps){
     row.querySelector('h5').textContent=s.title||'';
     if(s.note){ const p=document.createElement('p'); p.className='text-[10px] text-gray-400 mt-1'; p.textContent=s.note; row.querySelector('h5').parentNode.appendChild(p); }
     body.appendChild(row); });
+  if(steps.length){ const run=document.createElement('button');
+    run.className='mt-3 w-full bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded';
+    run.textContent='▶ Ejecutar plan'; run.onclick=()=>executePlan(steps); c.appendChild(run); }
   chat().appendChild(c); down();
 }
+
+// Run the plan step by step: each step is sent to the agent (tools over the disk).
+async function executePlan(steps){
+  if(!steps||!steps.length){ tool('No hay plan. Usa /plan primero.'); return; }
+  for(let i=0;i<steps.length;i++){
+    steps.forEach((s,k)=>{ s.state = k<i?'done':(k===i?'active':'pending'); });
+    planCard(steps);                       // show progress
+    tool('▶ Paso '+(i+1)+'/'+steps.length+': '+steps[i].title);
+    await agent(steps[i].title);
+    steps[i].state='done';
+  }
+  steps.forEach(s=>s.state='done'); lastPlan=steps; planCard(steps); tool('✓ Plan completado.');
+}
+
 function loopCard(d){ d=d||{};
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-4 flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-orange-400"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.5"></path></svg>Telemetria del Bucle</h4>'+
@@ -326,7 +344,7 @@ async function planReal(task){
   }catch(e){ if(e.name==='AbortError') wait.innerHTML='(detenido)'; else wait.innerHTML='Error: '+e+' (posible CORS de DeepSeek)'; }
 }
 
-function toggleHelp(){ bot('<b>Comandos slash:</b> <code>/help</code> <code>/clear</code> <code>/key &lt;k&gt;</code> <code>/ghtoken &lt;t&gt;</code> <code>/goal [texto]</code> <code>/plan [tarea]</code> <code>/loop</code><br><b>Disco</b> (IndexedDB, izq): <code>ls</code> <code>read &lt;f&gt;</code> <code>write &lt;f&gt; &lt;txt&gt;</code> <code>del &lt;f&gt;</code>.<br>Cualquier otra cosa va al <b>LLM</b> (DeepSeek, tools sobre el disco). ⬇/⬆ sincroniza con el repo.'); }
+function toggleHelp(){ bot('<b>Comandos slash:</b> <code>/help</code> <code>/clear</code> <code>/key &lt;k&gt;</code> <code>/ghtoken &lt;t&gt;</code> <code>/goal [texto]</code> <code>/plan [tarea]</code> <code>/run</code> (ejecuta el plan) <code>/loop</code><br><b>Disco</b> (IndexedDB, izq): <code>ls</code> <code>read &lt;f&gt;</code> <code>write &lt;f&gt; &lt;txt&gt;</code> <code>del &lt;f&gt;</code>.<br>Cualquier otra cosa va al <b>LLM</b> (DeepSeek, tools sobre el disco). ⬇/⬆ sincroniza con el repo.'); }
 
 function toggleDisk(){ const d=document.getElementById('disk'), b=document.getElementById('backdrop');
   const open=d.classList.contains('-translate-x-full');
