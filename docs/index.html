@@ -240,14 +240,34 @@ async function gitCard(){
     '<div class="text-xs text-gray-300 flex items-center justify-between"><span>'+repo+'</span><span class="text-[10px] '+(changes?'text-orange-400':'text-green-400')+'">'+(changes?changes+' cambios':'limpio')+'</span></div>';
   chat().appendChild(c); down();
 }
+// Clone over the GitHub API (CORS-friendly, no proxy): fetch the tree + blobs,
+// write them to LightningFS + the disk, then init a local real git repo + commit.
 async function gitClone(repo){
   if(!gitReady()){ tool('isomorphic-git no cargó (revisa conexión).'); return; }
   GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
-  tool('git clone '+repo+' …'); setWorking(true);
-  try{ try{ await GP.rmdir(GITDIR,{recursive:true}); }catch(e){}
-    await git.clone({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:CORSPX,url:'https://github.com/'+repo+'.git',singleBranch:true,depth:25,onAuth:gitOnAuth()});
-    const n=await mirrorToDisk(); await gitCard(); tool('clonado: '+n+' ficheros en el disco virtual.');
-  }catch(e){ errorCard('git clone falló', String(e), 'Repo privado → pon token. CORS proxy: '+CORSPX, null); }
+  tool('Clonando '+repo+' (GitHub API)…'); setWorking(true);
+  try{
+    const meta=await (await fetch('https://api.github.com/repos/'+repo,{headers:ghHeaders()})).json();
+    if(meta.message) throw new Error(meta.message);
+    const branch=meta.default_branch||'main';
+    const tr=await (await fetch('https://api.github.com/repos/'+repo+'/git/trees/'+branch+'?recursive=1',{headers:ghHeaders()})).json();
+    if(!tr.tree) throw new Error(tr.message||'sin árbol');
+    let blobs=tr.tree.filter(t=>t.type==='blob');
+    if(blobs.length>300){ tool('repo grande ('+blobs.length+'); clono 300 ficheros.'); blobs=blobs.slice(0,300); }
+    try{ await GP.rmdir(GITDIR,{recursive:true}); }catch(e){}
+    await mkdirp(GITDIR); await git.init({fs:GFS,dir:GITDIR,defaultBranch:branch});
+    let n=0;
+    for(const b of blobs){
+      const bl=await (await fetch('https://api.github.com/repos/'+repo+'/git/blobs/'+b.sha,{headers:ghHeaders()})).json();
+      let content=''; const raw=(bl.content||'').replace(/\n/g,'');
+      try{ content=decodeURIComponent(escape(atob(raw))); }catch(e){ try{ content=atob(raw); }catch(e2){ content=''; } }
+      await fsPut(b.path, content);
+      const full=GITDIR+'/'+b.path; await mkdirp(full.slice(0,full.lastIndexOf('/'))); await GP.writeFile(full, content,'utf8');
+      await git.add({fs:GFS,dir:GITDIR,filepath:b.path}); n++;
+    }
+    await git.commit({fs:GFS,dir:GITDIR,message:'clone '+repo,author:gitAuthor()});
+    refreshDisk(); gitCard(); tool('clonado: '+n+' ficheros · git local iniciado (branch '+branch+').');
+  }catch(e){ errorCard('clone falló', String(e), 'Repo privado → /ghtoken primero.', null); }
   finally{ setWorking(false); } }
 async function gitCommit(msg){ if(!gitReady()){tool('git no listo.');return;} await mirrorFromDisk();
   const m=await git.statusMatrix({fs:GFS,dir:GITDIR});
@@ -255,13 +275,21 @@ async function gitCommit(msg){ if(!gitReady()){tool('git no listo.');return;} aw
   try{ const sha=await git.commit({fs:GFS,dir:GITDIR,message:msg||'agents-web: update',author:gitAuthor()});
     tool('commit '+sha.slice(0,7)+' — '+(msg||'update')); gitCard();
   }catch(e){ tool('commit: '+e); } }
-async function gitPush(){ if(!gitReady()){tool('git no listo.');return;} if(!ghTok()){ tool('push necesita token (/ghtoken).'); return; }
-  tool('git push …'); setWorking(true);
-  try{ const r=await git.push({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:CORSPX,onAuth:gitOnAuth()});
-    tool('push '+((r&&r.ok)?'ok':'enviado')); }catch(e){ errorCard('git push falló', String(e),'', null); } finally{ setWorking(false); } }
-async function gitPull(){ if(!gitReady()){tool('git no listo.');return;} tool('git pull …'); setWorking(true);
-  try{ await git.pull({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:CORSPX,singleBranch:true,author:gitAuthor(),onAuth:gitOnAuth()});
-    const n=await mirrorToDisk(); tool('pull ok ('+n+' ficheros).'); gitCard(); }catch(e){ errorCard('git pull falló',String(e),'',null); } finally{ setWorking(false); } }
+// Push over the GitHub API (CORS-friendly): commit changed files via Contents API.
+async function gitPush(){ if(!GIT_REPO){ tool('clona primero (/clone <repo>).'); return; }
+  if(!ghTok()){ tool('push necesita token (/ghtoken).'); return; }
+  tool('Push (GitHub API) → '+GIT_REPO+' …'); setWorking(true);
+  try{ const items=await fsList(); let n=0;
+    for(const f of items){ const url='https://api.github.com/repos/'+GIT_REPO+'/contents/'+encodeURI(f.path);
+      let sha='', remote=null; const g=await fetch(url,{headers:ghHeaders()});
+      if(g.ok){ const gj=await g.json(); sha=gj.sha; try{ remote=decodeURIComponent(escape(atob((gj.content||'').replace(/\n/g,'')))); }catch(e){ remote=null; } }
+      if(remote===(f.content||'')) continue;   // unchanged
+      const body={message:'agents-web: update '+f.path, content:btoa(unescape(encodeURIComponent(f.content||'')))}; if(sha)body.sha=sha;
+      const p=await fetch(url,{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body)}); if(p.ok)n++; else tool('push '+f.path+': '+p.status); }
+    tool(n? ('push: '+n+' fichero(s) actualizados en '+GIT_REPO) : 'push: nada cambiado.');
+    await gitCommit('push to '+GIT_REPO);
+  }catch(e){ errorCard('push falló', String(e),'',null); } finally{ setWorking(false); } }
+async function gitPull(){ if(!GIT_REPO){ tool('clona primero (/clone <repo>).'); return; } await gitClone(GIT_REPO); }
 async function gitLog(){ if(!gitReady()){tool('git no listo.');return;}
   try{ const cs=await git.log({fs:GFS,dir:GITDIR,depth:10});
     const c=el('<div class="bg-gray-800 border border-gray-700 p-3 rounded-xl max-w-[90%] text-xs space-y-1.5"></div>');
