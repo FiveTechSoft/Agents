@@ -59,11 +59,22 @@
       </div>
     </div>
     <div id="chat" class="flex-1 overflow-y-auto scroll p-4 space-y-4"></div>
-    <div class="p-3 border-t border-gray-800 flex gap-2">
-      <input id="prompt" placeholder="comando: ls · write a.txt Hola · read a.txt · del a.txt · (o pregunta al LLM)"
-        onkeydown="promptKey(event)"
-        class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500">
-      <button onclick="run()" class="bg-blue-600 hover:bg-blue-500 rounded-lg px-4">Enviar</button>
+    <div class="p-3 border-t border-gray-800">
+      <div class="flex gap-2 items-center">
+        <input id="fileinp" type="file" multiple class="hidden">
+        <button onclick="document.getElementById('fileinp').click()" title="Adjuntar al disco" class="shrink-0 text-gray-500 hover:text-gray-300 px-2 py-3">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+        </button>
+        <input id="prompt" placeholder="comando: ls · write a.txt Hola · read a.txt · del a.txt · (o pregunta al LLM)"
+          onkeydown="promptKey(event)"
+          class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500">
+        <button onclick="run()" class="bg-blue-600 hover:bg-blue-500 rounded-lg px-4">Enviar</button>
+      </div>
+      <div class="text-[10px] text-gray-500 text-center mt-2 flex justify-center gap-4">
+        <span><kbd class="bg-gray-700 px-1 rounded border border-gray-600">Ctrl</kbd>+<kbd class="bg-gray-700 px-1 rounded border border-gray-600">K</kbd> limpiar</span>
+        <span><kbd class="bg-gray-700 px-1 rounded border border-gray-600">Esc</kbd> parar</span>
+        <span><kbd class="bg-gray-700 px-1 rounded border border-gray-600">↑</kbd>/<kbd class="bg-gray-700 px-1 rounded border border-gray-600">↓</kbd> historial</span>
+      </div>
     </div>
   </main>
 </div>
@@ -74,11 +85,13 @@
     <div class="p-3 border-b border-gray-700 flex items-center justify-between">
       <span id="edpath" class="font-mono text-xs text-pink-400"></span>
       <div class="flex gap-2">
+        <button id="edprev" onclick="togglePreview()" class="hidden bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">👁 Preview</button>
         <button onclick="saveEd()" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs">Guardar</button>
         <button onclick="closeEd()" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">Cerrar</button>
       </div>
     </div>
     <textarea id="edtext" class="flex-1 bg-gray-900 p-3 font-mono text-xs resize-none focus:outline-none"></textarea>
+    <div id="edpreview" class="hidden flex-1 overflow-y-auto bg-gray-900 p-4 text-sm prose-invert"></div>
   </div>
 </div>
 
@@ -123,8 +136,13 @@ async function newFile(){ const p=document.getElementById('newpath').value.trim(
 let edCur=null;
 async function openEd(path){ const f=await fsGet(path); edCur=path;
   document.getElementById('edpath').textContent=path; document.getElementById('edtext').value=f?f.content:'';
+  document.getElementById('edtext').classList.remove('hidden'); document.getElementById('edpreview').classList.add('hidden');
+  document.getElementById('edprev').classList.toggle('hidden', !/\.md$/i.test(path));   // preview only for .md
   document.getElementById('ed').classList.remove('hidden'); }
 function closeEd(){ document.getElementById('ed').classList.add('hidden'); }
+function togglePreview(){ const ta=document.getElementById('edtext'), pv=document.getElementById('edpreview'), b=document.getElementById('edprev');
+  if(pv.classList.contains('hidden')){ pv.innerHTML=window.marked?marked.parse(ta.value||''):ta.value; pv.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
+  else { pv.classList.add('hidden'); ta.classList.remove('hidden'); b.textContent='👁 Preview'; } }
 async function saveEd(){ if(edCur!=null){ await fsPut(edCur,document.getElementById('edtext').value); refreshDisk(); closeEd(); } }
 
 /* ---- chat helpers ---- */
@@ -134,6 +152,24 @@ function down(){ const c=chat(); c.scrollTop=c.scrollHeight; }
 function user(t){ const d=el('<div class="flex justify-end"><div class="bg-blue-600 text-white p-2 px-4 rounded-xl rounded-tr-none max-w-[80%] whitespace-pre-wrap"></div></div>'); d.firstElementChild.textContent=t; chat().appendChild(d); down(); }
 function bot(html){ const d=el('<div class="bg-gray-800 border border-gray-700 p-3 rounded-xl rounded-tl-none max-w-[90%]"></div>'); d.innerHTML=html; chat().appendChild(d); down(); return d; }
 function tool(t){ const d=el('<div class="text-xs text-gray-400 border-l-2 border-green-600 pl-3 whitespace-pre-wrap"></div>'); d.textContent=t; chat().appendChild(d); down(); }
+
+/* glass box — agent reasoning (mockup 4 case 7) */
+function thinkingCard(text){ const d=el('<div class="pl-4 border-l-2 border-purple-500 text-xs text-gray-400 italic py-1 max-w-[90%] whitespace-pre-wrap"></div>'); d.textContent=text; chat().appendChild(d); down(); }
+/* error card with terminal block + Auto-corregir (mockup 4 case 6) */
+function errorCard(title,detail,term,onFix){
+  const c=el('<div class="bg-red-950/40 border border-red-800/50 p-3.5 rounded-lg max-w-[90%]"></div>');
+  const head=el('<div class="flex items-start mb-2"></div>');
+  head.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round" class="mr-2 mt-0.5 shrink-0"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+  const tx=document.createElement('div'); const h=document.createElement('h4'); h.className='text-red-400 text-sm font-semibold'; h.textContent=title;
+  const p=document.createElement('p'); p.className='text-xs text-red-200/80 mt-1'; p.textContent=detail||''; tx.appendChild(h); tx.appendChild(p); head.appendChild(tx); c.appendChild(head);
+  if(term){ const t=document.createElement('div'); t.className='bg-black/50 border border-red-900/30 rounded p-2 mt-2 mb-3 font-mono text-[10px] text-gray-300 overflow-x-auto whitespace-pre-wrap'; t.textContent=term; c.appendChild(t); }
+  if(onFix){ const wrap=el('<div class="flex"></div>'); const b=el('<button class="flex-1 bg-red-900/60 hover:bg-red-800/80 text-red-100 text-xs py-1.5 rounded border border-red-700/50">↑ Auto-corregir</button>'); b.onclick=()=>{ b.disabled=true; onFix(); }; wrap.appendChild(b); c.appendChild(wrap); }
+  chat().appendChild(c); down();
+}
+/* task completion / waiting line (mockup 4 case 9) */
+function doneLine(text){ const d=el('<div class="flex items-center text-xs text-gray-400 pt-1 gap-2"></div>');
+  d.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-gray-500"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg><span></span>';
+  d.querySelector('span').textContent=text||'Esperando respuesta del usuario…'; chat().appendChild(d); down(); }
 
 /* =====================================================================
    GitHub repo as durable storage (Contents API over fetch).
@@ -214,14 +250,17 @@ async function runDemoSim(){
   const r3=addActionRow('write_file',{path:'bienvenida.md'}); await sleep(500); markDone(r3);
   await fsPut('bienvenida.md','# Agents Web\n\nDisco virtual con IA.\n'); refreshDisk();
   diffCard('bienvenida.md', diffLines('# Agents Web\n\nDisco virtual con IA.\n','# Agents Web\n\nDisco virtual con IA en el navegador.\n\n## Comandos\n- /plan, /cost, /init\n')); await sleep(900);
-  askPermit('ejecutar el comando','npm run build').then(()=>{}); await sleep(300);
+  thinkingCard('El usuario quiere organizar el disco. Reviso los ficheros, propongo cambios y pido permiso antes de tocar nada.'); await sleep(800);
+  errorCard('Error en el comando','Un comando de ejemplo falló por una dependencia faltante.','Error: Cannot find module \'clsx\'\nRequire stack:\n- /src/components/Sidebar.jsx', ()=>{ tool('↑ Auto-corrigiendo… (demo)'); }); await sleep(800);
+  askPermit('ejecutar el comando','npm install clsx').then(()=>{}); await sleep(300);
   askUser('¿Dónde guardamos el resultado?',['Disco virtual','Repo GitHub (Push)','Solo mostrarlo']).then(()=>{}); await sleep(700);
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
   user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
   user('/loop'); loopCard({iter:3,max:15,cmds:8}); await sleep(400);
-  user('/help'); helpCard();
-  tool('✓ Demo completada — goal · plan · acciones · diff · permit · ask_user · cost · compact · init · loop · help.');
+  user('/help'); helpCard(); await sleep(300);
+  doneLine('Esperando respuesta del usuario…');
+  tool('✓ Demo completada — goal · plan · acciones · diff · thinking · error · permit · ask_user · cost · compact · init · loop · help · done.');
   setWorking(false);
 }
 
@@ -336,51 +375,70 @@ function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
 let agentAbort=null;
 let workN=0;                  // blink the 😎 icon while Agents is working
 function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getElementById('agi'); if(e) e.classList.toggle('blink',workN>0); }
+function saveSession(){ try{ localStorage.setItem('convo',JSON.stringify(convo)); localStorage.setItem('usage',JSON.stringify(usage)); }catch(e){} }
+function restoreSession(){ try{
+  const su=JSON.parse(localStorage.getItem('usage')||'null'); if(su) usage=su;
+  const sc=JSON.parse(localStorage.getItem('convo')||'[]');
+  if(sc.length){ sc.forEach(m=>{ convo.push(m); if(m.role==='user') user(m.content); else if(m.role==='assistant') bot(window.marked?marked.parse(m.content||''):(m.content||'')); });
+    tool('↻ Sesión restaurada ('+sc.length+' mensajes). Ctrl+K para limpiar.'); return true; }
+}catch(e){} return false; }
 let lastPlan=null;            // last generated plan (steps[]) -> /plan with no arg shows it
 const convo=[];              // running conversation, used to invent a plan from context
 function stopAgent(){ if(agentAbort){ agentAbort.abort(); tool('Detenido.'); } }
-function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; }
+function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; try{localStorage.removeItem('convo');}catch(e){} }
+
+// Streamed chat completion (SSE). Updates `wait` live with the text as it arrives;
+// assembles tool_calls across deltas. Returns {content, tool_calls, usage}.
+async function streamChat(msgs, wait){
+  const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},
+    signal:agentAbort.signal,
+    body:JSON.stringify({model:'deepseek-chat',messages:msgs,tools:TOOLS,stream:true})});
+  if(!r.ok||!r.body) throw new Error('LLM '+r.status);
+  const reader=r.body.getReader(), dec=new TextDecoder(); let buf='', content='', usg=null; const tcs=[];
+  while(true){ const {done,value}=await reader.read(); if(done)break;
+    buf+=dec.decode(value,{stream:true}); let nl;
+    while((nl=buf.indexOf('\n'))>=0){ const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+      if(!line.startsWith('data:'))continue; const data=line.slice(5).trim(); if(data==='[DONE]')continue;
+      let j; try{ j=JSON.parse(data); }catch(e){ continue; }
+      if(j.usage)usg=j.usage;
+      const d=j.choices&&j.choices[0]&&j.choices[0].delta; if(!d)continue;
+      if(d.content){ content+=d.content; if(wait){ wait.innerHTML=window.marked?marked.parse(content):content; down(); } }
+      if(d.tool_calls)for(const t of d.tool_calls){ const i=t.index||0; tcs[i]=tcs[i]||{id:'',type:'function',function:{name:'',arguments:''}};
+        if(t.id)tcs[i].id=t.id; if(t.function){ if(t.function.name)tcs[i].function.name+=t.function.name; if(t.function.arguments)tcs[i].function.arguments+=t.function.arguments; } }
+    }
+  }
+  return {content, tool_calls:tcs.filter(Boolean), usage:usg};
+}
 
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
   convo.push({role:'user',content:text}); curPanel=null;
-  // include the running conversation so replies keep context
   const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'}].concat(convo.map(m=>({role:m.role,content:m.content})));
-  let wait=bot('<span class="text-gray-400">pensando…</span>');
-  agentAbort=new AbortController();
-  setWorking(true);
+  agentAbort=new AbortController(); setWorking(true);
   try{
-  for(let step=0; step<8; step++){
-    let r;
-    try{ r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-      signal:agentAbort.signal,
-      body:JSON.stringify({model:'deepseek-chat',messages:msgs,tools:TOOLS})}); }
-    catch(e){ if(e.name==='AbortError'){ wait.innerHTML='<span class="text-gray-500">(detenido)</span>'; return; }
-      wait.innerHTML='Error de red/CORS: '+e+'. (DeepSeek puede bloquear peticiones de navegador; usa un proxy CORS o el disco con comandos ls/read/write.)'; return; }
-    if(!r.ok){ wait.innerHTML='Error LLM '+r.status; return; }
-    const j=await r.json(); if(j.usage){ usage.pin+=j.usage.prompt_tokens||0; usage.pout+=j.usage.completion_tokens||0; }
-    const mo=j.choices[0].message; msgs.push(mo);
-    if(mo.tool_calls&&mo.tool_calls.length){
-      for(const tc of mo.tool_calls){ let a={}; try{a=JSON.parse(tc.function.arguments||'{}');}catch(e){}
-        const ref=addActionRow(tc.function.name,a);
-        const out=await execTool(tc.function.name,tc.function.arguments);
-        markDone(ref,/^(error|rechaz)/i.test(out));
-        msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
-      continue;
+    for(let step=0; step<8; step++){
+      let wait=bot('<span class="text-gray-400">pensando…</span>'); let res;
+      try{ res=await streamChat(msgs, wait); }
+      catch(e){ if(e.name==='AbortError'){ wait.innerHTML='<span class="text-gray-500">(detenido)</span>'; return; }
+        wait.remove(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS de DeepSeek).',String(e),()=>agent(text)); return; }
+      if(res.usage){ usage.pin+=res.usage.prompt_tokens||0; usage.pout+=res.usage.completion_tokens||0; }
+      const mo={role:'assistant',content:res.content||''}; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
+      if(res.tool_calls.length){
+        if(!res.content) wait.remove();
+        for(const tc of res.tool_calls){ let a={}; try{a=JSON.parse(tc.function.arguments||'{}');}catch(e){}
+          const ref=addActionRow(tc.function.name,a);
+          const out=await execTool(tc.function.name,tc.function.arguments);
+          markDone(ref,/^(error|rechaz)/i.test(out));
+          msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
+        continue;
+      }
+      convo.push({role:'assistant',content:res.content||''});
+      if(/[?¿]/.test(res.content||'')){ const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus(); doneLine('Esperando respuesta del usuario…'); }
+      return;
     }
-    convo.push({role:'assistant',content:mo.content||''});
-    const txt=mo.content||'';
-    wait.innerHTML=window.marked?marked.parse(txt):txt;
-    // If the model asked an open question, just stop the turn: the user types the
-    // reply in the prompt box (no forced popup). Nudge with a hint.
-    if(/[?¿]/.test(txt)){
-      const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus();
-    }
-    return;
-  }
-  wait.innerHTML+='<div class="text-xs text-gray-500 mt-2">(límite de pasos)</div>';
-  } finally{ setWorking(false); }
+    tool('(límite de pasos)');
+  } finally{ setWorking(false); saveSession(); }
 }
 
 /* ===================== slash commands (como en la app Agents) ===================== */
@@ -588,8 +646,15 @@ function toggleDisk(){ const d=document.getElementById('disk'), b=document.getEl
 // auto-close the drawer after picking a file on mobile
 document.getElementById('files').addEventListener('click',()=>{ if(window.innerWidth<768) setTimeout(()=>{ const d=document.getElementById('disk'); if(!d.classList.contains('-translate-x-full')){} },0); });
 
+document.getElementById('fileinp').addEventListener('change', async (e)=>{
+  for(const f of e.target.files){ const txt=await f.text(); await fsPut(f.name,txt); tool('📎 Adjuntado al disco: '+f.name+' ('+txt.length+' B)'); }
+  refreshDisk(); e.target.value=''; });
+document.addEventListener('keydown',(e)=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); clearChat(); clearDivider(); }
+  else if(e.key==='Escape'){ stopAgent(); } });
+
 refreshDisk();
-bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
+if(!restoreSession()) bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
 </script>
 </body>
 </html>
