@@ -250,7 +250,23 @@ async function shOne(cmd, stdin){
     case 'rm': case 'del': { for(const x of a0){ const k=shResolve(x); if(flags.includes('r')){ const all=await fsList(); for(const f of all){ if(f.path===k||f.path.startsWith(k+'/')) await fsDel(f.path); } } else await fsDel(k); } refreshDisk(); return ''; }
     case 'mv': { if(a0.length<2){SH_EXIT=1;return 'mv: '+T('faltan argumentos','missing args');} const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f){SH_EXIT=1;return 'mv: '+T('no existe ','no such file ')+a0[0];} await fsPut(d,f.content); await fsDel(s); refreshDisk(); return ''; }
     case 'cp': { if(a0.length<2){SH_EXIT=1;return 'cp: '+T('faltan argumentos','missing args');} const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f){SH_EXIT=1;return 'cp: '+T('no existe ','no such file ')+a0[0];} await fsPut(d,f.content); refreshDisk(); return ''; }
-    case 'grep': { const pat=a0[0]||''; let text=stdin; if(a0.length>1){ const f=await fsGet(shResolve(a0[1])); text=f?f.content:''; } let re; try{re=new RegExp(pat,'i');}catch(e){re=null;} return (text||'').split('\n').filter(l=> re?re.test(l):l.indexOf(pat)>=0).join('\n'); }
+    case 'grep': { let pat=a0[0]||''; const files=a0.slice(1);
+      const ic=flags.includes('i'), inv=flags.includes('v'), num=flags.includes('n'), cnt=flags.includes('c'),
+            only=flags.includes('o'), word=flags.includes('w'), rec=flags.includes('r')||flags.includes('R'),
+            flist=flags.includes('l'), fixedF=flags.includes('F'), noFn=flags.includes('h');
+      if(fixedF) pat=pat.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); if(word) pat='\\b(?:'+pat+')\\b';
+      let re, reg; try{ re=new RegExp(pat, ic?'i':''); reg=new RegExp(pat, ic?'gi':'g'); }catch(e){ SH_EXIT=1; return 'grep: '+T('regex inválida','invalid regex'); }
+      let sources=[];
+      if(rec){ const base=files[0]?shResolve(files[0]):shNorm(SHCWD); const all=await fsList(); for(const f of all){ if(!base||f.path===base||f.path.startsWith(base+'/')) sources.push({name:'/'+f.path,text:f.content||''}); } }
+      else if(files.length){ for(const x of files){ const f=await fsGet(shResolve(x)); if(!f)SH_EXIT=1; sources.push({name:x,text:f?f.content:''}); } }
+      else sources.push({name:'',text:stdin||''});
+      const showFn=rec||files.length>1; const out=[]; let any=false;
+      for(const src of sources){ const lines=src.text.split('\n'); const matched=[]; let fc=0;
+        lines.forEach((l,i)=>{ let hit=re.test(l); if(inv)hit=!hit; if(!hit)return; any=true; fc++;
+          const pre=(showFn&&!noFn?src.name+':':'')+(num?(i+1)+':':'');
+          if(only&&!inv){ (l.match(reg)||[]).forEach(mm=>matched.push(pre+mm)); } else matched.push(pre+l); });
+        if(flist){ if(fc>0)out.push(src.name); } else if(cnt){ out.push((showFn&&!noFn?src.name+':':'')+fc); } else out.push(...matched); }
+      SH_EXIT=any?0:1; return out.join('\n'); }
     case 'head': case 'tail': { let n=10; const ni=toks.indexOf('-n'); if(ni>=0)n=parseInt(toks[ni+1])||10; let text=stdin; const file=a0.find(x=>x!==String(n)); if(file){ const f=await fsGet(shResolve(file)); text=f?f.content:''; } const L=(text||'').split('\n'); return (name==='head'?L.slice(0,n):L.slice(Math.max(0,L.length-n))).join('\n'); }
     case 'wc': { let text=stdin; if(a0[0]){ const f=await fsGet(shResolve(a0[0])); text=f?f.content:''; } const x=text||''; return (x?x.split('\n').length:0)+' '+x.split(/\s+/).filter(Boolean).length+' '+x.length; }
     case 'find': { const items=await fsList(); const base=shResolve(a0[0]||''); return items.filter(f=>!base||f.path===base||f.path.startsWith(base+'/')).map(f=>'/'+f.path).join('\n'); }
