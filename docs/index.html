@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agents — Web (simulated disk)</title>
+<title>Agents — Web (virtual disk)</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
@@ -23,7 +23,7 @@
   <aside id="disk" class="w-72 max-w-[85vw] shrink-0 bg-gray-950 border-r border-gray-800 flex flex-col
          fixed md:static inset-y-0 left-0 z-40 -translate-x-full md:translate-x-0 transition-transform duration-200">
     <div class="p-3 border-b border-gray-800 flex items-center justify-between">
-      <span class="font-semibold flex items-center gap-2">💾 Disco simulado</span>
+      <span class="font-semibold flex items-center gap-2">💾 Disco virtual</span>
       <span id="diskinfo" class="text-[10px] text-gray-500"></span>
     </div>
     <div id="files" class="flex-1 overflow-y-auto scroll p-2 space-y-1 text-xs"></div>
@@ -157,7 +157,7 @@ async function ghPush(){ const repo=document.getElementById('ghrepo').value.trim
 
 /* =====================================================================
    Mini command shell + optional LLM agent (DeepSeek, function calling).
-   Shell commands operate directly on the simulated disk.
+   Shell commands operate directly on the virtual disk.
    ===================================================================== */
 async function run(){
   const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
@@ -336,7 +336,7 @@ function toggleDisk(){ const d=document.getElementById('disk'), b=document.getEl
 document.getElementById('files').addEventListener('click',()=>{ if(window.innerWidth<768) setTimeout(()=>{ const d=document.getElementById('disk'); if(!d.classList.contains('-translate-x-full')){} },0); });
 
 refreshDisk();
-bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es una <b>unidad de almacenamiento simulada</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
+bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
 </script>
 </body>
 </html>
