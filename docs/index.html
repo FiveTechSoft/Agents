@@ -361,7 +361,7 @@ async function runDemoLLM(){
   try{
     const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-      body:JSON.stringify({model:'deepseek-chat',messages:[{role:'user',content:'Dame UNA idea breve (maximo 8 palabras, en espanol) de una mini-tarea distinta para demostrar un agente que crea y edita ficheros en un disco. Solo la idea, sin comillas ni puntuacion final.'}]})});
+      body:JSON.stringify({model:MODEL,messages:[{role:'user',content:'Dame UNA idea breve (maximo 8 palabras, en espanol) de una mini-tarea distinta para demostrar un agente que crea y edita ficheros en un disco. Solo la idea, sin comillas ni puntuacion final.'}]})});
     const j=await r.json(); if(j.usage){usage.pin+=j.usage.prompt_tokens||0;usage.pout+=j.usage.completion_tokens||0;}
     topic=((j.choices&&j.choices[0].message.content)||topic).trim().replace(/^["']|["'.]+$/g,'');
   }catch(e){ tool('(no pude pedir tema; uso uno por defecto)'); }
@@ -429,7 +429,9 @@ const TOOLS=[
  {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
  {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait. Options can be plain strings OR objects {label, description, recommended} to show a rich clarification card with radios.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'object',properties:{label:{type:'string'},description:{type:'string'},recommended:{type:'boolean'}},required:['label']}}},required:['question']}}},
  {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. Use to split a task into parts that do not depend on each other.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks'}},required:['tasks']}}},
- {type:'function',function:{name:'git',description:'Real git on the cloned repo (isomorphic-git). action: status|log|commit|push|pull|clone. For commit pass message; for clone pass repo (owner/name).',parameters:{type:'object',properties:{action:{type:'string'},message:{type:'string'},repo:{type:'string'}},required:['action']}}}
+ {type:'function',function:{name:'git',description:'Real git on the cloned repo (isomorphic-git). action: status|log|commit|push|pull|clone. For commit pass message; for clone pass repo (owner/name).',parameters:{type:'object',properties:{action:{type:'string'},message:{type:'string'},repo:{type:'string'}},required:['action']}}},
+ {type:'function',function:{name:'web_search',description:'Search the web and return the top results as text.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
+ {type:'function',function:{name:'web_fetch',description:'Fetch a URL and return its readable text content.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}}
 ];
 // sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
 const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
@@ -486,6 +488,8 @@ async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){
     await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
   if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
   if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[]); }
+  if(name==='web_search'){ try{ const r=await fetch('https://s.jina.ai/'+encodeURIComponent(args.query||''),{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,4000); }catch(e){ return 'web_search error: '+e; } }
+  if(name==='web_fetch'){ try{ const u=(args.url||''); const r=await fetch('https://r.jina.ai/'+u,{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,6000); }catch(e){ return 'web_fetch error: '+e; } }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
     if(a==='clone'){ await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return 'clonado'; }
     if(a==='commit'){ await gitCommit(args.message||'agents-web: update'); return 'commit hecho'; }
@@ -514,7 +518,7 @@ async function subAgent(task,setStatus){
   for(let s=0;s<5;s++){
     const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},signal:agentAbort.signal,
-      body:JSON.stringify({model:'deepseek-chat',messages:msgs,tools:SUBTOOLS})});
+      body:JSON.stringify({model:MODEL,messages:msgs,tools:SUBTOOLS})});
     if(!r.ok) throw new Error('LLM '+r.status);
     const j=await r.json(); if(j.usage){usage.pin+=j.usage.prompt_tokens||0;usage.pout+=j.usage.completion_tokens||0;}
     const mo=j.choices[0].message; msgs.push(mo);
@@ -549,7 +553,9 @@ const IC_CHEV=SVG('mr-1.5','<polyline points="6 9 12 15 18 9"></polyline>');
 function toolMeta(n){ return ({
   list_files:{v:'Listando',i:IC_SEARCH,a:''}, read_file:{v:'Leyendo',i:IC_FILE,a:'path'},
   write_file:{v:'Escribiendo',i:IC_FILE,a:'path'}, delete_file:{v:'Borrando',i:IC_TRASH,a:'path'},
-  ask_user:{v:'Preguntando',i:IC_ASK,a:'question'} }[n]||{v:n,i:IC_FILE,a:''}); }
+  ask_user:{v:'Preguntando',i:IC_ASK,a:'question'},
+  web_search:{v:'Buscando',i:IC_SEARCH,a:'query'}, web_fetch:{v:'Abriendo',i:IC_SEARCH,a:'url'},
+  git:{v:'git',i:IC_FILE,a:'action'}, dispatch_agents:{v:'Delegando',i:IC_FILE,a:''} }[n]||{v:n,i:IC_FILE,a:''}); }
 let curPanel=null;
 function actionPanel(){ const p=el('<div class="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden max-w-[90%]"></div>');
   const btn=el('<button class="w-full flex items-center p-2.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-700"></button>');
@@ -590,10 +596,11 @@ function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
 let agentAbort=null;
 let workN=0;                  // blink the 😎 icon while Agents is working
 function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getElementById('agi'); if(e) e.classList.toggle('blink',workN>0); }
-let MODEL=(()=>{ try{ return localStorage.getItem('model')||'deepseek-chat'; }catch(e){ return 'deepseek-chat'; } })();
-function toggleThink(){ MODEL = MODEL==='deepseek-reasoner'?'deepseek-chat':'deepseek-reasoner'; try{localStorage.setItem('model',MODEL);}catch(e){}
-  const b=document.getElementById('thinkbtn'); if(b) b.classList.toggle('bg-purple-700', MODEL==='deepseek-reasoner');
-  tool('Razonamiento: '+(MODEL==='deepseek-reasoner'?'ON (deepseek-reasoner, sin tools)':'OFF (deepseek-chat, con tools)')); }
+let MODEL=(()=>{ try{ return localStorage.getItem('model')||'deepseek-v4-flash'; }catch(e){ return 'deepseek-v4-flash'; } })();
+let THINK=(()=>{ try{ return localStorage.getItem('think')==='1'; }catch(e){ return false; } })();  // V4 thinking mode (supports tools)
+function toggleThink(){ THINK=!THINK; try{localStorage.setItem('think',THINK?'1':'0');}catch(e){}
+  const b=document.getElementById('thinkbtn'); if(b) b.classList.toggle('bg-purple-700', THINK);
+  tool('Razonamiento: '+(THINK?'ON (thinking mode '+MODEL+')':'OFF')); }
 function thinkingLive(){ const d=el('<div class="pl-4 border-l-2 border-purple-500 text-xs text-gray-400 italic py-1 max-w-[90%] whitespace-pre-wrap"></div>'); chat().appendChild(d); down(); return d; }
 const LANGS={es:'español',en:'English',fr:'français',de:'Deutsch',pt:'português',it:'italiano'};
 const LANGCC={es:'es',en:'gb',fr:'fr',de:'de',pt:'pt',it:'it'};   // flag country code
@@ -624,8 +631,8 @@ function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; try{lo
 // Streamed chat completion (SSE). Updates `wait` live with the text as it arrives;
 // assembles tool_calls across deltas. Returns {content, tool_calls, usage}.
 async function streamChat(msgs, wait){
-  const reasoner = MODEL==='deepseek-reasoner';
-  const body={model:MODEL,messages:msgs,stream:true}; if(!reasoner) body.tools=TOOLS;   // reasoner has no tools
+  const body={model:MODEL,messages:msgs,tools:TOOLS,stream:true};   // V4 thinking supports tools
+  if(THINK) body.thinking={type:'enabled'};
   const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},
     signal:agentAbort.signal, body:JSON.stringify(body)});
@@ -644,7 +651,7 @@ async function streamChat(msgs, wait){
         if(t.id)tcs[i].id=t.id; if(t.function){ if(t.function.name)tcs[i].function.name+=t.function.name; if(t.function.arguments)tcs[i].function.arguments+=t.function.arguments; } }
     }
   }
-  return {content, tool_calls:tcs.filter(Boolean), usage:usg};
+  return {content, tool_calls:tcs.filter(Boolean), usage:usg, reasoning};
 }
 
 async function agent(text){
@@ -660,7 +667,7 @@ async function agent(text){
       catch(e){ if(e.name==='AbortError'){ wait.innerHTML='<span class="text-gray-500">(detenido)</span>'; return; }
         wait.remove(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS de DeepSeek).',String(e),()=>agent(text)); return; }
       if(res.usage){ usage.pin+=res.usage.prompt_tokens||0; usage.pout+=res.usage.completion_tokens||0; }
-      const mo={role:'assistant',content:res.content||''}; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
+      const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
       if(res.tool_calls.length){
         if(!res.content) wait.remove();
         for(const tc of res.tool_calls){ let a={}; try{a=JSON.parse(tc.function.arguments||'{}');}catch(e){}
@@ -945,7 +952,7 @@ async function planReal(task){
   try{
     const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key}, signal:agentAbort.signal,
-      body:JSON.stringify({model:'deepseek-chat',messages:[
+      body:JSON.stringify({model:MODEL,messages:[
         {role:'system',content:'You are a planner. Break the request into 3 to 6 short concrete steps. Reply ONLY with compact JSON: {"steps":[{"title":"...","state":"active|pending"}]}. First step active, the rest pending. No prose.'},
         {role:'user',content:userContent}]})});
     const j=await r.json(); const txt=(j.choices&&j.choices[0].message.content)||'';
@@ -973,7 +980,7 @@ document.addEventListener('keydown',(e)=>{
   else if(e.key==='Escape'){ stopAgent(); } });
 
 buildLangMenu(); renderLangBtn();
-{ const tb=document.getElementById('thinkbtn'); if(tb&&MODEL==='deepseek-reasoner') tb.classList.add('bg-purple-700'); }
+{ const tb=document.getElementById('thinkbtn'); if(tb&&THINK) tb.classList.add('bg-purple-700'); }
 refreshDisk();
 if(!restoreSession()) bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
 </script>
