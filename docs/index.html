@@ -62,6 +62,7 @@
           </button>
           <div id="langmenu" class="hidden absolute right-0 mt-1 bg-gray-800 border border-gray-700 rounded shadow-lg z-50 overflow-hidden min-w-[120px]"></div>
         </div>
+        <button id="thinkbtn" onclick="toggleThink()" title="Ver razonamiento del modelo (deepseek-reasoner)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🧠</button>
         <button onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
         <button onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
         <button onclick="clearChat()" title="Limpiar" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
@@ -571,6 +572,11 @@ function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
 let agentAbort=null;
 let workN=0;                  // blink the 😎 icon while Agents is working
 function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getElementById('agi'); if(e) e.classList.toggle('blink',workN>0); }
+let MODEL=(()=>{ try{ return localStorage.getItem('model')||'deepseek-chat'; }catch(e){ return 'deepseek-chat'; } })();
+function toggleThink(){ MODEL = MODEL==='deepseek-reasoner'?'deepseek-chat':'deepseek-reasoner'; try{localStorage.setItem('model',MODEL);}catch(e){}
+  const b=document.getElementById('thinkbtn'); if(b) b.classList.toggle('bg-purple-700', MODEL==='deepseek-reasoner');
+  tool('Razonamiento: '+(MODEL==='deepseek-reasoner'?'ON (deepseek-reasoner, sin tools)':'OFF (deepseek-chat, con tools)')); }
+function thinkingLive(){ const d=el('<div class="pl-4 border-l-2 border-purple-500 text-xs text-gray-400 italic py-1 max-w-[90%] whitespace-pre-wrap"></div>'); chat().appendChild(d); down(); return d; }
 const LANGS={es:'español',en:'English',fr:'français',de:'Deutsch',pt:'português',it:'italiano'};
 const LANGCC={es:'es',en:'gb',fr:'fr',de:'de',pt:'pt',it:'it'};   // flag country code
 let curLang=(()=>{ try{ return localStorage.getItem('lang')||'es'; }catch(e){ return 'es'; } })();
@@ -600,12 +606,13 @@ function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; try{lo
 // Streamed chat completion (SSE). Updates `wait` live with the text as it arrives;
 // assembles tool_calls across deltas. Returns {content, tool_calls, usage}.
 async function streamChat(msgs, wait){
+  const reasoner = MODEL==='deepseek-reasoner';
+  const body={model:MODEL,messages:msgs,stream:true}; if(!reasoner) body.tools=TOOLS;   // reasoner has no tools
   const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},
-    signal:agentAbort.signal,
-    body:JSON.stringify({model:'deepseek-chat',messages:msgs,tools:TOOLS,stream:true})});
+    signal:agentAbort.signal, body:JSON.stringify(body)});
   if(!r.ok||!r.body) throw new Error('LLM '+r.status);
-  const reader=r.body.getReader(), dec=new TextDecoder(); let buf='', content='', usg=null; const tcs=[];
+  const reader=r.body.getReader(), dec=new TextDecoder(); let buf='', content='', reasoning='', usg=null, reasonBox=null; const tcs=[];
   while(true){ const {done,value}=await reader.read(); if(done)break;
     buf+=dec.decode(value,{stream:true}); let nl;
     while((nl=buf.indexOf('\n'))>=0){ const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
@@ -613,7 +620,8 @@ async function streamChat(msgs, wait){
       let j; try{ j=JSON.parse(data); }catch(e){ continue; }
       if(j.usage)usg=j.usage;
       const d=j.choices&&j.choices[0]&&j.choices[0].delta; if(!d)continue;
-      if(d.content){ content+=d.content; if(wait){ wait.innerHTML=window.marked?marked.parse(content):content; down(); } }
+      if(d.reasoning_content){ reasoning+=d.reasoning_content; if(!reasonBox){ if(wait){wait.remove(); wait=null;} reasonBox=thinkingLive(); } reasonBox.textContent='🧠 '+reasoning; down(); }
+      if(d.content){ if(!wait) wait=bot('<span class="text-gray-400">…</span>'); content+=d.content; wait.innerHTML=window.marked?marked.parse(content):content; down(); }
       if(d.tool_calls)for(const t of d.tool_calls){ const i=t.index||0; tcs[i]=tcs[i]||{id:'',type:'function',function:{name:'',arguments:''}};
         if(t.id)tcs[i].id=t.id; if(t.function){ if(t.function.name)tcs[i].function.name+=t.function.name; if(t.function.arguments)tcs[i].function.arguments+=t.function.arguments; } }
     }
@@ -947,6 +955,7 @@ document.addEventListener('keydown',(e)=>{
   else if(e.key==='Escape'){ stopAgent(); } });
 
 buildLangMenu(); renderLangBtn();
+{ const tb=document.getElementById('thinkbtn'); if(tb&&MODEL==='deepseek-reasoner') tb.classList.add('bg-purple-700'); }
 refreshDisk();
 if(!restoreSession()) bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
 </script>
