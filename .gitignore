@@ -1,0 +1,8 @@
+build/
+*.apk
+*.idsig
+*.keystore
+*.mp4
+deepseek.key
+_*.html
+_*.png

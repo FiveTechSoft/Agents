@@ -1,0 +1,78 @@
+Agents (Android) - What's new
+=============================
+
+v1.0 (2026-06-09)
+-----------------
+* First public release. Tabs labelled "Agent N"; background sunglasses match the
+  icon (dark lenses). Professional README; published to FiveTechSoft/Agents.
+
+v0.9 (2026-06-09)
+-----------------
+* About dialog: Harbour version, "(c) FiveTech Software 2026" and contact email.
+* Background watermark intensity raised (0.5).
+
+v0.8 (2026-06-09)
+-----------------
+* "Acerca de" in the kebab menu: explains the app is made 100% in Harbour using
+  the ccharbour API (CC_Client / CC_AgentRun).
+
+v0.7 (2026-06-09)
+-----------------
+* Removed the full-width "Agents" title bar (NoActionBar theme); more room for chat.
+* Config kebab (three dots) pinned to the top-right corner.
+
+v0.6 (2026-06-09)
+-----------------
+* Real tabs (instead of pill buttons) for the agents.
+* WhatsApp-style faint tiled sunglasses watermark behind the chat.
+* In-app text size control (no Android setting needed) + config kebab (three
+  vertical dots, top-right): text size, new agent, clear chat.
+* "What's new" card shows the version and stays scrolled to top on startup.
+* Voice dictation mic button (bottom-left) - es-ES, where the WebView supports it.
+
+v0.5 (2026-06-09)
+-----------------
+* Colored diffs: write/edit tool results now show + lines in green and - lines
+  in red (was plain text).
+* Smaller UI font (text-sm). It is an app CSS setting, not a global one.
+
+v0.4 (2026-06-09)
+-----------------
+* Multi-agent ENABLED: link against libhbvmmt (the MT VM) instead of libhbvm
+  (ST). hb_threadStart was a no-op stub in the ST VM, so agent threads never
+  ran. Now each agent runs on its own Harbour thread; "+" spawns more.
+
+v0.3 (2026-06-09)
+-----------------
+* System prompt identity changed to "You are Agents...".
+
+v0.2 (2026-06-09)
+-----------------
+* Writable working directory: the app chdir's to its private files dir in C
+  (getFilesDir), so the memory tool and write/edit work. Verified: the agent
+  created notas.txt on-device.
+* App icon is now the cool-face-with-sunglasses emoji (the sunglasses guy).
+* In-app "What's new" card (collapsible) on startup.
+* Versioning: every APK bumps the version (this is 0.2).
+
+v0.1 (2026-06-09)
+-----------------
+* First working build: AgenticAI ported to Android, 100% in Harbour.
+  - Android WebView hosts the same HTML chat panel as the desktop FWH app.
+  - ccharbour agent loop (CC_AgentRun) cross-compiled for arm64-v8a, linked
+    against the prebuilt libharbour from C:\HarbourAndroid.
+  - LLM HTTPS transport via Java HttpsURLConnection over JNI (no curl/openssl).
+  - DeepSeek answering on-device; markdown rendered (marked.js).
+* API key read from a local file on the device (/data/local/tmp/deepseek.key or
+  /sdcard/Download/deepseek.key); /key in chat overrides at runtime.
+* Send button added to the right of the input (soft-keyboard Enter is unreliable).
+* Writable working directory fixed: the app now chdir's to its private files dir
+  (getFilesDir) so the memory tool and write/edit work (process CWD is "/" =
+  read-only on Android).
+* In-app "What's new" card on startup (this list).
+
+Known / pending
+---------------
+* Multi-agent is single-agent for now: hb_threadStart doesn't spawn the agent
+  thread in this embedding (the agent code runs fine inline). MT is a follow-up.
+* Transport is non-streaming: the answer appears at once, not token-by-token.

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "Agents" launcher icon: the cool-face-with-sunglasses emoji (😎). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- yellow face -->
+    <path android:fillColor="#FFCC4D"
+        android:pathData="M4,54 a50,50 0 1,0 100,0 a50,50 0 1,0 -100,0 z"/>
+
+    <!-- sunglasses: brow bar joining the lenses -->
+    <path android:fillColor="#292F33"
+        android:pathData="M14,40 h80 v8 h-80 z"/>
+    <!-- left lens -->
+    <path android:fillColor="#292F33"
+        android:pathData="M16,54 a17,13 0 1,0 34,0 a17,13 0 1,0 -34,0 z"/>
+    <!-- right lens -->
+    <path android:fillColor="#292F33"
+        android:pathData="M58,54 a17,13 0 1,0 34,0 a17,13 0 1,0 -34,0 z"/>
+
+    <!-- smile -->
+    <path android:strokeColor="#664500" android:strokeWidth="5"
+        android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M38,80 Q54,94 70,80"/>
+</vector>
