@@ -161,6 +161,7 @@ async function ghPush(){ const repo=document.getElementById('ghrepo').value.trim
    ===================================================================== */
 async function run(){
   const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
+  if(v[0]==='/'){ await slashCmd(v); return; }
   const m=v.match(/^(ls|read|write|del|cat|rm)\b\s*(.*)$/i);
   if(m){ const cmd=m[1].toLowerCase(), rest=m[2];
     if(cmd==='ls'){ const f=await fsList(); tool(f.length?f.map(x=>x.path).join('\n'):'(disco vacío)'); }
@@ -219,7 +220,68 @@ async function agent(text){
   wait.innerHTML+='<div class="text-xs text-gray-500 mt-2">(límite de pasos)</div>';
 }
 
-function toggleHelp(){ bot('<b>Disco simulado</b> (IndexedDB) a la izquierda.<br>Comandos: <code>ls</code>, <code>read &lt;f&gt;</code>, <code>write &lt;f&gt; &lt;texto&gt;</code>, <code>del &lt;f&gt;</code>.<br>Cualquier otra cosa va al <b>LLM</b> (DeepSeek, con tools sobre el disco).<br>⬇/⬆ sincroniza el disco con una carpeta del repo (Contents API).'); }
+/* ===================== slash commands (como en la app Agents) ===================== */
+async function slashCmd(v){
+  const sp=v.indexOf(' '); const cmd=(sp<0?v:v.slice(0,sp)).toLowerCase(); const arg=sp<0?'':v.slice(sp+1).trim();
+  switch(cmd){
+    case '/help': toggleHelp(); break;
+    case '/clear': clearChat(); break;
+    case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool('API key guardada en este navegador.'); } else tool('Uso: /key <api-key>'); break;
+    case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool('GitHub token puesto (push/pull).'); } else tool('Uso: /ghtoken <token>'); break;
+    case '/goal': { const g=arg||localStorage.getItem('goal')||'Migrar todo el sistema de autenticacion de JWT a sesiones basadas en cookies y asegurar que la cobertura de pruebas no baje del 90%.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
+    case '/plan': await planReal(arg||localStorage.getItem('goal')||'Migrar el sistema de autenticacion de JWT a sesiones con cookies'); break;
+    case '/loop': loopCard({iter:3,max:15,cmds:8}); break;
+    default: tool('Comando desconocido: '+cmd+'. Prueba /help.');
+  }
+}
+
+function goalCard(text){
+  const c=el('<div class="bg-gradient-to-br from-indigo-900/40 to-gray-800 border border-indigo-500/50 p-4 rounded-xl relative overflow-hidden max-w-[90%]"></div>');
+  c.innerHTML='<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="absolute -right-4 -bottom-4 text-indigo-500/10"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>'+
+    '<div class="flex items-start gap-3 relative z-10"><div class="p-2 bg-indigo-500/20 text-indigo-400 rounded-lg shrink-0 mt-0.5"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></div>'+
+    '<div><h4 class="text-indigo-300 font-semibold text-xs uppercase tracking-wider mb-1">Objetivo Activo</h4><p class="text-gray-200 leading-relaxed gt"></p></div></div>';
+  c.querySelector('.gt').textContent=text; chat().appendChild(c); down();
+}
+function planCard(steps){
+  steps=steps||[]; const done=steps.filter(s=>s.state==='done').length;
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700"><h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-blue-400"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>Plan de Accion</h4><span class="text-[10px] bg-blue-900/50 text-blue-300 px-2 py-1 rounded font-medium">'+done+' / '+steps.length+' Completado</span></div><div class="pb space-y-4 relative before:absolute before:inset-0 before:ml-2.5 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-green-500 before:via-blue-500 before:to-gray-700"></div>';
+  const body=c.querySelector('.pb');
+  steps.forEach(s=>{ let dot,cls;
+    if(s.state==='done'){ dot='<div class="h-5 w-5 rounded-full bg-green-500 border-4 border-gray-800 flex items-center justify-center shrink-0 z-10"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg></div>'; cls='text-xs font-semibold text-gray-300 line-through'; }
+    else if(s.state==='active'){ dot='<div class="h-5 w-5 rounded-full bg-blue-500 border-4 border-gray-800 shrink-0 z-10 animate-pulse"></div>'; cls='text-xs font-semibold text-blue-400'; }
+    else { dot='<div class="h-5 w-5 rounded-full bg-gray-700 border-4 border-gray-800 shrink-0 z-10"></div>'; cls='text-xs font-medium text-gray-500'; }
+    const row=el('<div class="relative flex items-start gap-4">'+dot+'<div class="pt-0.5"><h5 class="'+cls+'"></h5></div></div>');
+    row.querySelector('h5').textContent=s.title||'';
+    if(s.note){ const p=document.createElement('p'); p.className='text-[10px] text-gray-400 mt-1'; p.textContent=s.note; row.querySelector('h5').parentNode.appendChild(p); }
+    body.appendChild(row); });
+  chat().appendChild(c); down();
+}
+function loopCard(d){ d=d||{};
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-4 flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-orange-400"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.5"></path></svg>Telemetria del Bucle</h4>'+
+    '<div class="grid grid-cols-2 gap-3 mb-4"><div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-gray-100">'+(d.iter||0)+' <span class="text-xs text-gray-500 font-normal">/ '+(d.max||0)+'</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Iteracion Actual</div></div>'+
+    '<div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-orange-400">'+(d.cmds||0)+' <span class="text-xs text-gray-500 font-normal">cmds</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Limite Autonomo</div></div></div>'+
+    '<div class="flex items-center justify-between bg-gray-900 p-2.5 rounded border border-gray-700"><div class="flex items-center gap-2"><span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500"></span></span><span class="text-xs text-gray-300">Bucle en ejecucion</span></div><button onclick="stopAgent()" class="text-[10px] bg-red-900/50 text-red-300 hover:bg-red-800/60 px-2 py-1 rounded border border-red-800/50">Interrumpir</button></div>';
+  chat().appendChild(c); down();
+}
+async function planReal(task){
+  const key=getKey(); if(!key){ tool('Sin API key para /plan (usa /key).'); return; }
+  const wait=bot('<span class="text-gray-400">generando plan…</span>'); agentAbort=new AbortController();
+  try{
+    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key}, signal:agentAbort.signal,
+      body:JSON.stringify({model:'deepseek-chat',messages:[
+        {role:'system',content:'You are a planner. Break the task into 3 to 6 short concrete steps. Reply ONLY with compact JSON: {"steps":[{"title":"...","state":"active|pending"}]}. First step active, the rest pending. No prose.'},
+        {role:'user',content:task}]})});
+    const j=await r.json(); const txt=(j.choices&&j.choices[0].message.content)||'';
+    const m=txt.match(/\{[\s\S]*\}/); let steps=[];
+    try{ steps=(JSON.parse(m?m[0]:txt).steps)||[]; }catch(e){}
+    wait.remove(); planCard(steps);
+  }catch(e){ if(e.name==='AbortError') wait.innerHTML='(detenido)'; else wait.innerHTML='Error: '+e+' (posible CORS de DeepSeek)'; }
+}
+
+function toggleHelp(){ bot('<b>Comandos slash:</b> <code>/help</code> <code>/clear</code> <code>/key &lt;k&gt;</code> <code>/ghtoken &lt;t&gt;</code> <code>/goal [texto]</code> <code>/plan [tarea]</code> <code>/loop</code><br><b>Disco</b> (IndexedDB, izq): <code>ls</code> <code>read &lt;f&gt;</code> <code>write &lt;f&gt; &lt;txt&gt;</code> <code>del &lt;f&gt;</code>.<br>Cualquier otra cosa va al <b>LLM</b> (DeepSeek, tools sobre el disco). ⬇/⬆ sincroniza con el repo.'); }
 
 function toggleDisk(){ const d=document.getElementById('disk'), b=document.getElementById('backdrop');
   const open=d.classList.contains('-translate-x-full');
