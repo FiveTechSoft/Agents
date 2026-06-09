@@ -179,8 +179,29 @@ const TOOLS=[
  {type:'function',function:{name:'list_files',description:'List files on the disk',parameters:{type:'object',properties:{}}}},
  {type:'function',function:{name:'read_file',description:'Read a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
  {type:'function',function:{name:'write_file',description:'Create/overwrite a file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},
- {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}}
+ {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
+ {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait for the answer. Provide 2-4 short options when possible.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'string'}}},required:['question']}}}
 ];
+
+// Renders a question card and resolves when the user answers (the agent loop awaits this).
+function askUser(question, options){
+  return new Promise(res=>{
+    const card=el('<div class="bg-[#2a1f0c] border border-yellow-700/50 p-3 rounded-lg max-w-[90%]"></div>');
+    const q=document.createElement('div'); q.className='text-yellow-300 font-semibold mb-2'; q.textContent=question; card.appendChild(q);
+    if(options&&options.length){
+      options.forEach(o=>{ const b=el('<button class="block w-full text-left bg-yellow-700/30 hover:bg-yellow-600 text-yellow-100 px-3 py-2 rounded mb-1"></button>');
+        b.textContent=o; b.onclick=()=>{ card.querySelectorAll('button,input').forEach(x=>x.disabled=true); b.classList.add('ring-2','ring-yellow-300'); res(o); }; card.appendChild(b); });
+    } else {
+      const wrap=el('<div class="flex gap-2"></div>');
+      const inp=el('<input class="flex-1 bg-gray-900 border border-yellow-700/50 rounded px-2 py-1 text-gray-100">');
+      const ok=el('<button class="bg-yellow-600 hover:bg-yellow-500 text-white px-3 rounded">OK</button>');
+      const send=()=>{ wrap.querySelectorAll('button,input').forEach(x=>x.disabled=true); res(inp.value||'(sin respuesta)'); };
+      ok.onclick=send; inp.onkeydown=(e)=>{ if(e.key==='Enter') send(); };
+      wrap.appendChild(inp); wrap.appendChild(ok); card.appendChild(wrap);
+    }
+    chat().appendChild(card); down(); const f=card.querySelector('input'); if(f) f.focus();
+  });
+}
 async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
   if(name==='list_files'){ return (await fsList()).map(f=>f.path).join('\n')||'(empty)'; }
   if(name==='read_file'){ const f=await fsGet(args.path); return f?f.content:'not found'; }
@@ -188,6 +209,7 @@ async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){
     if(old && old.content!==(args.content||'')) diffCard(args.path, diffLines(old.content,args.content||''));
     return 'wrote '+args.path; }
   if(name==='delete_file'){ await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
+  if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
   return 'unknown tool'; }
 
 function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
@@ -201,7 +223,7 @@ function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; }
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
   convo.push({role:'user',content:text});
-  const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Responde breve.'},{role:'user',content:text}];
+  const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas una decision del usuario, llama a ask_user (con 2-4 opciones) y espera su respuesta antes de continuar. Responde breve.'},{role:'user',content:text}];
   const wait=bot('<span class="text-gray-400">pensando…</span>');
   agentAbort=new AbortController();
   for(let step=0; step<8; step++){
