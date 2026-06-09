@@ -65,7 +65,7 @@
         <button onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
         <button onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
         <button onclick="clearChat()" title="Limpiar" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
-        <button onclick="toggleHelp()" class="text-gray-400 hover:text-gray-200 px-1">/help</button>
+        <button onclick="runCmd('/help')" class="text-gray-400 hover:text-gray-200 px-1">/help</button>
       </div>
     </div>
     <div id="chat" class="flex-1 overflow-y-auto scroll p-4 space-y-4"></div>
@@ -78,7 +78,7 @@
         <input id="prompt" placeholder="comando: ls · write a.txt Hola · read a.txt · del a.txt · (o pregunta al LLM)"
           onkeydown="promptKey(event)"
           class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500">
-        <button onclick="run()" class="bg-blue-600 hover:bg-blue-500 rounded-lg px-4">Enviar</button>
+        <button onclick="run()" class="bg-blue-600 hover:bg-blue-500 rounded-lg px-6 py-3 text-base font-semibold shrink-0">Enviar</button>
       </div>
       <div class="text-[10px] text-gray-500 text-center mt-2 flex justify-center gap-4">
         <span><kbd class="bg-gray-700 px-1 rounded border border-gray-600">Ctrl</kbd>+<kbd class="bg-gray-700 px-1 rounded border border-gray-600">K</kbd> limpiar</span>
@@ -320,8 +320,10 @@ function nextHint(){ hintIdx=(hintIdx+1)%HINTS.length; const p=document.getEleme
 
 /* prompt history: Up/Down navigate previous/next used prompts */
 const hist=[]; let histI=0;
+function runCmd(cmd){ const p=document.getElementById('prompt'); p.value=cmd; run(); }
 function promptKey(e){ const i=e.target;
   if(e.key==='Enter'){ run(); return; }
+  if(e.key==='Tab'){ if(!i.value && i.placeholder){ i.value=i.placeholder; e.preventDefault(); } return; }   // accept the hint
   if(e.key==='ArrowUp'){ if(hist.length && histI>0){ histI--; i.value=hist[histI]; e.preventDefault(); setTimeout(()=>i.setSelectionRange(i.value.length,i.value.length),0); } }
   else if(e.key==='ArrowDown'){ if(histI<hist.length-1){ histI++; i.value=hist[histI]; } else { histI=hist.length; i.value=''; } e.preventDefault(); }
 }
@@ -622,7 +624,8 @@ async function streamChat(msgs, wait){
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
   convo.push({role:'user',content:text}); curPanel=null;
-  const msgs=[{role:'system',content:'Eres Agents Web. Responde SIEMPRE en '+(LANGS[curLang]||'español')+'. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  const skillsTxt=await activeSkillsPrompt();
+  const msgs=[{role:'system',content:'Eres Agents Web. Responde SIEMPRE en '+(LANGS[curLang]||'español')+'. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
   try{
     for(let step=0; step<8; step++){
@@ -801,7 +804,7 @@ function helpCard(){
   const g=c.querySelector('.chc');
   cmds.forEach(([cm,ds])=>{ const b=el('<button class="flex flex-col text-left p-2 rounded bg-gray-900 border border-gray-700 hover:border-gray-500"></button>');
     b.innerHTML='<span class="text-blue-400 font-mono text-xs"></span><span class="text-[10px] text-gray-400 mt-0.5"></span>';
-    b.children[0].textContent=cm; b.children[1].textContent=ds; b.onclick=()=>{ document.getElementById('prompt').value=cm+' '; document.getElementById('prompt').focus(); };
+    b.children[0].textContent=cm; b.children[1].textContent=ds; b.onclick=()=>runCmd(cm);
     g.appendChild(b); });
   chat().appendChild(c); down();
 }
@@ -828,18 +831,28 @@ async function listSkills(){
   return disk.concat(built);
 }
 async function skillPrompt(name){ const f=await fsGet('skills/'+name+'.md'); if(f) return f.content; if(BUILTIN_SKILLS[name]) return BUILTIN_SKILLS[name].prompt; return null; }
+let skillsOn=(()=>{ try{ return new Set(JSON.parse(localStorage.getItem('skillson')||'[]')); }catch(e){ return new Set(); } })();
+function toggleSkill(name){ if(skillsOn.has(name)) skillsOn.delete(name); else skillsOn.add(name); try{localStorage.setItem('skillson',JSON.stringify([...skillsOn]));}catch(e){} }
+async function activeSkillsPrompt(){ if(!skillsOn.size) return ''; const out=[]; for(const n of skillsOn){ const p=await skillPrompt(n); if(p) out.push('Skill '+n+': '+p); } return out.length? '\n\nSkills activas (síguelas siempre):\n'+out.join('\n') : ''; }
+/* small toggle switch */
+function setToggle(t,on){ t.className='relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors '+(on?'bg-pink-500':'bg-gray-600'); t.firstChild.className='inline-block h-3 w-3 rounded-full bg-white transition-transform '+(on?'translate-x-3.5':'translate-x-0.5'); }
+function toggleEl(on,onClick){ const t=document.createElement('div'); t.appendChild(document.createElement('span')); setToggle(t,on); t.onclick=onClick; return t; }
+
+// /skill card — "Habilidades Activas" with per-skill on/off toggle (active skills feed the system prompt)
 function skillCard(skills){
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
-  c.innerHTML='<div class="flex items-center justify-between mb-3 border-b border-gray-700 pb-2"><h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+
-    SVG('text-amber-400','<polygon points="12 2 15 9 22 9 16 14 18 21 12 17 6 21 8 14 2 9 9 9"></polygon>')+'Skills</h4>'+
-    '<button class="newsk text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">+ nueva</button></div><div class="grid grid-cols-2 gap-2 skc"></div>';
-  const g=c.querySelector('.skc');
-  skills.forEach(s=>{ const b=el('<button class="flex flex-col text-left p-2 rounded bg-gray-900 border border-gray-700 hover:border-amber-600"></button>');
-    b.innerHTML='<span class="text-amber-400 font-mono text-xs"></span><span class="text-[10px] text-gray-400 mt-0.5"></span>';
-    b.children[0].textContent='/skill '+s.name; b.children[1].textContent=s.desc;
-    b.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/skill '+s.name+' '; p.focus(); }; g.appendChild(b); });
-  c.querySelector('.newsk').onclick=()=>{ const p=document.getElementById('prompt'); p.value='/skill new '; p.focus(); };
-  chat().appendChild(c); down();
+  const head=el('<div class="flex items-center justify-between mb-4 border-b border-gray-700 pb-3"></div>');
+  head.innerHTML='<h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+SVG('text-pink-400','<path d="M12 2v20"></path><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>')+'Habilidades Activas (Skills)</h4>';
+  const nw=el('<button class="text-[10px] text-gray-400 hover:text-white bg-gray-900 border border-gray-600 px-2 py-1 rounded">+ Nueva</button>'); nw.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/skill new '; p.focus(); }; head.appendChild(nw); c.appendChild(head);
+  const body=el('<div class="space-y-3"></div>');
+  skills.forEach(s=>{ const on=skillsOn.has(s.name);
+    const row=el('<div class="flex items-start justify-between"></div>'); if(!on) row.classList.add('opacity-60');
+    const left=el('<div class="flex gap-2.5"></div>'); const ic=document.createElement('div'); ic.className='mt-0.5 '+(on?'text-pink-400':'text-gray-500'); ic.innerHTML=SVG('','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
+    const tx=document.createElement('div'); const nm=document.createElement('div'); nm.className='text-xs font-medium '+(on?'text-gray-200':'text-gray-400'); nm.textContent=s.name; const ds=document.createElement('div'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(on?'text-gray-400':'text-gray-500'); ds.textContent=s.desc; tx.appendChild(nm); tx.appendChild(ds); left.appendChild(ic); left.appendChild(tx);
+    const tg=toggleEl(on,()=>{ toggleSkill(s.name); const nv=skillsOn.has(s.name); setToggle(tg,nv); row.classList.toggle('opacity-60',!nv); ic.className='mt-0.5 '+(nv?'text-pink-400':'text-gray-500'); nm.className='text-xs font-medium '+(nv?'text-gray-200':'text-gray-400'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(nv?'text-gray-400':'text-gray-500'); });
+    tg.classList.add('mt-0.5');
+    row.appendChild(left); row.appendChild(tg); body.appendChild(row); });
+  c.appendChild(body); chat().appendChild(c); down();
 }
 async function runSkill(name,task){
   const p=await skillPrompt(name); if(p==null){ tool('skill no existe: '+name+'. Escribe /skill para listar.'); return; }
@@ -847,15 +860,25 @@ async function runSkill(name,task){
   await agent('Sigue esta SKILL "'+name+'":\n'+p+'\n\nTarea: '+(task||'aplícala al contexto actual del disco.'));
 }
 /* ===== /tool: list the agent tools, or run one directly for testing ===== */
+function toolSafety(name){ return ['write_file','delete_file','git','dispatch_agents'].includes(name)?'warn':'safe'; }
 function toolsCard(){
-  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
-  c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Herramientas del agente ('+TOOLS.length+')</h4><div class="grid grid-cols-1 gap-1.5 tlc"></div>';
-  const g=c.querySelector('.tlc');
-  TOOLS.forEach(t=>{ const b=el('<button class="flex flex-col text-left p-2 rounded bg-gray-900 border border-gray-700 hover:border-blue-600"></button>');
-    b.innerHTML='<span class="text-blue-400 font-mono text-xs"></span><span class="text-[10px] text-gray-400 mt-0.5"></span>';
-    b.children[0].textContent=t.function.name; b.children[1].textContent=t.function.description;
-    b.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/tool '+t.function.name+' {}'; p.focus(); }; g.appendChild(b); });
-  chat().appendChild(c); down();
+  const c=el('<div class="bg-[#1a1d24] border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  const head=el('<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700/50"></div>');
+  head.innerHTML='<h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+SVG('text-yellow-500','<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>')+'Registro de Herramientas</h4><span class="text-[10px] font-mono bg-gray-800 border border-gray-600 text-gray-300 px-1.5 py-0.5 rounded">'+TOOLS.length+' Disponibles</span>';
+  c.appendChild(head);
+  const grid=el('<div class="grid grid-cols-2 gap-2"></div>');
+  TOOLS.forEach(t=>{ const warn=toolSafety(t.function.name)==='warn';
+    const cell=el('<div class="bg-gray-800 border rounded p-2.5 flex flex-col cursor-pointer transition-colors '+(warn?'border-yellow-900/30 hover:border-yellow-700/50':'border-gray-700 hover:border-gray-500')+'"></div>');
+    const top=el('<div class="flex justify-between items-start mb-1.5"></div>'); const nm=document.createElement('span'); nm.className='text-xs font-mono '+(warn?'text-yellow-100':'text-gray-200'); nm.textContent=t.function.name;
+    const dot=document.createElement('span'); dot.className='h-2 w-2 rounded-full shrink-0 '+(warn?'bg-yellow-500':'bg-green-500'); dot.title=warn?'Muta estado':'Solo lectura'; top.appendChild(nm); top.appendChild(dot);
+    const ds=document.createElement('span'); ds.className='text-[10px] text-gray-400 leading-tight'; ds.textContent=t.function.description;
+    cell.appendChild(top); cell.appendChild(ds); cell.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/tool '+t.function.name+' {}'; p.focus(); }; grid.appendChild(cell); });
+  const red=el('<div class="col-span-2 bg-red-950/20 border border-red-900/40 rounded p-2.5 flex items-center justify-between"></div>');
+  const info=document.createElement('div'); info.innerHTML='<div class="flex items-center gap-2 mb-0.5"><span class="text-xs font-mono text-red-200">escritura / borrado</span><span class="text-[9px] uppercase font-bold tracking-wider text-red-400 bg-red-900/50 px-1 rounded">Requiere permiso</span></div><span class="text-[10px] text-gray-400">Mutan el disco. Piden confirmación salvo Auto-Aprobar.</span>';
+  const ap=document.createElement('div'); ap.className='flex flex-col items-center shrink-0 ml-2'; const apl=document.createElement('span'); apl.className='text-[8px] text-gray-500 mb-1 uppercase'; apl.textContent='Auto-Aprobar'; ap.appendChild(apl);
+  const tg=toggleEl(autoApprove,()=>{ autoApprove=!autoApprove; setToggle(tg,autoApprove); tool('Auto-aprobar: '+(autoApprove?'ON':'OFF')); }); ap.appendChild(tg);
+  red.appendChild(info); red.appendChild(ap); grid.appendChild(red);
+  c.appendChild(grid); chat().appendChild(c); down();
 }
 async function toolCmd(arg){
   if(!arg){ toolsCard(); return; }
