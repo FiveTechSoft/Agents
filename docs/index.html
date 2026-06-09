@@ -6,6 +6,10 @@
 <title>Agents — Web (virtual disk)</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- real git in the browser -->
+<script src="https://unpkg.com/@isomorphic-git/lightning-fs@4.6.0/dist/lightning-fs.min.js"></script>
+<script src="https://unpkg.com/isomorphic-git@1.27.1/index.umd.min.js"></script>
+<script src="https://unpkg.com/isomorphic-git@1.27.1/http/web/index.umd.js"></script>
 <style>
   html,body{height:100%}
   .scroll::-webkit-scrollbar{width:8px}
@@ -201,6 +205,81 @@ async function ghPush(){ const repo=document.getElementById('ghrepo').value.trim
   tool('Pushed '+n+' files.'); }
 
 /* =====================================================================
+   Real git in the browser (isomorphic-git + LightningFS).
+   The git working tree lives in LightningFS (/repo); it mirrors to/from
+   the virtual disk so files show in the panel and are editable. Network
+   git (clone/push/pull) goes through a CORS proxy; push needs a token.
+   ===================================================================== */
+const GFS = (typeof LightningFS!=='undefined') ? new LightningFS('agitfs') : null;
+const GP = GFS ? GFS.promises : null;
+const GITDIR='/repo', CORSPX='https://cors.isomorphic-git.org';
+let GIT_REPO=(()=>{ try{return localStorage.getItem('gitrepo')||null;}catch(e){return null;} })();
+function gitReady(){ return (typeof git!=='undefined' && GFS && typeof GitHttp!=='undefined'); }
+function ghTok(){ const e=document.getElementById('ghtok'); return e?e.value.trim():''; }
+function gitAuthor(){ return {name:'Agents Web', email:'agents@web.local'}; }
+function gitOnAuth(){ return ()=>({username: ghTok()||'anonymous', password: ghTok()? 'x-oauth-basic':''}); }
+async function mkdirp(dir){ const parts=dir.split('/').filter(Boolean); let cur=''; for(const p of parts){ cur+='/'+p; try{ await GP.mkdir(cur); }catch(e){} } }
+async function walkFS(dir, base){ let out=[]; let names; try{ names=await GP.readdir(dir); }catch(e){ return out; }
+  for(const n of names){ if(n==='.git')continue; const full=dir+'/'+n, rel=base?base+'/'+n:n; let st;
+    try{ st=await GP.stat(full);}catch(e){continue;}
+    if(st.type==='dir'){ out=out.concat(await walkFS(full, rel)); }
+    else { let c=''; try{ c=await GP.readFile(full,'utf8'); }catch(e){} out.push({path:rel,content:c}); } }
+  return out; }
+async function mirrorToDisk(){ const files=await walkFS(GITDIR,''); for(const f of files) await fsPut(f.path, f.content); refreshDisk(); return files.length; }
+async function mirrorFromDisk(){ const items=await fsList(); for(const f of items){ const full=GITDIR+'/'+f.path; const dir=full.slice(0,full.lastIndexOf('/')); await mkdirp(dir); await GP.writeFile(full, f.content||'', 'utf8'); } }
+async function gitChanges(){ const m=await git.statusMatrix({fs:GFS,dir:GITDIR}); return m.filter(r=>!(r[2]===1&&r[3]===1)); }
+
+async function gitCard(){
+  const c=el('<div class="bg-gray-800/80 border border-gray-700 p-3 rounded-xl max-w-[90%]"></div>');
+  let branch='?', changes=0, repo=GIT_REPO||'(sin repo)';
+  try{ branch=await git.currentBranch({fs:GFS,dir:GITDIR})||'(detached)'; }catch(e){}
+  try{ changes=(await gitChanges()).length; }catch(e){}
+  c.innerHTML='<div class="flex items-center justify-between mb-2 border-b border-gray-700/50 pb-2"><h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">'+
+    SVG('','<circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M6 21V9a9 9 0 0 0 9 9"></path>')+'Git</h4>'+
+    '<span class="text-[10px] text-gray-300 bg-gray-900 px-1.5 py-0.5 rounded border border-gray-700">branch: '+branch+'</span></div>'+
+    '<div class="text-xs text-gray-300 flex items-center justify-between"><span>'+repo+'</span><span class="text-[10px] '+(changes?'text-orange-400':'text-green-400')+'">'+(changes?changes+' cambios':'limpio')+'</span></div>';
+  chat().appendChild(c); down();
+}
+async function gitClone(repo){
+  if(!gitReady()){ tool('isomorphic-git no cargó (revisa conexión).'); return; }
+  GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
+  tool('git clone '+repo+' …'); setWorking(true);
+  try{ try{ await GP.rmdir(GITDIR,{recursive:true}); }catch(e){}
+    await git.clone({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:CORSPX,url:'https://github.com/'+repo+'.git',singleBranch:true,depth:25,onAuth:gitOnAuth()});
+    const n=await mirrorToDisk(); await gitCard(); tool('clonado: '+n+' ficheros en el disco virtual.');
+  }catch(e){ errorCard('git clone falló', String(e), 'Repo privado → pon token. CORS proxy: '+CORSPX, null); }
+  finally{ setWorking(false); } }
+async function gitCommit(msg){ if(!gitReady()){tool('git no listo.');return;} await mirrorFromDisk();
+  const m=await git.statusMatrix({fs:GFS,dir:GITDIR});
+  for(const [fp,h,w] of m){ if(w===0){ try{await git.remove({fs:GFS,dir:GITDIR,filepath:fp});}catch(e){} } else { await git.add({fs:GFS,dir:GITDIR,filepath:fp}); } }
+  try{ const sha=await git.commit({fs:GFS,dir:GITDIR,message:msg||'agents-web: update',author:gitAuthor()});
+    tool('commit '+sha.slice(0,7)+' — '+(msg||'update')); gitCard();
+  }catch(e){ tool('commit: '+e); } }
+async function gitPush(){ if(!gitReady()){tool('git no listo.');return;} if(!ghTok()){ tool('push necesita token (/ghtoken).'); return; }
+  tool('git push …'); setWorking(true);
+  try{ const r=await git.push({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:CORSPX,onAuth:gitOnAuth()});
+    tool('push '+((r&&r.ok)?'ok':'enviado')); }catch(e){ errorCard('git push falló', String(e),'', null); } finally{ setWorking(false); } }
+async function gitPull(){ if(!gitReady()){tool('git no listo.');return;} tool('git pull …'); setWorking(true);
+  try{ await git.pull({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:CORSPX,singleBranch:true,author:gitAuthor(),onAuth:gitOnAuth()});
+    const n=await mirrorToDisk(); tool('pull ok ('+n+' ficheros).'); gitCard(); }catch(e){ errorCard('git pull falló',String(e),'',null); } finally{ setWorking(false); } }
+async function gitLog(){ if(!gitReady()){tool('git no listo.');return;}
+  try{ const cs=await git.log({fs:GFS,dir:GITDIR,depth:10});
+    const c=el('<div class="bg-gray-800 border border-gray-700 p-3 rounded-xl max-w-[90%] text-xs space-y-1.5"></div>');
+    c.innerHTML='<h4 class="font-semibold text-gray-200 mb-1">git log</h4>';
+    cs.forEach(x=>{ const d=document.createElement('div'); d.className='flex gap-2'; d.innerHTML='<span class="text-amber-400 font-mono shrink-0">'+x.oid.slice(0,7)+'</span><span class="text-gray-300 truncate"></span>'; d.children[1].textContent=(x.commit.message||'').split('\n')[0]; c.appendChild(d); });
+    chat().appendChild(c); down(); }catch(e){ tool('log: '+e); } }
+async function gitStatus(){ if(!gitReady()){tool('git no listo.');return;} await mirrorFromDisk();
+  try{ const ch=await gitChanges();
+    if(!ch.length){ tool('git status: limpio.'); return; }
+    tool('git status ('+ch.length+'):\n'+ch.map(r=>{ const st=r[2]===0?'deleted':(r[1]===0?'new':'modified'); return '  '+st+': '+r[0]; }).join('\n'));
+  }catch(e){ tool('status: '+e); } }
+async function gitCmd(arg){ const sp=(arg||'').indexOf(' '); const sub=(sp<0?arg:arg.slice(0,sp)).toLowerCase(); const rest=sp<0?'':arg.slice(sp+1).trim();
+  switch(sub){ case 'status': await gitStatus(); break; case 'log': await gitLog(); break;
+    case 'commit': await gitCommit(rest); break; case 'push': await gitPush(); break;
+    case 'pull': await gitPull(); break; case 'branch': { try{ tool('branch: '+(await git.currentBranch({fs:GFS,dir:GITDIR})||'(detached)')); }catch(e){ tool('branch: '+e); } break; }
+    case 'card': case '': await gitCard(); break; default: tool('git: status|log|commit <msg>|push|pull|branch'); } }
+
+/* =====================================================================
    Mini command shell + optional LLM agent (DeepSeek, function calling).
    Shell commands operate directly on the virtual disk.
    ===================================================================== */
@@ -264,6 +343,7 @@ async function runDemoSim(){
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
   user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
+  user('/git'); await gitCard(); await sleep(400);
   user('/loop'); loopCard({iter:3,max:15,cmds:8}); await sleep(400);
   user('/help'); helpCard(); await sleep(300);
   doneLine('Esperando respuesta del usuario…');
@@ -294,10 +374,11 @@ const TOOLS=[
  {type:'function',function:{name:'write_file',description:'Create/overwrite a file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},
  {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
  {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait for the answer. Provide 2-4 short options when possible.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'string'}}},required:['question']}}},
- {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. Use to split a task into parts that do not depend on each other.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks'}},required:['tasks']}}}
+ {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. Use to split a task into parts that do not depend on each other.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks'}},required:['tasks']}}},
+ {type:'function',function:{name:'git',description:'Real git on the cloned repo (isomorphic-git). action: status|log|commit|push|pull|clone. For commit pass message; for clone pass repo (owner/name).',parameters:{type:'object',properties:{action:{type:'string'},message:{type:'string'},repo:{type:'string'}},required:['action']}}}
 ];
-// sub-agents get the disk tools but NOT dispatch/ask (avoid recursion / blocking)
-const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user'].includes(t.function.name));
+// sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
+const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
 
 // Renders a question card and resolves when the user answers (the agent loop awaits this).
 function askUser(question, options){
@@ -329,6 +410,13 @@ async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){
     await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
   if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
   if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[]); }
+  if(name==='git'){ const a=(args.action||'').toLowerCase();
+    if(a==='clone'){ await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return 'clonado'; }
+    if(a==='commit'){ await gitCommit(args.message||'agents-web: update'); return 'commit hecho'; }
+    if(a==='push'){ await gitPush(); return 'push lanzado'; }
+    if(a==='pull'){ await gitPull(); return 'pull hecho'; }
+    if(a==='log'){ await gitLog(); return 'log mostrado'; }
+    await gitStatus(); return 'status mostrado'; }
   return 'unknown tool'; }
 
 /* ===== multi-agent: concurrent async sub-agents (Promise.all) + delegation card ===== */
@@ -525,6 +613,8 @@ async function slashCmd(v){
       break;
     case '/loop': loopCard({iter:3,max:15,cmds:8}); break;
     case '/run': await executePlan(lastPlan); break;
+    case '/clone': await gitClone(arg||GIT_REPO||document.getElementById('ghrepo').value.trim()||'FiveTechSoft/Agents'); break;
+    case '/git': await gitCmd(arg); break;
     default: tool('Comando desconocido: '+cmd+'. Prueba /help.');
   }
 }
@@ -648,7 +738,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/loop','Telemetría'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/loop','Telemetría'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
