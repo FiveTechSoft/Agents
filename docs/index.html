@@ -257,6 +257,7 @@ async function runDemoSim(){
   errorCard('Error en el comando','Un comando de ejemplo falló por una dependencia faltante.','Error: Cannot find module \'clsx\'\nRequire stack:\n- /src/components/Sidebar.jsx', ()=>{ tool('↑ Auto-corrigiendo… (demo)'); }); await sleep(800);
   askPermit('ejecutar el comando','npm install clsx').then(()=>{}); await sleep(300);
   askUser('¿Dónde guardamos el resultado?',['Disco virtual','Repo GitHub (Push)','Solo mostrarlo']).then(()=>{}); await sleep(700);
+  user('Reparte el trabajo en varios agentes'); { const dc=delegationCard(['Listar ficheros del disco','Resumir su contenido','Proponer mejoras']); await sleep(700); dc.setStatus(0,'list_files…'); await sleep(500); dc.done(0); dc.setStatus(1,'read_file…'); await sleep(500); dc.done(1); await sleep(400); dc.done(2); } await sleep(500);
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
   user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
@@ -289,8 +290,11 @@ const TOOLS=[
  {type:'function',function:{name:'read_file',description:'Read a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
  {type:'function',function:{name:'write_file',description:'Create/overwrite a file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},
  {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
- {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait for the answer. Provide 2-4 short options when possible.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'string'}}},required:['question']}}}
+ {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait for the answer. Provide 2-4 short options when possible.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'string'}}},required:['question']}}},
+ {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. Use to split a task into parts that do not depend on each other.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks'}},required:['tasks']}}}
 ];
+// sub-agents get the disk tools but NOT dispatch/ask (avoid recursion / blocking)
+const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user'].includes(t.function.name));
 
 // Renders a question card and resolves when the user answers (the agent loop awaits this).
 function askUser(question, options){
@@ -321,7 +325,48 @@ async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){
   if(name==='delete_file'){ if(!(await askPermit('borrar el archivo',args.path))) return 'Rechazado por el usuario.';
     await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
   if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
+  if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[]); }
   return 'unknown tool'; }
+
+/* ===== multi-agent: concurrent async sub-agents (Promise.all) + delegation card ===== */
+function delegationCard(tasks){
+  const c=el('<div class="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden max-w-[90%]"></div>');
+  c.innerHTML='<div class="p-3 border-b border-gray-700/50 flex items-start gap-3"><div class="mt-0.5 text-purple-400 bg-purple-900/30 p-1.5 rounded-md border border-purple-800/50">'+
+    SVG('','<path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>')+
+    '</div><div><h4 class="text-sm font-semibold text-gray-200">Delegando tarea…</h4><p class="text-xs text-gray-400 mt-0.5">El agente principal espera resultados.</p></div></div><div class="dbody p-3 bg-gray-900/50 space-y-2"></div>';
+  const body=c.querySelector('.dbody'); const rows=[];
+  tasks.forEach((t,i)=>{ const row=el('<div class="flex items-center justify-between bg-gray-800 border border-purple-900/50 p-2.5 rounded-lg gap-2"></div>');
+    row.innerHTML='<div class="flex items-center gap-2.5 min-w-0"><span class="dotw relative flex h-2 w-2 shrink-0"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span></span><span class="text-xs font-medium text-purple-200 shrink-0">@Agent_'+(i+1)+'</span></div><span class="st text-[10px] text-gray-500 bg-black/40 px-1.5 py-0.5 rounded truncate"></span>';
+    row.querySelector('.st').textContent=t.slice(0,46); body.appendChild(row); rows.push(row); });
+  chat().appendChild(c); down();
+  return { setStatus:(i,s)=>{ if(rows[i]) rows[i].querySelector('.st').textContent=String(s).slice(0,46); },
+    done:(i,err)=>{ if(rows[i]){ rows[i].querySelector('.dotw').innerHTML='<span class="relative inline-flex rounded-full h-2 w-2 '+(err?'bg-red-500':'bg-green-500')+'"></span>'; rows[i].querySelector('.st').textContent=err?'✕ error':'✓ hecho'; } } };
+}
+async function subAgent(task,setStatus){
+  const msgs=[{role:'system',content:'Eres un sub-agente. Realiza SOLO esta subtarea usando las tools del disco. Responde en '+(LANGS[curLang]||'español')+', muy breve.'},{role:'user',content:task}];
+  for(let s=0;s<5;s++){
+    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},signal:agentAbort.signal,
+      body:JSON.stringify({model:'deepseek-chat',messages:msgs,tools:SUBTOOLS})});
+    if(!r.ok) throw new Error('LLM '+r.status);
+    const j=await r.json(); if(j.usage){usage.pin+=j.usage.prompt_tokens||0;usage.pout+=j.usage.completion_tokens||0;}
+    const mo=j.choices[0].message; msgs.push(mo);
+    if(mo.tool_calls&&mo.tool_calls.length){
+      for(const tc of mo.tool_calls){ setStatus(tc.function.name+'…'); const out=await execTool(tc.function.name,tc.function.arguments); msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
+      continue;
+    }
+    return mo.content||'';
+  }
+  return '(límite)';
+}
+async function dispatchAgents(tasks){
+  if(!Array.isArray(tasks)||tasks.length<1) return 'Error: se necesitan 1-4 subtareas.';
+  tasks=tasks.slice(0,4);
+  const card=delegationCard(tasks);
+  const results=await Promise.all(tasks.map((t,i)=>
+    subAgent(t,s=>card.setStatus(i,s)).then(r=>{card.done(i);return r;}).catch(e=>{card.done(i,true);return '(error: '+e+')';})));
+  return 'Sub-agentes terminados:\n'+tasks.map((t,i)=>(i+1)+') '+t+' => '+results[i]).join('\n');
+}
 
 function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
 
