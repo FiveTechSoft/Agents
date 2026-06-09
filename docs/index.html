@@ -450,51 +450,52 @@ async function runDemoLLM(){
   try{
     const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-      body:JSON.stringify({model:MODEL,messages:[{role:'user',content:'Dame UNA idea breve (maximo 8 palabras, en espanol) de una mini-tarea distinta para demostrar un agente que crea y edita ficheros en un disco. Solo la idea, sin comillas ni puntuacion final.'}]})});
+      body:JSON.stringify({model:MODEL,messages:[{role:'user',content:'Give ONE short idea (max 8 words, in '+(LANGS[curLang]||'español')+') of a small distinct task to demo an agent that creates and edits files on a disk. Only the idea, no quotes or trailing punctuation.'}]})});
     const j=await r.json(); if(j.usage){usage.pin+=j.usage.prompt_tokens||0;usage.pout+=j.usage.completion_tokens||0;}
     topic=((j.choices&&j.choices[0].message.content)||topic).trim().replace(/^["']|["'.]+$/g,'');
   }catch(e){ tool('(no pude pedir tema; uso uno por defecto)'); }
   tool('Tema de la demo: '+topic);
   const seq=['/goal '+topic, '/plan',
-    'Crea un fichero (en el disco virtual) relacionado con: '+topic+'. Inventa un nombre adecuado y un contenido breve.',
-    'Ahora edita ese fichero para ampliarlo un poco', '/cost'];
+    T('Crea un fichero (en el disco virtual) relacionado con: '+topic+'. Inventa un nombre adecuado y un contenido breve.','Create a file (on the virtual disk) related to: '+topic+'. Invent a suitable name and short content.'),
+    T('Ahora edita ese fichero para ampliarlo un poco','Now edit that file to expand it a bit'), '/cost'];
   for(const p of seq){ const i=document.getElementById('prompt'); i.value=p; await run(); await sleep(900); }
   tool('✓ Demo (LLM) completada.');
   setWorking(false);
 }
 async function runDemoSim(){
   setWorking(true);
-  tool('▶ Demo (simulada — sin API key): cards de muestra.'); await sleep(400);
-  user('/goal'); goalCard('Mostrar las capacidades de Agents Web: gestionar ficheros en un disco virtual (IndexedDB) con un agente IA, generar y ejecutar planes, y sincronizar con un repo de GitHub.'); await sleep(800);
-  user('/plan'); planCard([{title:'Crear ficheros en el disco virtual',state:'done'},{title:'Editar un fichero y mostrar el diff de cambios',state:'active',note:'Modificando bienvenida.md…'},{title:'Sincronizar el disco con GitHub (Push)',state:'pending'}]); await sleep(900);
-  user('Crea bienvenida.md y luego edítalo'); curPanel=null;
+  tool(T('▶ Demo (simulada — sin API key): cards de muestra.','▶ Demo (simulated — no API key): sample cards.')); await sleep(400);
+  user('/goal'); goalCard(T('Mostrar las capacidades de Agents Web: gestionar ficheros en un disco virtual (IndexedDB) con un agente IA, generar y ejecutar planes, y sincronizar con un repo de GitHub.','Show what Agents Web can do: manage files on a virtual disk (IndexedDB) with an AI agent, generate and run plans, and sync with a GitHub repo.')); await sleep(800);
+  user('/plan'); planCard([{title:T('Crear ficheros en el disco virtual','Create files on the virtual disk'),state:'done'},{title:T('Editar un fichero y mostrar el diff de cambios','Edit a file and show the change diff'),state:'active',note:T('Modificando bienvenida.md…','Editing welcome.md…')},{title:T('Sincronizar el disco con GitHub (Push)','Sync the disk with GitHub (Push)'),state:'pending'}]); await sleep(900);
+  user(T('Crea bienvenida.md y luego edítalo','Create welcome.md then edit it')); curPanel=null;
   const r1=addActionRow('write_file',{path:'bienvenida.md'}); await sleep(500); markDone(r1);
   const r2=addActionRow('read_file',{path:'bienvenida.md'}); await sleep(400); markDone(r2);
   const r3=addActionRow('write_file',{path:'bienvenida.md'}); await sleep(500); markDone(r3);
   await fsPut('bienvenida.md','# Agents Web\n\nDisco virtual con IA.\n'); refreshDisk();
   diffCard('bienvenida.md', diffLines('# Agents Web\n\nDisco virtual con IA.\n','# Agents Web\n\nDisco virtual con IA en el navegador.\n\n## Comandos\n- /plan, /cost, /init\n')); await sleep(900);
-  thinkingCard('El usuario quiere organizar el disco. Reviso los ficheros, propongo cambios y pido permiso antes de tocar nada.'); await sleep(800);
-  errorCard('Error en el comando','Un comando de ejemplo falló por una dependencia faltante.','Error: Cannot find module \'clsx\'\nRequire stack:\n- /src/components/Sidebar.jsx', ()=>{ tool('↑ Auto-corrigiendo… (demo)'); }); await sleep(800);
-  askPermit('ejecutar el comando','npm install clsx').then(()=>{}); await sleep(300);
-  askUser('¿Dónde guardamos el resultado?',[
-    {label:'Disco virtual',description:'Rápido y local en el navegador (IndexedDB).',recommended:true},
-    {label:'Repo GitHub (Push)',description:'Persistente y versionado. Necesita token.'},
-    {label:'Solo mostrarlo',description:'No guardar nada.'}]).then(()=>{}); await sleep(700);
-  user('Reparte el trabajo en varios agentes'); { const dc=delegationCard(['Listar ficheros del disco','Resumir su contenido','Proponer mejoras']); await sleep(700); dc.setStatus(0,'list_files…'); await sleep(500); dc.done(0); dc.setStatus(1,'read_file…'); await sleep(500); dc.done(1); await sleep(400); dc.done(2); } await sleep(500);
+  thinkingCard(T('El usuario quiere organizar el disco. Reviso los ficheros, propongo cambios y pido permiso antes de tocar nada.','The user wants to organize the disk. I review the files, propose changes and ask permission before touching anything.')); await sleep(800);
+  errorCard(T('Error en el comando','Command error'),T('Un comando de ejemplo falló por una dependencia faltante.','A sample command failed due to a missing dependency.'),'Error: Cannot find module \'clsx\'\nRequire stack:\n- /src/components/Sidebar.jsx', ()=>{ tool(T('↑ Auto-corrigiendo… (demo)','↑ Auto-fixing… (demo)')); }); await sleep(800);
+  askPermit(T('ejecutar el comando','run the command'),'npm install clsx').then(()=>{}); await sleep(300);
+  askUser(T('¿Dónde guardamos el resultado?','Where do we save the result?'),[
+    {label:T('Disco virtual','Virtual disk'),description:T('Rápido y local en el navegador (IndexedDB).','Fast and local in the browser (IndexedDB).'),recommended:true},
+    {label:T('Repo GitHub (Push)','GitHub repo (Push)'),description:T('Persistente y versionado. Necesita token.','Persistent and versioned. Needs a token.')},
+    {label:T('Solo mostrarlo','Just show it'),description:T('No guardar nada.','Do not save anything.')}]).then(()=>{}); await sleep(700);
+  user(T('Reparte el trabajo en varios agentes','Split the work across several agents')); { const dc=delegationCard([T('Listar ficheros del disco','List disk files'),T('Resumir su contenido','Summarize their content'),T('Proponer mejoras','Propose improvements')]); await sleep(700); dc.setStatus(0,'list_files…'); await sleep(500); dc.done(0); dc.setStatus(1,'read_file…'); await sleep(500); dc.done(1); await sleep(400); dc.done(2); } await sleep(500);
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
   user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
-  user('terminal: crea y lee un fichero');
+  user(T('terminal: crea y lee un fichero','terminal: create and read a file'));
   for(const sc of ['mkdir src','echo "hola mundo" > src/readme.txt','cat src/readme.txt','grep hola src/readme.txt | wc','ls -l src']){ const cwd=SHCWD; termLine(sc, await shRun(sc), cwd); await sleep(350); }
-  user('Busca en la web qué es Harbour'); curPanel=null; { const rw=addActionRow('web_search',{query:'qué es Harbour'}); await sleep(700); markDone(rw); } bot('🔎 Harbour es un compilador open-source del lenguaje xBase (Clipper), multiplataforma.'); await sleep(500);
+  user(T('Busca en la web qué es Harbour','Search the web for what Harbour is')); curPanel=null; { const rw=addActionRow('web_search',{query:'Harbour language'}); await sleep(700); markDone(rw); } bot(T('🔎 Harbour es un compilador open-source del lenguaje xBase (Clipper), multiplataforma.','🔎 Harbour is an open-source, cross-platform compiler for the xBase (Clipper) language.')); await sleep(500);
+  user(T('Ejecuta Python sobre el disco','Run Python over the disk')); curPanel=null; { const rp=addActionRow('python',{}); await sleep(700); markDone(rp); } termLine('python ‹code›', 'import os; print(len(os.listdir(".")), "ficheros")\n6 ficheros', SHCWD); await sleep(500);
   user('/clone'); await gitCard(); await sleep(300);
   user('/git'); await gitCard(); await sleep(400);
   user('/skill'); skillCard(await listSkills()); await sleep(400);
   user('/tool'); toolsCard(); await sleep(400);
   user('/loop'); loopCard({iter:3,max:15,cmds:8}); await sleep(400);
   user('/help'); helpCard(); await sleep(300);
-  doneLine('Esperando respuesta del usuario…');
-  tool('✓ Demo completada — goal · plan · acciones · diff · thinking · error · permit · ask_user · cost · compact · init · loop · help · done.');
+  doneLine(T('Esperando respuesta del usuario…','Waiting for the user…'));
+  tool(T('✓ Demo completada','✓ Demo finished')+' — goal · plan · acciones · diff · thinking · error · permit · ask_user · cost · compact · init · loop · help · done.');
   setWorking(false);
 }
 
@@ -695,6 +696,8 @@ function toggleThink(){ THINK=!THINK; try{localStorage.setItem('think',THINK?'1'
   tool('Razonamiento: '+(THINK?'ON (thinking mode '+MODEL+')':'OFF')); }
 function thinkingLive(){ const d=el('<div class="pl-4 border-l-2 border-purple-500 text-xs text-gray-400 italic py-1 max-w-[90%] whitespace-pre-wrap"></div>'); chat().appendChild(d); down(); return d; }
 const LANGS={es:'español',en:'English',fr:'français',de:'Deutsch',pt:'português',it:'italiano'};
+const LORD=['es','en','fr','de','pt','it'];
+function T(){ const a=arguments, i=Math.max(0,LORD.indexOf(curLang)); return a[i]||a[1]||a[0]; }   // pick by lang; fallback en, then es
 const LANGCC={es:'es',en:'gb',fr:'fr',de:'de',pt:'pt',it:'it'};   // flag country code
 let curLang=(()=>{ try{ return localStorage.getItem('lang')||'es'; }catch(e){ return 'es'; } })();
 function flagUrl(code){ return 'https://flagcdn.com/24x18/'+(LANGCC[code]||'es')+'.png'; }
@@ -803,7 +806,7 @@ async function slashCmd(v){
     case '/git': await gitCmd(arg); break;
     case '/skill': await skillCmd(arg); break;
     case '/tool': await toolCmd(arg); break;
-    case '/sh': { const cwd=SHCWD; const out=await shRun(arg); termLine(arg||'', out, cwd); break; }
+    case '/sh': case '/shell': case '/bash': { const cwd=SHCWD; const out=await shRun(arg); termLine(arg||'', out, cwd); break; }
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
     default: tool('Comando desconocido: '+cmd+'. Prueba /help.');
   }
