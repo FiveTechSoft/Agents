@@ -325,7 +325,8 @@ function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; }
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
   convo.push({role:'user',content:text}); curPanel=null;
-  const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. IMPORTANTE: si necesitas CUALQUIER decision o dato del usuario, DEBES llamar a la tool ask_user (con 2-4 opciones cuando sea posible) y esperar; NUNCA hagas preguntas en texto. Responde breve.'},{role:'user',content:text}];
+  // include the running conversation so replies keep context
+  const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'}].concat(convo.map(m=>({role:m.role,content:m.content})));
   let wait=bot('<span class="text-gray-400">pensando…</span>');
   agentAbort=new AbortController();
   for(let step=0; step<8; step++){
@@ -350,12 +351,10 @@ async function agent(text){
     convo.push({role:'assistant',content:mo.content||''});
     const txt=mo.content||'';
     wait.innerHTML=window.marked?marked.parse(txt):txt;
-    // If the model asked the user a question in plain text (instead of calling
-    // ask_user), pause: show an input and feed the answer back into the turn.
+    // If the model asked an open question, just stop the turn: the user types the
+    // reply in the prompt box (no forced popup). Nudge with a hint.
     if(/[?¿]/.test(txt)){
-      const ans=await askUser('Tu respuesta:');
-      msgs.push({role:'user',content:ans}); convo.push({role:'user',content:ans});
-      wait=bot('<span class="text-gray-400">pensando…</span>'); continue;
+      const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus();
     }
     return;
   }
