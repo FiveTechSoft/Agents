@@ -186,7 +186,7 @@ async function shExpandSubst(line){ let g=0; let m;
     if(m=line.match(/`([^`]*)`/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
     break; }
   return line; }
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 function parseMake(text){ const vars={}, targets={}; let cur=null;
   (text||'').replace(/\r/g,'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
@@ -309,10 +309,14 @@ async function shOne(cmd, stdin){
     case 'git': { const sub=(a0[0]||'').replace(/^--/,''); if(sub==='version'){ return 'git version 1.27.1 (isomorphic-git, WASM-free, en navegador)'; }
       if(a0[0]==='clone'){ await gitClone(a0[1]||GIT_REPO||'FiveTechSoft/Agents'); return ''; } await gitCmd(rest); return ''; }
     case 'apt': case 'apt-get': { const sub=(a0[0]||'').toLowerCase();
-      if(sub==='install'||sub==='-y'||sub==='install'){ return T('Instalado (simulado): ','Installed (simulated): ')+a0.slice(1).filter(x=>x!=='-y').join(' ')+'\n'+T('Nota: clang, python3, make y curl ya están disponibles. No hay repos reales en el navegador.','Note: clang, python3, make and curl are already available. No real repos in the browser.'); }
-      if(sub==='update'||sub==='upgrade') return T('Listas de paquetes leídas. Hecho (simulado).','Reading package lists... Done (simulated).');
-      if(sub==='list') return 'clang  python3  make  curl  wget  git  (built-in WASM/JS)';
-      SH_EXIT=1; return T('uso: apt install <paquete>','usage: apt install <package>'); }
+      if(sub==='install'){ const pkgs=a0.slice(1).filter(x=>x!=='-y'); if(!pkgs.length){SH_EXIT=1;return T('uso: apt install <paquete>  (Wasmer registry, p.ej. cowsay, quickjs, o usuario/paquete)','usage: apt install <package>  (Wasmer registry, e.g. cowsay, quickjs, or user/package)');}
+        const out=[]; for(const p of pkgs){ out.push('Get: '+p+' (Wasmer registry)…'); try{ const ref=await aptInstall(p); out.push('✓ '+p+' '+T('instalado','installed')+' ['+ref+']'); }catch(e){ SH_EXIT=1; out.push('✗ '+p+': '+T('no encontrado en el registry','not found in registry')+' ('+e+')'); } } return out.join('\n'); }
+      if(sub==='update'||sub==='upgrade') return T('Listas leídas. Hecho.','Reading package lists... Done.');
+      if(sub==='list') { const k=Object.keys(INSTPKGS); return 'built-in: clang python3 make curl wget git'+(k.length?'\ninstalados: '+k.join(' '):''); }
+      if(sub==='remove'){ a0.slice(1).forEach(p=>{ delete INSTPKGS[p]; }); return T('eliminado','removed'); }
+      SH_EXIT=1; return T('uso: apt install|list|remove <paquete>','usage: apt install|list|remove <package>'); }
+    case 'pip': case 'pip3': { const sub=(a0[0]||'').toLowerCase(); if(sub!=='install'){SH_EXIT=1;return T('uso: pip install <paquete>','usage: pip install <package>');}
+      const pkgs=a0.slice(1); try{ const py=await ensurePy(); await py.loadPackage('micropip'); const mp=py.pyimport('micropip'); for(const p of pkgs){ await mp.install(p); } return '✓ '+T('instalado','installed')+': '+pkgs.join(' ')+' ('+T('úsalo desde python','use it from python')+')'; }catch(e){ SH_EXIT=1; return 'pip: '+e; } }
     case 'sort': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||''; let L=txt.split('\n'); if(L.length&&L[L.length-1]==='')L.pop(); L.sort((a,b)=> flags.includes('n')?((parseFloat(a)||0)-(parseFloat(b)||0)):a.localeCompare(b)); if(flags.includes('u'))L=L.filter((v,i)=>L.indexOf(v)===i); if(flags.includes('r'))L.reverse(); return L.join('\n'); }
     case 'uniq': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } const L=(txt||'').split('\n'); const out=[]; let prev=null,cnt=0; const flush=()=>{ if(prev!==null) out.push(flags.includes('c')?(String(cnt).padStart(7)+' '+prev):prev); }; for(const l of L){ if(l===prev)cnt++; else { flush(); prev=l; cnt=1; } } flush(); return out.join('\n'); }
     case 'tac': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } const L=(txt||'').split('\n'); if(L.length&&L[L.length-1]==='')L.pop(); return L.reverse().join('\n'); }
@@ -330,7 +334,7 @@ async function shOne(cmd, stdin){
       const pm=prog.match(/\{\s*print\s+([^}]*)\}/); return txt.split('\n').filter(l=>l!=='').map(line=>{ const F=[line].concat(FS?line.split(FS):line.trim().split(/\s+/)); if(!pm) return line; return pm[1].split(',').map(t=>{ t=t.trim(); const f2=t.match(/^\$(\d+)$/); if(f2)return F[parseInt(f2[1])]||''; if(t==='NF')return String(F.length-1); return t.replace(/^"|"$/g,''); }).join(' '); }).join('\n'); }
     case 'basename': { let p=(a0[0]||'').replace(/\/+$/,''); let b=p.split('/').pop()||p; if(a0[1]&&b.endsWith(a0[1]))b=b.slice(0,-a0[1].length); return b; }
     case 'dirname': { let p=(a0[0]||'').replace(/\/+$/,''); const i=p.lastIndexOf('/'); return i<0?'.':(i===0?'/':p.slice(0,i)); }
-    default: SH_EXIT=1; return name+': '+T('orden no encontrada','command not found');
+    default: if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } } SH_EXIT=1; return name+': '+T('orden no encontrada','command not found');
   }
 }
 async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>)
@@ -408,11 +412,18 @@ async function runPython(code){
    module and runs it (WASI). Needs cross-origin isolation -> coi-sw.
    ===================================================================== */
 let wasmerMod=null, clangPkg=null;
-async function ensureClang(){ if(clangPkg) return clangPkg;
+const INSTPKGS={};   // apt-installed Wasmer packages: name -> runner(argv,stdin)->stdout
+const APT_ALIAS={ cowsay:'syrusakbary/cowsay', python:'python/python', python3:'python/python', clang:'clang/clang', cpython:'python/python', quickjs:'saghul/quickjs', qjs:'saghul/quickjs' };
+async function ensureWasmer(){ if(wasmerMod) return wasmerMod;
   if(!self.crossOriginIsolated) throw new Error('sin cross-origin isolation (recarga la página una vez para activar el service worker)');
-  tool('⚙️ Cargando clang (Wasmer SDK, primera vez, descarga grande)…');
-  wasmerMod=await import('https://unpkg.com/@wasmer/sdk@latest/dist/index.mjs');
-  await wasmerMod.init(); clangPkg=await wasmerMod.Wasmer.fromRegistry('clang/clang'); return clangPkg; }
+  tool('⚙️ Cargando Wasmer SDK (primera vez)…');
+  wasmerMod=await import('https://unpkg.com/@wasmer/sdk@latest/dist/index.mjs'); await wasmerMod.init(); return wasmerMod; }
+async function ensureClang(){ if(clangPkg) return clangPkg; await ensureWasmer(); tool('⚙️ clang…'); clangPkg=await wasmerMod.Wasmer.fromRegistry('clang/clang'); return clangPkg; }
+async function aptInstall(name){ const ref=APT_ALIAS[name]||name; const w=await ensureWasmer();
+  const pkg=await w.Wasmer.fromRegistry(ref);
+  INSTPKGS[name]=async(argv)=>{ const project=new w.Directory(); const all=await fsList(); for(const f of all){ try{ await project.writeFile(f.path.split('/').pop(), f.content); }catch(e){} }
+    const ins=await pkg.entrypoint.run({args:argv, mount:{'/project':project}}); const o=await ins.wait(); return ((o.stdout||'')+(o.stderr?('\n'+o.stderr):'')).replace(/\n$/,''); };
+  if(!SHELL_CMDS.has(name)) SHELL_CMDS.add(name); return ref; }
 // Full-ish clang invocation: multiple sources, -o, -c, flags, linking. Mounts the
 // disk's .c/.h/.cpp so #include resolves; runs the resulting wasm unless -c.
 async function ccExec(argv, inlineCode){
