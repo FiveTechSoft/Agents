@@ -43,6 +43,9 @@ desktop FiveWin app and the `cc.exe` console agent.
 - 🧵 **Multiple agents in parallel** — each agent runs on its **own Harbour OS
   thread** (Harbour MT VM). Open as many as you need with the `+` tab; they work
   concurrently and independently.
+- 🤝 **Synchronized orchestration** — the `dispatch_team` tool fans a task into
+  2–4 parallel sub-agents (each in its own tab) and **joins** them
+  (`hb_threadJoin`) before returning the combined result.
 - 🎨 **Rich chat UI** — Markdown rendering (tables, code, lists), syntax-aware
   bubbles, and **colored diffs** (green `+` / red `−`) for every write/edit.
 - 🔐 **Permission gate** — with *Auto-approve* off, every mutating tool
@@ -91,6 +94,51 @@ The LLM HTTP is injected into ccharbour through its pluggable
 request rides Android's own TLS stack via a tiny Java method.
 
 ---
+
+## How the app was built
+
+Agents was built by **reusing the desktop FiveWin agent and swapping only the two
+platform-specific layers** — the UI host and the HTTP transport — so the entire
+ccharbour brain travels to Android untouched.
+
+1. **Start from the engine, not the UI.** The desktop `samples/AgenticAI` already
+   wraps the ccharbour loop (`CC_Client` / `CC_AgentRun`) behind an injectable
+   transport codeblock and a tool registry. Those same `.prg` modules compile for
+   Android — only the glue changes.
+
+2. **Cross-compile Harbour for arm64.** The app `.prg` + the ccharbour core are
+   compiled to C by the host `harbour.exe`, then the C is cross-compiled with the
+   Android NDK clang and linked against prebuilt `libharbour` static libs. The app
+   links the **multi-thread VM** (`libhbvmmt`) so several agents can run at once.
+
+3. **Host the same HTML in an Android WebView.** Instead of `TWebView2` (Edge),
+   the chat panel lives in the system `WebView`. `evaluateJavascript` replaces
+   `oWeb:Eval`, and an `@JavascriptInterface` replaces `SendToFWH` — a one-to-one
+   mapping, so the HTML/JS chat panel (Tailwind + marked.js) is essentially shared.
+
+4. **Bridge JS ⇄ Harbour over JNI.** `android_webview.c` exposes `AWV_Eval`,
+   `AWV_SetHtml`, `AWV_WaitEvent` and `AWV_Http` to Harbour, and routes JS calls
+   into per-agent event queues (pthread mutex + condvar) that the Harbour threads
+   block on. No callback re-entrancy: a turn never runs inside a JS→native call.
+
+5. **Borrow Android's TLS for the LLM call.** Rather than cross-compiling
+   libcurl + OpenSSL, the transport codeblock calls a Java `HttpsURLConnection`
+   through JNI. Smaller binary, native certificate handling.
+
+6. **Make the filesystem writable.** Android's process CWD is `/` (read-only), so
+   on startup the JNI layer `chdir`s into the app's private `getFilesDir()` — now
+   `read`/`write`/`edit`/`memory` work with relative paths.
+
+7. **Multiple agents, synchronized.** Each agent is an independent Harbour thread
+   (`hb_threadStart`) with its own client, history and tab. The `dispatch_team`
+   tool lets the model fan a task into 2–4 parallel sub-agents and **join**
+   (`hb_threadJoin`) them before returning the combined answer.
+
+The whole thing was developed and verified **on a physical device**, iterating
+through the real failure modes — an `hb_threadStart` no-op on the single-thread
+VM, a `const` symbol table crashing `hb_vmProcessSymbols`, `TEXT INTO` eating
+backslashes in the embedded JS, codepage mojibake through `evaluateJavascript` —
+each captured in *Engineering notes* below.
 
 ## Build from source
 

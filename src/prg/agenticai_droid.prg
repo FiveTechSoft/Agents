@@ -219,8 +219,9 @@ RETURN NIL
 // ---------------------------------------------------------------------------
 // Tools + permission gate (per agent).
 // ---------------------------------------------------------------------------
-STATIC FUNCTION BuildTools()
+STATIC FUNCTION BuildTools( lTeam )
    LOCAL oReg := {=>}, bRaw
+   IF lTeam == NIL ; lTeam := .T. ; ENDIF   // workers build without dispatch (no recursion)
    CCTOOLS_Register( oReg, CCTool_Read() )
    CCTOOLS_Register( oReg, CCTool_Write() )
    CCTOOLS_Register( oReg, CCTool_Edit() )
@@ -231,10 +232,114 @@ STATIC FUNCTION BuildTools()
    CCTOOLS_Register( oReg, CCTool_WebFetch() )
    CCTOOLS_Register( oReg, CCTool_Memory( "memory_" + LTrim( Str( t_nId ) ) + ".md" ) )
    CCTOOLS_Register( oReg, GuiAskUser() )
+   IF lTeam
+      CCTOOLS_Register( oReg, TeamTool() )   // dispatch_team (coordinator only)
+   ENDIF
    t_aSchemas := CCTOOLS_Schemas( oReg )
    bRaw := CCTOOLS_Executor( oReg )
    t_bExec := {| cName, cArgs | GateTool( bRaw, cName, cArgs ) }
 RETURN NIL
+
+// ---------------------------------------------------------------------------
+// dispatch_team: run independent subtasks on parallel agent threads and
+// SYNCHRONIZE (join) before returning the combined result. Each subtask gets
+// its own visible agent tab streaming live.
+// ---------------------------------------------------------------------------
+STATIC FUNCTION TeamTool()
+   RETURN { "name" => "dispatch_team", ;
+            "description" => "Run 2 to 4 INDEPENDENT subtasks in parallel, each " + ;
+               "on its own agent, then wait for all and return the combined " + ;
+               "results. Use to split a task into parts that do not depend on " + ;
+               "each other. Each item is a self-contained instruction.", ;
+            "parameters" => { "type" => "object", ;
+               "properties" => { ;
+                  "tasks" => { "type" => "array", "items" => { "type" => "string" }, ;
+                               "description" => "2 to 4 independent subtasks" } }, ;
+               "required" => { "tasks" } }, ;
+            "handler" => {| hArgs | TeamRun( hArgs ) } }
+
+STATIC FUNCTION TeamRun( hArgs )
+   LOCAL aTasks, aTh := {}, aRes, oMtx, i, nId, nBase, cOut
+
+   aTasks := hArgs[ "tasks" ]
+   IF ValType( aTasks ) != "A" .OR. Len( aTasks ) < 2
+      RETURN "Error: 'tasks' must be an array of at least 2 subtasks."
+   ENDIF
+   IF Len( aTasks ) > 4
+      aTasks := { aTasks[ 1 ], aTasks[ 2 ], aTasks[ 3 ], aTasks[ 4 ] }
+   ENDIF
+
+   aRes := Array( Len( aTasks ) )
+   oMtx := hb_mutexCreate()
+   WCall( "addNote", "Dispatching " + LTrim( Str( Len( aTasks ) ) ) + ;
+          " sub-agents in parallel, then syncing (join)..." )
+
+   nBase := Len( s_aAgents )
+   FOR i := 1 TO Len( aTasks )
+      nId := nBase + i
+      AAdd( s_aAgents, { "id" => nId } )
+      AWV_Eval( "newAgentTab(" + LTrim( Str( nId ) ) + ")" )
+      AAdd( aTh, hb_threadStart( {| n, t, id | Worker( n, t, id, aRes, oMtx ) }, ;
+                                 i, aTasks[ i ], nId ) )
+   NEXT
+
+   // SYNCHRONIZE: block until every sub-agent thread has finished.
+   AEval( aTh, {| h | hb_threadJoin( h ) } )
+
+   cOut := "All " + LTrim( Str( Len( aTasks ) ) ) + " sub-agents finished. Combined:" + Chr( 10 )
+   FOR i := 1 TO Len( aRes )
+      cOut += Chr( 10 ) + LTrim( Str( i ) ) + ") " + hb_CStr( aRes[ i ] )
+   NEXT
+RETURN cOut
+
+// One sub-agent thread: runs its subtask in its own visible tab, stores result.
+FUNCTION Worker( nIdx, cTask, nId, aRes, oMtx )
+   LOCAL oCli, aMsg, hRes, cAns
+   t_nId    := nId          // THREAD STATIC -> WCall/OnEvent target this tab
+   t_lYolo  := .T.
+   t_lStop  := .F.
+   t_nTurn  := 1
+
+   WCall( "addUser", cTask )
+   WCall( "startTurn", "1", Time() )
+   WCall( "setRunning", "1" )
+   WCall( "setStatus", "Working...", "busy" )
+
+   oCli := CC_Client( { "model" => "deepseek-chat", "timeout" => 120, ;
+                        "api_key" => ReadKeyFile() } )
+   aMsg := { { "role" => "system", "content" => "You are a sub-agent. Do exactly " + ;
+              "this one subtask and answer briefly. Working dir: " + AWV_FilesDir() + "." }, ;
+             { "role" => "user", "content" => cTask } }
+   BuildTools( .F. )        // no dispatch_team in workers
+
+   hRes := CC_AgentRun( oCli, aMsg, { "model" => "deepseek-chat", ;
+              "tools" => t_aSchemas, "tool_executor" => t_bExec, ;
+              "transport" => {| q, b | DroidTransport( q, b ) }, ;
+              "max_iterations" => 6 }, {| hEv | OnEvent( hEv ) } )
+
+   WCall( "finalizeTurn" )
+   WCall( "setRunning", "0" )
+   WCall( "setStatus", "Done.", "idle" )
+
+   cAns := LastAssistant( hRes )
+   hb_mutexLock( oMtx )
+   aRes[ nIdx ] := Left( hb_CStr( cTask ), 50 ) + " => " + cAns
+   hb_mutexUnlock( oMtx )
+RETURN NIL
+
+STATIC FUNCTION LastAssistant( hRes )
+   LOCAL aMsgs, i, m
+   IF ValType( hRes ) != "H" .OR. !hRes[ "success" ]
+      RETURN "(error)"
+   ENDIF
+   aMsgs := hRes[ "messages" ]
+   FOR i := Len( aMsgs ) TO 1 STEP -1
+      m := aMsgs[ i ]
+      IF m[ "role" ] == "assistant" .AND. !Empty( hb_HGetDef( m, "content", "" ) )
+         RETURN Left( hb_CStr( m[ "content" ] ), 120 )
+      ENDIF
+   NEXT
+RETURN "(no answer)"
 
 STATIC FUNCTION GateTool( bRaw, cName, cArgs )
    IF ( cName == "shell" .OR. cName == "write" .OR. cName == "edit" ) .AND. !t_lYolo
@@ -326,7 +431,10 @@ STATIC FUNCTION SystemPrompt()
    RETURN "You are Agents, a coding agent running on Android. Be concise. " + ;
           "Your writable working directory is " + AWV_FilesDir() + " (use relative " + ;
           "paths there for read/write/edit/memory; the rest of the filesystem " + ;
-          "is mostly read-only on Android)."
+          "is mostly read-only on Android). When a request naturally splits into " + ;
+          "2-4 INDEPENDENT parts, call the dispatch_team tool with the list of " + ;
+          "subtasks - they run in parallel on separate agents and are joined " + ;
+          "(synchronized) before you get the combined result."
 
 // Reads the LLM API key from a local file on the device, if present. Lets the
 // app pick up the key without an env var. /key in chat still overrides at runtime.
@@ -406,8 +514,8 @@ STATIC FUNCTION ChatHtml()
   #panels { background-color:#0b141a;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96'%3E%3Cg opacity='0.5'%3E%3Ccircle cx='48' cy='48' r='22' fill='%23FFCC4D'/%3E%3Crect x='27' y='39' width='42' height='5' fill='%23292F33'/%3E%3Cellipse cx='38' cy='48' rx='9' ry='7' fill='%23292F33'/%3E%3Cellipse cx='58' cy='48' rx='9' ry='7' fill='%23292F33'/%3E%3C/g%3E%3C/svg%3E");
     background-repeat:repeat; }
-  .tab { padding:6px 14px; white-space:nowrap; border-top-left-radius:9px; border-top-right-radius:9px;
-         font-size:.9rem; margin-bottom:-1px; cursor:pointer; }
+  .tab { padding:4px 10px; white-space:nowrap; border-top-left-radius:8px; border-top-right-radius:8px;
+         font-size:.72rem; margin-bottom:-1px; cursor:pointer; }
   .tab-on  { background:#0b141a; color:#fff; border:1px solid #374151; border-bottom:1px solid #0b141a; font-weight:600; }
   .tab-off { background:#273244; color:#9ca3af; border:1px solid transparent; }
   .fbtn { width:30px; height:30px; border-radius:8px; background:#273244; color:#cbd5e1; font-weight:700; }
@@ -568,6 +676,13 @@ STATIC FUNCTION ChatHtml()
     // agent tabs (added later, scrolling) never push it out of place.
     const kebab=el('<button class="fbtn" style="position:fixed;top:8px;right:8px;z-index:60;background:transparent;font-size:22px;line-height:1">⋮</button>');
     const menu=el('<div id="cfgmenu" class="rounded-md shadow-lg border border-gray-700 bg-gray-800 overflow-hidden" style="display:none;position:fixed;top:46px;right:8px;width:200px;z-index:60"></div>');
+    let yoloOn=true;
+    const yoloItem=document.createElement('button');
+    yoloItem.className='block w-full text-left px-3 py-2 hover:bg-gray-700 text-gray-200 text-sm';
+    function updYolo(){ yoloItem.textContent=(yoloOn?'☑ ':'☐ ')+'Auto-aprobar (shell/write/edit)'; }
+    updYolo();
+    yoloItem.onclick=function(ev){ ev.stopPropagation(); yoloOn=!yoloOn; updYolo(); send(cur,'yolo',yoloOn?'1':'0'); };
+    menu.appendChild(yoloItem);
     menu.appendChild(mi('Texto mas grande  (A+)', function(){ bumpFont(1); }));
     menu.appendChild(mi('Texto mas pequeno  (A-)', function(){ bumpFont(-1); }));
     menu.appendChild(mi('Nuevo agente', function(){ send(0,'newagent',''); }));
