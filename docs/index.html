@@ -308,13 +308,14 @@ async function shOne(cmd, stdin){
       await runT(tgt); return out.join('\n'); }
     case 'git': { const sub=(a0[0]||'').replace(/^--/,''); if(sub==='version'){ return 'git version 1.27.1 (isomorphic-git, WASM-free, en navegador)'; }
       if(a0[0]==='clone'){ await gitClone(a0[1]||GIT_REPO||'FiveTechSoft/Agents'); return ''; } await gitCmd(rest); return ''; }
-    case 'apt': case 'apt-get': { const sub=(a0[0]||'').toLowerCase();
-      if(sub==='install'){ const pkgs=a0.slice(1).filter(x=>x!=='-y'); if(!pkgs.length){SH_EXIT=1;return T('uso: apt install <paquete>  (Wasmer registry, p.ej. cowsay, quickjs, o usuario/paquete)','usage: apt install <package>  (Wasmer registry, e.g. cowsay, quickjs, or user/package)');}
-        const out=[]; for(const p of pkgs){ out.push('Get: '+p+' (Wasmer registry)…'); try{ const ref=await aptInstall(p); out.push('✓ '+p+' '+T('instalado','installed')+' ['+ref+']'); }catch(e){ SH_EXIT=1; out.push('✗ '+p+': '+T('no encontrado en el registry','not found in registry')+' ('+e+')'); } } return out.join('\n'); }
+    case 'apt': case 'apt-get': { const sub=(a0[0]||'').toLowerCase(); const avail=Object.keys(APT_ALIAS).filter(k=>k.length>2);
+      if(sub==='install'){ const pkgs=a0.slice(1).filter(x=>x!=='-y'); if(!pkgs.length){SH_EXIT=1;return T('uso: apt install <paquete>. Disponibles: ','usage: apt install <package>. Available: ')+avail.join(' ');}
+        const out=[]; for(const p of pkgs){ out.push('Get: '+p+' (Wasmer registry)…'); try{ const ref=await aptInstall(p); out.push('✓ '+p+' '+T('instalado','installed')+' ['+ref+']'); }catch(e){ SH_EXIT=1; out.push('✗ '+p+': '+T('no está en el registry Wasmer.','not in the Wasmer registry.')+' '+T('Disponibles: ','Available: ')+avail.join(' ')); } } return out.join('\n'); }
       if(sub==='update'||sub==='upgrade') return T('Listas leídas. Hecho.','Reading package lists... Done.');
-      if(sub==='list') { const k=Object.keys(INSTPKGS); return 'built-in: clang python3 make curl wget git'+(k.length?'\ninstalados: '+k.join(' '):''); }
+      if(sub==='search'){ const q=(a0[1]||'').toLowerCase(); return avail.filter(k=>k.indexOf(q)>=0).map(k=>k+' -> '+APT_ALIAS[k]).join('\n')||T('(sin coincidencias)','(no matches)'); }
+      if(sub==='list'){ const k=Object.keys(INSTPKGS); if(a0[1]==='--available'||a0[1]==='-a') return T('Disponibles (Wasmer): ','Available (Wasmer): ')+avail.join(' '); return 'built-in: clang python3 make curl wget git'+(k.length?'\n'+T('instalados','installed')+': '+k.join(' '):''); }
       if(sub==='remove'){ a0.slice(1).forEach(p=>{ delete INSTPKGS[p]; }); return T('eliminado','removed'); }
-      SH_EXIT=1; return T('uso: apt install|list|remove <paquete>','usage: apt install|list|remove <package>'); }
+      SH_EXIT=1; return T('uso: apt install|search|list [--available]|remove <paquete>','usage: apt install|search|list [--available]|remove <package>'); }
     case 'pip': case 'pip3': { const sub=(a0[0]||'').toLowerCase(); if(sub!=='install'){SH_EXIT=1;return T('uso: pip install <paquete>','usage: pip install <package>');}
       const pkgs=a0.slice(1); try{ const py=await ensurePy(); await py.loadPackage('micropip'); const mp=py.pyimport('micropip'); for(const p of pkgs){ await mp.install(p); } return '✓ '+T('instalado','installed')+': '+pkgs.join(' ')+' ('+T('úsalo desde python','use it from python')+')'; }catch(e){ SH_EXIT=1; return 'pip: '+e; } }
     case 'sort': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||''; let L=txt.split('\n'); if(L.length&&L[L.length-1]==='')L.pop(); L.sort((a,b)=> flags.includes('n')?((parseFloat(a)||0)-(parseFloat(b)||0)):a.localeCompare(b)); if(flags.includes('u'))L=L.filter((v,i)=>L.indexOf(v)===i); if(flags.includes('r'))L.reverse(); return L.join('\n'); }
@@ -413,7 +414,10 @@ async function runPython(code){
    ===================================================================== */
 let wasmerMod=null, clangPkg=null;
 const INSTPKGS={};   // apt-installed Wasmer packages: name -> runner(argv,stdin)->stdout
-const APT_ALIAS={ cowsay:'syrusakbary/cowsay', python:'python/python', python3:'python/python', clang:'clang/clang', cpython:'python/python', quickjs:'saghul/quickjs', qjs:'saghul/quickjs' };
+// curated catalog of packages known to exist on the Wasmer registry (wasmer.io)
+const APT_ALIAS={ cowsay:'syrusakbary/cowsay', python:'python/python', python3:'python/python', cpython:'python/python',
+  clang:'clang/clang', quickjs:'saghul/quickjs', qjs:'saghul/quickjs', bash:'sharrattj/bash', sh:'sharrattj/bash',
+  coreutils:'sharrattj/coreutils', wasmer:'wasmer/wasmer', winterjs:'wasmer/winterjs' };
 async function ensureWasmer(){ if(wasmerMod) return wasmerMod;
   if(!self.crossOriginIsolated) throw new Error('sin cross-origin isolation (recarga la página una vez para activar el service worker)');
   tool('⚙️ Cargando Wasmer SDK (primera vez)…');
