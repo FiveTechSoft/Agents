@@ -176,7 +176,14 @@ async function newFile(){ let p=document.getElementById('newpath').value.trim();
    ===================================================================== */
 let SHCWD='';   // disk-relative cwd ('' = root)
 let SH_EXIT=0;  // last command exit code (for && ||)
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get']);
+function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
+function parseMake(text){ const vars={}, targets={}; let cur=null;
+  (text||'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
+    if(/^\t/.test(raw)){ if(cur) targets[cur].recipe.push(mkExpand(raw.replace(/^\t/,''),vars)); return; }
+    const vm=raw.match(/^(\w+)\s*[:?]?=\s*(.*)$/); if(vm && raw.indexOf(':')<0 || (vm && raw.indexOf(':=')>=0)){ vars[vm[1]]=mkExpand(vm[2],vars); return; }
+    const tm=raw.match(/^([^:=]+):(.*)$/); if(tm){ cur=tm[1].trim(); targets[cur]={deps:tm[2].trim().split(/\s+/).filter(Boolean),recipe:[]}; } });
+  return targets; }
 function shNorm(p){ const out=[]; (p||'').split('/').forEach(s=>{ if(s===''||s==='.')return; if(s==='..')out.pop(); else out.push(s); }); return out.join('/'); }
 function shResolve(arg){ if(!arg) return shNorm(SHCWD); return shNorm(arg.startsWith('/')?arg:(SHCWD+'/'+arg)); }
 async function shList(dir){ const items=await fsList(); const pre=dir?dir+'/':''; const dirs=new Set(), files=[];
@@ -195,7 +202,7 @@ async function shOne(cmd, stdin){
     case 'env': return 'CWD=/'+shNorm(SHCWD)+'\nMODEL='+MODEL+'\nLANG='+curLang;
     case 'clear': clearChat(); return '';
     case 'which': { const found=a0.filter(x=>SHELL_CMDS.has(x)); SH_EXIT=(a0.length&&found.length===a0.length)?0:1; return found.map(x=>'/usr/bin/'+x).join('\n'); }
-    case 'help': return 'ls cat echo pwd cd mkdir touch rm[-r] mv cp grep head tail wc find which date whoami env cc python | > >> && || ;';
+    case 'help': return 'ls cat echo pwd cd mkdir touch rm[-r] mv cp grep head tail wc find which date whoami env cc python curl wget make apt | > >> && || ;';
     case 'ls': { const d=shResolve(a0[0]||''); const {dirs,files}=await shList(d);
       if(flags.includes('l')){ const fl=[]; for(const x of files){ const f=await fsGet((d?d+'/':'')+x); fl.push('-rw-r--r-- '+String((f&&f.content||'').length).padStart(6)+' '+x); } return dirs.map(x=>'drwxr-xr-x      - '+x+'/').concat(fl).join('\n'); }
       const all=dirs.map(x=>x+'/').concat(files); return all.length?all.join('  '):''; }
@@ -213,6 +220,19 @@ async function shOne(cmd, stdin){
     case 'write': { const fn=a0[0]||'untitled'; const i=rest.indexOf(fn); const c=rest.slice(i+fn.length).trim(); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
     case 'cc': case 'clang': case 'gcc': { if(!a0[0]){SH_EXIT=1;return T('uso: cc <fichero.c>','usage: cc <file.c>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'cc: '+T('no existe ','no such file ')+a0[0];} return await ccRun(f.content); }
     case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
+    case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?url.split('/').pop()||'index.html':null);
+      if(!url){SH_EXIT=1;return name+': '+T('falta URL','missing URL');}
+      let body=''; try{ const r=await fetch(url); body=await r.text(); }catch(e){ try{ const r=await fetch('https://r.jina.ai/'+url); body=await r.text(); }catch(e2){ SH_EXIT=1; return name+': '+e2; } }
+      if(outf){ await fsPut(shResolve(outf), body); refreshDisk(); return name==='wget'?('guardado '+outf+' ('+body.length+' B)'):''; } return body.slice(0,6000); }
+    case 'make': { const mk=await fsGet(shResolve('Makefile'))||await fsGet(shResolve('makefile')); if(!mk){SH_EXIT=1;return 'make: '+T('no hay Makefile','no Makefile');}
+      const targets=parseMake(mk.content); const tgt=a0[0]||Object.keys(targets)[0]; if(!targets[tgt]){SH_EXIT=1;return 'make: *** No rule to make target \''+tgt+'\'.';}
+      const out=[], done=new Set(); const runT=async(t)=>{ if(done.has(t))return; done.add(t); const T2=targets[t]; if(!T2)return; for(const d of T2.deps){ if(targets[d]) await runT(d); } for(const line of T2.recipe){ out.push((line.startsWith('@')?'':line)); const o=await shRun(line.replace(/^@/,'')); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
+      await runT(tgt); return out.join('\n'); }
+    case 'apt': case 'apt-get': { const sub=(a0[0]||'').toLowerCase();
+      if(sub==='install'||sub==='-y'||sub==='install'){ return T('Instalado (simulado): ','Installed (simulated): ')+a0.slice(1).filter(x=>x!=='-y').join(' ')+'\n'+T('Nota: clang, python3, make y curl ya están disponibles. No hay repos reales en el navegador.','Note: clang, python3, make and curl are already available. No real repos in the browser.'); }
+      if(sub==='update'||sub==='upgrade') return T('Listas de paquetes leídas. Hecho (simulado).','Reading package lists... Done (simulated).');
+      if(sub==='list') return 'clang  python3  make  curl  wget  git  (built-in WASM/JS)';
+      SH_EXIT=1; return T('uso: apt install <paquete>','usage: apt install <package>'); }
     default: SH_EXIT=1; return name+': '+T('orden no encontrada','command not found');
   }
 }
