@@ -50,6 +50,7 @@
         😎 Agents — Web
       </span>
       <div class="flex items-center gap-1.5 text-xs">
+        <button onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
         <button onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
         <button onclick="clearChat()" title="Limpiar" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
         <button onclick="toggleHelp()" class="text-gray-400 hover:text-gray-200 px-1">/help</button>
@@ -58,7 +59,7 @@
     <div id="chat" class="flex-1 overflow-y-auto scroll p-4 space-y-4"></div>
     <div class="p-3 border-t border-gray-800 flex gap-2">
       <input id="prompt" placeholder="comando: ls · write a.txt Hola · read a.txt · del a.txt · (o pregunta al LLM)"
-        onkeydown="if(event.key==='Enter')run()"
+        onkeydown="promptKey(event)"
         class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500">
       <button onclick="run()" class="bg-blue-600 hover:bg-blue-500 rounded-lg px-4">Enviar</button>
     </div>
@@ -166,8 +167,38 @@ const HINTS=['Prueba /plan para generar un plan…','Pide: "crea notas.txt con�
 let hintIdx=0;
 function nextHint(){ hintIdx=(hintIdx+1)%HINTS.length; const p=document.getElementById('prompt'); const t=document.createElement('textarea'); t.innerHTML=HINTS[hintIdx]; p.placeholder=t.value; }
 
+/* prompt history: Up/Down navigate previous/next used prompts */
+const hist=[]; let histI=0;
+function promptKey(e){ const i=e.target;
+  if(e.key==='Enter'){ run(); return; }
+  if(e.key==='ArrowUp'){ if(hist.length && histI>0){ histI--; i.value=hist[histI]; e.preventDefault(); setTimeout(()=>i.setSelectionRange(i.value.length,i.value.length),0); } }
+  else if(e.key==='ArrowDown'){ if(histI<hist.length-1){ histI++; i.value=hist[histI]; } else { histI=hist.length; i.value=''; } e.preventDefault(); }
+}
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function runDemo(){
+  clearChat(); tool('▶ Demo: probando las cards automáticamente…'); await sleep(400);
+  user('/goal Migrar la autenticación de JWT a sesiones con cookies'); goalCard('Migrar todo el sistema de autenticacion de JWT a sesiones basadas en cookies y asegurar que la cobertura de pruebas no baje del 90%.'); await sleep(800);
+  user('/plan'); planCard([{title:'Analizar dependencias actuales',state:'done'},{title:'Implementar middleware de cookies',state:'active',note:'Modificando src/middleware/auth.js…'},{title:'Actualizar tests unitarios',state:'pending'}]); await sleep(900);
+  user('Crea auth.js y luego edítalo'); curPanel=null;
+  const r1=addActionRow('write_file',{path:'auth.js'}); await sleep(500); markDone(r1);
+  const r2=addActionRow('read_file',{path:'auth.js'}); await sleep(400); markDone(r2);
+  const r3=addActionRow('write_file',{path:'auth.js'}); await sleep(500); markDone(r3);
+  await fsPut('auth.js','function login(u,p){\n  if(!u||!p) return false;\n  return true;\n}'); refreshDisk();
+  diffCard('auth.js', diffLines('function login(u,p){\n  if(!u||!p) return false;\n  return true;\n}','function login(u,p){\n  if(!u) return false;\n  return check(u,p);\n}')); await sleep(900);
+  askPermit('ejecutar el comando','npm run build').then(()=>{}); await sleep(300);
+  askUser('¿Qué backend de sesiones prefieres?',['Redis','Cookies firmadas','Base de datos']).then(()=>{}); await sleep(700);
+  user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
+  user('/compact'); compactCard(84500,12100); await sleep(700);
+  user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
+  user('/loop'); loopCard({iter:3,max:15,cmds:8}); await sleep(400);
+  user('/help'); helpCard();
+  tool('✓ Demo completada — goal · plan · acciones · diff · permit · ask_user · cost · compact · init · loop · help.');
+}
+
 async function run(){
   const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
+  hist.push(v); histI=hist.length;
   if(v[0]==='/'){ await slashCmd(v); nextHint(); return; }
   const m=v.match(/^(ls|read|write|del|cat|rm)\b\s*(.*)$/i);
   if(m){ const cmd=m[1].toLowerCase(), rest=m[2];
