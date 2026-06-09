@@ -199,7 +199,7 @@ async function runDemoSim(){
   await fsPut('bienvenida.md','# Agents Web\n\nDisco virtual con IA.\n'); refreshDisk();
   diffCard('bienvenida.md', diffLines('# Agents Web\n\nDisco virtual con IA.\n','# Agents Web\n\nDisco virtual con IA en el navegador.\n\n## Comandos\n- /plan, /cost, /init\n')); await sleep(900);
   askPermit('ejecutar el comando','npm run build').then(()=>{}); await sleep(300);
-  askUser('¿Qué backend de sesiones prefieres?',['Redis','Cookies firmadas','Base de datos']).then(()=>{}); await sleep(700);
+  askUser('¿Dónde guardamos el resultado?',['Disco virtual','Repo GitHub (Push)','Solo mostrarlo']).then(()=>{}); await sleep(700);
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
   user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
@@ -373,7 +373,7 @@ async function slashCmd(v){
     case '/init': { const p='CLAUDE.md'; const ex=await fsGet(p); if(!ex) await fsPut(p,'# Reglas del proyecto\n\n- Estilo de codigo: ...\n- No tocar: ...\n- Tests: ...\n'); refreshDisk(); initCard(p); break; }
     case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool('API key guardada en este navegador.'); } else tool('Uso: /key <api-key>'); break;
     case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool('GitHub token puesto (push/pull).'); } else tool('Uso: /ghtoken <token>'); break;
-    case '/goal': { const g=arg||localStorage.getItem('goal')||'Migrar todo el sistema de autenticacion de JWT a sesiones basadas en cookies y asegurar que la cobertura de pruebas no baje del 90%.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
+    case '/goal': { const g=arg||localStorage.getItem('goal')||'Explorar y organizar los ficheros del disco virtual con ayuda de la IA, y sincronizarlos con GitHub.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
     case '/plan':
       if(arg){ await planReal(arg); }                          // explicit task
       else if(lastPlan){ planCard(lastPlan); tool('(plan actual)'); }   // show current
