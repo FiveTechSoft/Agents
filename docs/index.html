@@ -366,12 +366,17 @@ async function runDemoSim(){
   thinkingCard('El usuario quiere organizar el disco. Reviso los ficheros, propongo cambios y pido permiso antes de tocar nada.'); await sleep(800);
   errorCard('Error en el comando','Un comando de ejemplo falló por una dependencia faltante.','Error: Cannot find module \'clsx\'\nRequire stack:\n- /src/components/Sidebar.jsx', ()=>{ tool('↑ Auto-corrigiendo… (demo)'); }); await sleep(800);
   askPermit('ejecutar el comando','npm install clsx').then(()=>{}); await sleep(300);
-  askUser('¿Dónde guardamos el resultado?',['Disco virtual','Repo GitHub (Push)','Solo mostrarlo']).then(()=>{}); await sleep(700);
+  askUser('¿Dónde guardamos el resultado?',[
+    {label:'Disco virtual',description:'Rápido y local en el navegador (IndexedDB).',recommended:true},
+    {label:'Repo GitHub (Push)',description:'Persistente y versionado. Necesita token.'},
+    {label:'Solo mostrarlo',description:'No guardar nada.'}]).then(()=>{}); await sleep(700);
   user('Reparte el trabajo en varios agentes'); { const dc=delegationCard(['Listar ficheros del disco','Resumir su contenido','Proponer mejoras']); await sleep(700); dc.setStatus(0,'list_files…'); await sleep(500); dc.done(0); dc.setStatus(1,'read_file…'); await sleep(500); dc.done(1); await sleep(400); dc.done(2); } await sleep(500);
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
   user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
   user('/git'); await gitCard(); await sleep(400);
+  user('/skill'); skillCard(await listSkills()); await sleep(400);
+  user('/tool'); toolsCard(); await sleep(400);
   user('/loop'); loopCard({iter:3,max:15,cmds:8}); await sleep(400);
   user('/help'); helpCard(); await sleep(300);
   doneLine('Esperando respuesta del usuario…');
@@ -401,7 +406,7 @@ const TOOLS=[
  {type:'function',function:{name:'read_file',description:'Read a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
  {type:'function',function:{name:'write_file',description:'Create/overwrite a file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},
  {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
- {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait for the answer. Provide 2-4 short options when possible.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'string'}}},required:['question']}}},
+ {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait. Options can be plain strings OR objects {label, description, recommended} to show a rich clarification card with radios.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'object',properties:{label:{type:'string'},description:{type:'string'},recommended:{type:'boolean'}},required:['label']}}},required:['question']}}},
  {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. Use to split a task into parts that do not depend on each other.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks'}},required:['tasks']}}},
  {type:'function',function:{name:'git',description:'Real git on the cloned repo (isomorphic-git). action: status|log|commit|push|pull|clone. For commit pass message; for clone pass repo (owner/name).',parameters:{type:'object',properties:{action:{type:'string'},message:{type:'string'},repo:{type:'string'}},required:['action']}}}
 ];
@@ -411,11 +416,14 @@ const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.
 // Renders a question card and resolves when the user answers (the agent loop awaits this).
 function askUser(question, options){
   return new Promise(res=>{
+    options = Array.isArray(options)&&options.length ? options.map(o=> typeof o==='string'?{label:o}:o) : null;
+    const rich = options && options.some(o=>o.description||o.recommended);
+    if(rich){ renderClarify(question, options, res); return; }
     const card=el('<div class="bg-[#2a1f0c] border border-yellow-700/50 p-3 rounded-lg max-w-[90%]"></div>');
     const q=document.createElement('div'); q.className='text-yellow-300 font-semibold mb-2'; q.textContent=question; card.appendChild(q);
-    if(options&&options.length){
+    if(options){
       options.forEach(o=>{ const b=el('<button class="block w-full text-left bg-yellow-700/30 hover:bg-yellow-600 text-yellow-100 px-3 py-2 rounded mb-1"></button>');
-        b.textContent=o; b.onclick=()=>{ card.querySelectorAll('button,input').forEach(x=>x.disabled=true); b.classList.add('ring-2','ring-yellow-300'); res(o); }; card.appendChild(b); });
+        b.textContent=o.label; b.onclick=()=>{ card.querySelectorAll('button,input').forEach(x=>x.disabled=true); b.classList.add('ring-2','ring-yellow-300'); res(o.label); }; card.appendChild(b); });
     } else {
       const wrap=el('<div class="flex gap-2"></div>');
       const inp=el('<input class="flex-1 bg-gray-900 border border-yellow-700/50 rounded px-2 py-1 text-gray-100">');
@@ -426,6 +434,25 @@ function askUser(question, options){
     }
     chat().appendChild(card); down(); const f=card.querySelector('input'); if(f) f.focus();
   });
+}
+// rich clarification card: radios + description + "Recomendado" + Confirmar (mockup)
+function renderClarify(question, options, res){
+  const card=el('<div class="bg-[#1e2330] border border-blue-900/50 p-4 rounded-xl max-w-[90%]"></div>');
+  const head=el('<div class="flex items-start mb-3"></div>');
+  head.innerHTML='<div class="bg-blue-900/50 p-1.5 rounded-lg mr-2.5 mt-0.5">'+SVG('text-blue-400','<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>')+'</div>';
+  const tx=document.createElement('div'); const h=document.createElement('h4'); h.className='text-blue-300 text-sm font-semibold'; h.textContent='Se requiere clarificación';
+  const p=document.createElement('p'); p.className='text-xs text-gray-300 mt-1 leading-relaxed'; p.textContent=question; tx.appendChild(h); tx.appendChild(p); head.appendChild(tx); card.appendChild(head);
+  const list=el('<div class="space-y-2 mt-3"></div>'); const nm='clar'+(renderClarify._n=(renderClarify._n||0)+1); let sel=null;
+  options.forEach(o=>{ const lab=el('<label class="flex items-start p-3 border border-gray-700 rounded-lg bg-gray-800/50 hover:bg-gray-700/50 cursor-pointer"></label>');
+    const radio=document.createElement('input'); radio.type='radio'; radio.name=nm; radio.className='mt-0.5 mr-3 accent-blue-500'; radio.onclick=()=>{ sel=o.label; };
+    const d=document.createElement('div'); const t=document.createElement('div'); t.className='text-sm font-medium text-gray-200'; t.textContent=o.label;
+    if(o.recommended){ const bg=document.createElement('span'); bg.className='text-[10px] ml-1 bg-green-900/40 text-green-400 px-1.5 py-0.5 rounded border border-green-800/50'; bg.textContent='Recomendado'; t.appendChild(bg); }
+    d.appendChild(t); if(o.description){ const ds=document.createElement('div'); ds.className='text-xs text-gray-400 mt-0.5'; ds.textContent=o.description; d.appendChild(ds); }
+    lab.appendChild(radio); lab.appendChild(d); list.appendChild(lab); });
+  card.appendChild(list);
+  const btn=el('<button class="w-full mt-3 bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded-md font-medium">Confirmar Selección</button>');
+  btn.onclick=()=>{ if(sel==null) sel=options[0].label; card.querySelectorAll('input,button').forEach(x=>x.disabled=true); res(sel); };
+  card.appendChild(btn); chat().appendChild(card); down();
 }
 async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
   if(name==='list_files'){ return (await fsList()).map(f=>f.path).join('\n')||'(empty)'; }
@@ -643,6 +670,8 @@ async function slashCmd(v){
     case '/run': await executePlan(lastPlan); break;
     case '/clone': await gitClone(arg||GIT_REPO||document.getElementById('ghrepo').value.trim()||'FiveTechSoft/Agents'); break;
     case '/git': await gitCmd(arg); break;
+    case '/skill': await skillCmd(arg); break;
+    case '/tool': await toolCmd(arg); break;
     default: tool('Comando desconocido: '+cmd+'. Prueba /help.');
   }
 }
@@ -766,7 +795,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/loop','Telemetría'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/loop','Telemetría'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
@@ -782,6 +811,64 @@ async function compactNow(){
     convo.length=0; convo.push({role:'system',content:'Resumen previo: '+summary}); }
   const after=Math.round((before||14000)*0.2);
   compactCard(before||84500, after);
+}
+
+/* ===== skills: named instruction sets (disk skills/*.md + built-ins) ===== */
+const BUILTIN_SKILLS={
+  reviewer:{desc:'Revisar ficheros (bugs, mejoras)',prompt:'Actúa como revisor de código. Revisa los ficheros relevantes del disco (list_files/read_file) y reporta conciso: bugs, riesgos y mejoras priorizadas.'},
+  summarizer:{desc:'Resumir contenido',prompt:'Resume en bullets claros el contenido de los ficheros indicados (o de todo el disco si no se indica).'},
+  refactor:{desc:'Refactorizar un fichero',prompt:'Refactoriza el fichero indicado para legibilidad y simplicidad. Escribe el resultado con write_file (se verá el diff).'},
+  documenter:{desc:'Generar README',prompt:'Genera o actualiza README.md describiendo el propósito y los ficheros del disco. Guárdalo con write_file.'},
+  tester:{desc:'Proponer tests',prompt:'Propón y escribe tests para el código del disco. Crea ficheros de test con write_file.'}
+};
+async function listSkills(){
+  const disk=(await fsList()).filter(f=>/^skills\/.+\.md$/i.test(f.path)).map(f=>({name:f.path.replace(/^skills\//,'').replace(/\.md$/i,''),desc:'(skill del disco)',disk:true}));
+  const names=new Set(disk.map(d=>d.name));
+  const built=Object.keys(BUILTIN_SKILLS).filter(k=>!names.has(k)).map(k=>({name:k,desc:BUILTIN_SKILLS[k].desc}));
+  return disk.concat(built);
+}
+async function skillPrompt(name){ const f=await fsGet('skills/'+name+'.md'); if(f) return f.content; if(BUILTIN_SKILLS[name]) return BUILTIN_SKILLS[name].prompt; return null; }
+function skillCard(skills){
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex items-center justify-between mb-3 border-b border-gray-700 pb-2"><h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+
+    SVG('text-amber-400','<polygon points="12 2 15 9 22 9 16 14 18 21 12 17 6 21 8 14 2 9 9 9"></polygon>')+'Skills</h4>'+
+    '<button class="newsk text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">+ nueva</button></div><div class="grid grid-cols-2 gap-2 skc"></div>';
+  const g=c.querySelector('.skc');
+  skills.forEach(s=>{ const b=el('<button class="flex flex-col text-left p-2 rounded bg-gray-900 border border-gray-700 hover:border-amber-600"></button>');
+    b.innerHTML='<span class="text-amber-400 font-mono text-xs"></span><span class="text-[10px] text-gray-400 mt-0.5"></span>';
+    b.children[0].textContent='/skill '+s.name; b.children[1].textContent=s.desc;
+    b.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/skill '+s.name+' '; p.focus(); }; g.appendChild(b); });
+  c.querySelector('.newsk').onclick=()=>{ const p=document.getElementById('prompt'); p.value='/skill new '; p.focus(); };
+  chat().appendChild(c); down();
+}
+async function runSkill(name,task){
+  const p=await skillPrompt(name); if(p==null){ tool('skill no existe: '+name+'. Escribe /skill para listar.'); return; }
+  tool('▸ skill: '+name);
+  await agent('Sigue esta SKILL "'+name+'":\n'+p+'\n\nTarea: '+(task||'aplícala al contexto actual del disco.'));
+}
+/* ===== /tool: list the agent tools, or run one directly for testing ===== */
+function toolsCard(){
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Herramientas del agente ('+TOOLS.length+')</h4><div class="grid grid-cols-1 gap-1.5 tlc"></div>';
+  const g=c.querySelector('.tlc');
+  TOOLS.forEach(t=>{ const b=el('<button class="flex flex-col text-left p-2 rounded bg-gray-900 border border-gray-700 hover:border-blue-600"></button>');
+    b.innerHTML='<span class="text-blue-400 font-mono text-xs"></span><span class="text-[10px] text-gray-400 mt-0.5"></span>';
+    b.children[0].textContent=t.function.name; b.children[1].textContent=t.function.description;
+    b.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/tool '+t.function.name+' {}'; p.focus(); }; g.appendChild(b); });
+  chat().appendChild(c); down();
+}
+async function toolCmd(arg){
+  if(!arg){ toolsCard(); return; }
+  const sp=arg.indexOf(' '); const name=sp<0?arg:arg.slice(0,sp); const js=sp<0?'{}':arg.slice(sp+1).trim();
+  if(!TOOLS.some(t=>t.function.name===name)){ tool('herramienta desconocida: '+name+'. /tool para listar.'); return; }
+  tool('▸ '+name+' '+js); const out=await execTool(name, js); tool(String(out));
+}
+async function skillCmd(arg){
+  if(!arg){ skillCard(await listSkills()); return; }
+  const sp=arg.indexOf(' '); const sub=sp<0?arg:arg.slice(0,sp); const rest=sp<0?'':arg.slice(sp+1).trim();
+  if(sub==='new'){ if(!rest){ tool('Uso: /skill new <nombre>'); return; } const path='skills/'+rest+'.md';
+    if(!(await fsGet(path))) await fsPut(path,'# Skill: '+rest+'\n\nInstrucciones para el agente…\n'); refreshDisk(); openEd(path); return; }
+  await runSkill(sub, rest);
 }
 
 async function planReal(task){
