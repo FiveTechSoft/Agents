@@ -193,11 +193,14 @@ async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){
 function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
 
 let agentAbort=null;
+let lastPlan=null;            // last generated plan (steps[]) -> /plan with no arg shows it
+const convo=[];              // running conversation, used to invent a plan from context
 function stopAgent(){ if(agentAbort){ agentAbort.abort(); tool('Detenido.'); } }
-function clearChat(){ chat().innerHTML=''; }
+function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; }
 
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
+  convo.push({role:'user',content:text});
   const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Responde breve.'},{role:'user',content:text}];
   const wait=bot('<span class="text-gray-400">pensando…</span>');
   agentAbort=new AbortController();
@@ -217,6 +220,7 @@ async function agent(text){
         msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
       continue;
     }
+    convo.push({role:'assistant',content:mo.content||''});
     wait.innerHTML=window.marked?marked.parse(mo.content||''):(mo.content||''); return;
   }
   wait.innerHTML+='<div class="text-xs text-gray-500 mt-2">(límite de pasos)</div>';
@@ -231,7 +235,11 @@ async function slashCmd(v){
     case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool('API key guardada en este navegador.'); } else tool('Uso: /key <api-key>'); break;
     case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool('GitHub token puesto (push/pull).'); } else tool('Uso: /ghtoken <token>'); break;
     case '/goal': { const g=arg||localStorage.getItem('goal')||'Migrar todo el sistema de autenticacion de JWT a sesiones basadas en cookies y asegurar que la cobertura de pruebas no baje del 90%.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
-    case '/plan': await planReal(arg||localStorage.getItem('goal')||'Migrar el sistema de autenticacion de JWT a sesiones con cookies'); break;
+    case '/plan':
+      if(arg){ await planReal(arg); }                          // explicit task
+      else if(lastPlan){ planCard(lastPlan); tool('(plan actual)'); }   // show current
+      else { await planReal(null); }                            // invent from goal/conversation
+      break;
     case '/loop': loopCard({iter:3,max:15,cmds:8}); break;
     default: tool('Comando desconocido: '+cmd+'. Prueba /help.');
   }
@@ -296,17 +304,25 @@ function diffCard(path, ops){
 
 async function planReal(task){
   const key=getKey(); if(!key){ tool('Sin API key para /plan (usa /key).'); return; }
+  // task priority: explicit arg -> stored /goal -> invent from the recent conversation
+  let userContent;
+  if(task){ userContent='Tarea: '+task; }
+  else if(localStorage.getItem('goal')){ userContent='Objetivo: '+localStorage.getItem('goal'); }
+  else if(convo.length){ userContent='Basandote en esta conversacion, propon un plan para avanzar:\n'+
+        convo.slice(-8).map(m=>m.role+': '+m.content).join('\n'); }
+  else { userContent='Tarea: migrar el sistema de autenticacion de JWT a sesiones con cookies'; }
+
   const wait=bot('<span class="text-gray-400">generando plan…</span>'); agentAbort=new AbortController();
   try{
     const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key}, signal:agentAbort.signal,
       body:JSON.stringify({model:'deepseek-chat',messages:[
-        {role:'system',content:'You are a planner. Break the task into 3 to 6 short concrete steps. Reply ONLY with compact JSON: {"steps":[{"title":"...","state":"active|pending"}]}. First step active, the rest pending. No prose.'},
-        {role:'user',content:task}]})});
+        {role:'system',content:'You are a planner. Break the request into 3 to 6 short concrete steps. Reply ONLY with compact JSON: {"steps":[{"title":"...","state":"active|pending"}]}. First step active, the rest pending. No prose.'},
+        {role:'user',content:userContent}]})});
     const j=await r.json(); const txt=(j.choices&&j.choices[0].message.content)||'';
     const m=txt.match(/\{[\s\S]*\}/); let steps=[];
     try{ steps=(JSON.parse(m?m[0]:txt).steps)||[]; }catch(e){}
-    wait.remove(); planCard(steps);
+    wait.remove(); lastPlan=steps.length?steps:lastPlan; planCard(steps);
   }catch(e){ if(e.name==='AbortError') wait.innerHTML='(detenido)'; else wait.innerHTML='Error: '+e+' (posible CORS de DeepSeek)'; }
 }
 
