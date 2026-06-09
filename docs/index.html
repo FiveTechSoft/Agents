@@ -292,10 +292,16 @@ async function shOne(cmd, stdin){
     case 'write': { const fn=toks[0]||'untitled'; const c=toks.slice(1).join(' '); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
     case 'cc': case 'clang': case 'gcc': { if(!toks.length){SH_EXIT=1;return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');} return await ccExec(toks); }
     case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
-    case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?url.split('/').pop()||'index.html':null);
+    case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?(url.split('/').pop()||'index.html'):null);
       if(!url){SH_EXIT=1;return name+': '+T('falta URL','missing URL');}
-      let body=''; try{ const r=await fetch(url); body=await r.text(); }catch(e){ try{ const r=await fetch('https://r.jina.ai/'+url); body=await r.text(); }catch(e2){ SH_EXIT=1; return name+': '+e2; } }
-      if(outf){ await fsPut(shResolve(outf), body); refreshDisk(); return name==='wget'?('guardado '+outf+' ('+body.length+' B)'):''; } return body.slice(0,6000); }
+      const cands=[url,'https://corsproxy.io/?url='+encodeURIComponent(url),'https://api.allorigins.win/raw?url='+encodeURIComponent(url),'https://r.jina.ai/'+url];
+      let got=null,ct='';
+      for(const c of cands){ try{ const r=await fetch(c); if(!r.ok)continue; ct=r.headers.get('content-type')||''; if(/^text|json|xml|javascript|charset|svg/i.test(ct)||!ct){ got={text:await r.text()}; } else { got={buf:new Uint8Array(await r.arrayBuffer())}; } break; }catch(e){} }
+      if(!got){ SH_EXIT=1; return name+': '+T('descarga falló (CORS/red)','download failed (CORS/network)'); }
+      if(got.text!=null){ if(outf){ await fsPut(shResolve(outf),got.text); refreshDisk(); return name==='wget'?('saved '+outf+' ('+got.text.length+' B)'):''; } return got.text.slice(0,6000); }
+      let bin=''; for(let i=0;i<got.buf.length;i++)bin+=String.fromCharCode(got.buf[i]); const b64=btoa(bin);
+      if(outf){ await fsPut(shResolve(outf),' B64 '+b64); refreshDisk(); return 'saved '+outf+' ('+got.buf.length+' B '+T('binario, base64','binary, base64')+')'; }
+      return '['+T('binario','binary')+' '+got.buf.length+' B, '+ct+'] '+T('usa -o fichero','use -o file'); }
     case 'make': { if(a0[0]==='--version'||flags.includes('v')) return 'GNU Make (Agents Web, simulado)'; const mk=await fsGet(shResolve('Makefile'))||await fsGet(shResolve('makefile')); if(!mk){SH_EXIT=1;return 'make: '+T('no hay Makefile','no Makefile');}
       const targets=parseMake(mk.content); const tgt=a0[0]||Object.keys(targets)[0]; if(!targets[tgt]){SH_EXIT=1;return 'make: *** No rule to make target \''+tgt+'\'.';}
       const out=[], done=new Set(); const runT=async(t)=>{ if(done.has(t))return; done.add(t); const T2=targets[t]; if(!T2)return; for(const d of T2.deps){ if(targets[d]) await runT(d); } for(const line of T2.recipe){ out.push((line.startsWith('@')?'':line)); const o=await shRun(line.replace(/^@/,'')); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
@@ -557,7 +563,7 @@ async function gitClone(repo){
     }
     await git.commit({fs:GFS,dir:GITDIR,message:'clone '+repo,author:gitAuthor()});
     refreshDisk(); gitCard(); tool('clonado: '+n+' ficheros · git local iniciado (branch '+branch+').');
-  }catch(e){ errorCard('clone falló', String(e), 'Repo privado → /ghtoken primero.', null); }
+  }catch(e){ errorCard('clone falló', String(e), T('Repo privado o rate limit (60/h sin token) → pon token con /ghtoken (sube a 5000/h).','Private repo or rate limit (60/h unauthenticated) → set a token with /ghtoken (raises it to 5000/h).'), null); }
   finally{ setWorking(false); } }
 async function gitCommit(msg){ if(!gitReady()){tool('git no listo.');return;} await mirrorFromDisk();
   const m=await git.statusMatrix({fs:GFS,dir:GITDIR});
