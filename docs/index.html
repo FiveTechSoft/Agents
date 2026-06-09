@@ -161,6 +161,63 @@ async function newFile(){ let p=document.getElementById('newpath').value.trim();
   const dir=p.includes('/')? p.slice(0,p.lastIndexOf('/')) : ''; if(dir) dirOpen.add(dir), saveDirOpen();
   refreshDisk(); if(!p.endsWith('.keep')) openEd(p); }
 
+/* =====================================================================
+   Simulated POSIX shell over the virtual disk (no real OS). Supports
+   pipes (|) and output redirect (> >>). cwd persists in SHCWD.
+   ===================================================================== */
+let SHCWD='';   // disk-relative cwd ('' = root)
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','clear','help','date','whoami','read','del','write','env']);
+function shNorm(p){ const out=[]; (p||'').split('/').forEach(s=>{ if(s===''||s==='.')return; if(s==='..')out.pop(); else out.push(s); }); return out.join('/'); }
+function shResolve(arg){ if(!arg) return shNorm(SHCWD); return shNorm(arg.startsWith('/')?arg:(SHCWD+'/'+arg)); }
+async function shList(dir){ const items=await fsList(); const pre=dir?dir+'/':''; const dirs=new Set(), files=[];
+  items.forEach(f=>{ if(dir && f.path!==dir && !f.path.startsWith(pre))return; const rest=dir?f.path.slice(pre.length):f.path; if(!rest)return; const sl=rest.indexOf('/'); if(sl>=0)dirs.add(rest.slice(0,sl)); else if(rest!=='.keep')files.push(rest); });
+  return {dirs:[...dirs].sort(),files:files.sort()}; }
+async function shOne(cmd, stdin){
+  const t=cmd.trim().match(/^(\S+)\s*([\s\S]*)$/); if(!t) return '';
+  const name=t[1], rest=t[2]; const toks=rest.length?(rest.match(/(?:[^\s"]+|"[^"]*")+/g)||[]).map(s=>s.replace(/^"|"$/g,'')):[];
+  const a0=toks.filter(x=>!x.startsWith('-')); const flags=toks.filter(x=>x.startsWith('-')).join('');
+  switch(name){
+    case 'pwd': return '/'+shNorm(SHCWD);
+    case 'echo': return toks.join(' ');
+    case 'whoami': return 'agent';
+    case 'date': return new Date().toString();
+    case 'env': return 'CWD=/'+shNorm(SHCWD)+'\nMODEL='+MODEL;
+    case 'clear': clearChat(); return '';
+    case 'help': return 'ls cat echo pwd cd mkdir touch rm[-r] mv cp grep head tail wc find date whoami env | > >>';
+    case 'ls': { const d=shResolve(a0[0]||''); const {dirs,files}=await shList(d);
+      if(flags.includes('l')){ const fl=[]; for(const x of files){ const f=await fsGet((d?d+'/':'')+x); fl.push('-rw-r--r-- '+String((f&&f.content||'').length).padStart(6)+' '+x); } return dirs.map(x=>'drwxr-xr-x      - '+x+'/').concat(fl).join('\n'); }
+      const all=dirs.map(x=>x+'/').concat(files); return all.length?all.join('  '):''; }
+    case 'cd': { SHCWD=shResolve(a0[0]||''); return ''; }
+    case 'cat': case 'read': { if(!a0.length) return stdin||''; const out=[]; for(const x of a0){ const f=await fsGet(shResolve(x)); out.push(f?f.content:'cat: '+x+': No such file'); } return out.join('\n'); }
+    case 'touch': { for(const x of a0){ const k=shResolve(x); if(!(await fsGet(k))) await fsPut(k,''); } refreshDisk(); return ''; }
+    case 'mkdir': { for(const x of a0) await fsPut(shResolve(x)+'/.keep',''); refreshDisk(); return ''; }
+    case 'rm': case 'del': { for(const x of a0){ const k=shResolve(x); if(flags.includes('r')){ const all=await fsList(); for(const f of all){ if(f.path===k||f.path.startsWith(k+'/')) await fsDel(f.path); } } else await fsDel(k); } refreshDisk(); return ''; }
+    case 'mv': { if(a0.length<2)return 'mv: faltan args'; const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f)return 'mv: no existe '+a0[0]; await fsPut(d,f.content); await fsDel(s); refreshDisk(); return ''; }
+    case 'cp': { if(a0.length<2)return 'cp: faltan args'; const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f)return 'cp: no existe '+a0[0]; await fsPut(d,f.content); refreshDisk(); return ''; }
+    case 'grep': { const pat=a0[0]||''; let text=stdin; if(a0.length>1){ const f=await fsGet(shResolve(a0[1])); text=f?f.content:''; } let re; try{re=new RegExp(pat,'i');}catch(e){re=null;} return (text||'').split('\n').filter(l=> re?re.test(l):l.indexOf(pat)>=0).join('\n'); }
+    case 'head': case 'tail': { let n=10; const ni=toks.indexOf('-n'); if(ni>=0)n=parseInt(toks[ni+1])||10; let text=stdin; const file=a0.find(x=>x!==String(n)); if(file){ const f=await fsGet(shResolve(file)); text=f?f.content:''; } const L=(text||'').split('\n'); return (name==='head'?L.slice(0,n):L.slice(Math.max(0,L.length-n))).join('\n'); }
+    case 'wc': { let text=stdin; if(a0[0]){ const f=await fsGet(shResolve(a0[0])); text=f?f.content:''; } const x=text||''; return (x?x.split('\n').length:0)+' '+x.split(/\s+/).filter(Boolean).length+' '+x.length; }
+    case 'find': { const items=await fsList(); const base=shResolve(a0[0]||''); return items.filter(f=>!base||f.path===base||f.path.startsWith(base+'/')).map(f=>'/'+f.path).join('\n'); }
+    case 'write': { const fn=a0[0]||'untitled'; const i=rest.indexOf(fn); const c=rest.slice(i+fn.length).trim(); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
+    default: return name+': command not found';
+  }
+}
+async function shRun(line){
+  line=(line||'').trim(); if(!line) return '';
+  let redir=null, app=false; const rm=line.match(/\s(>>?)\s*(\S+)\s*$/); if(rm){ app=rm[1]==='>>'; redir=rm[2]; line=line.slice(0,rm.index); }
+  let stdin=null, out='';
+  for(const st of line.split('|').map(s=>s.trim()).filter(Boolean)){ out=await shOne(st, stdin); stdin=out; }
+  if(redir){ const k=shResolve(redir); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev?'\n':'')+out):out); refreshDisk(); return ''; }
+  return out;
+}
+function termLine(cmd, out, cwd){
+  const c=el('<div class="bg-black/60 border border-gray-700 rounded-lg p-3 font-mono text-xs max-w-[90%] overflow-x-auto"></div>');
+  const pr=document.createElement('div'); pr.innerHTML='<span class="text-green-400">agent@agents</span><span class="text-gray-500">:</span><span class="text-blue-400">/'+shNorm(cwd!=null?cwd:SHCWD)+'</span><span class="text-gray-500">$</span> ';
+  const cs=document.createElement('span'); cs.className='text-gray-200'; cs.textContent=cmd; pr.appendChild(cs); c.appendChild(pr);
+  if(out){ const o=document.createElement('div'); o.className='text-gray-300 whitespace-pre-wrap mt-1'; o.textContent=out; c.appendChild(o); }
+  chat().appendChild(c); down();
+}
+
 /* ---- editor ---- */
 let edCur=null;
 async function openEd(path){ const f=await fsGet(path); edCur=path;
@@ -395,6 +452,7 @@ async function runDemoSim(){
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
   user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
+  user('ls -l'); termLine('ls -l', await shRun('ls -l'), SHCWD); await sleep(400);
   user('/git'); await gitCard(); await sleep(400);
   user('/skill'); skillCard(await listSkills()); await sleep(400);
   user('/tool'); toolsCard(); await sleep(400);
@@ -409,14 +467,8 @@ async function run(){
   const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
   hist.push(v); histI=hist.length;
   if(v[0]==='/'){ await slashCmd(v); nextHint(); return; }
-  const m=v.match(/^(ls|read|write|del|cat|rm)\b\s*(.*)$/i);
-  if(m){ const cmd=m[1].toLowerCase(), rest=m[2];
-    if(cmd==='ls'){ const f=await fsList(); tool(f.length?f.map(x=>x.path).join('\n'):'(disco vacío)'); }
-    else if(cmd==='read'||cmd==='cat'){ const f=await fsGet(rest.trim()); tool(f?f.content:'no existe: '+rest); }
-    else if(cmd==='del'||cmd==='rm'){ await fsDel(rest.trim()); refreshDisk(); tool('borrado '+rest); }
-    else if(cmd==='write'){ const sp=rest.indexOf(' '); const p=sp<0?rest:rest.slice(0,sp); const c=sp<0?'':rest.slice(sp+1); const old=await fsGet(p); await fsPut(p,c); refreshDisk(); tool('escrito '+p+' ('+c.length+' B)'); if(old && old.content!==c) diffCard(p, diffLines(old.content,c)); }
-    nextHint(); return;
-  }
+  const cmd0=v.split(/\s+/)[0];
+  if(SHELL_CMDS.has(cmd0)){ const cwd=SHCWD; const out=await shRun(v); termLine(v, out, cwd); nextHint(); return; }
   // otherwise: send to the LLM agent
   await agent(v); nextHint();
 }
@@ -431,7 +483,8 @@ const TOOLS=[
  {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. Use to split a task into parts that do not depend on each other.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks'}},required:['tasks']}}},
  {type:'function',function:{name:'git',description:'Real git on the cloned repo (isomorphic-git). action: status|log|commit|push|pull|clone. For commit pass message; for clone pass repo (owner/name).',parameters:{type:'object',properties:{action:{type:'string'},message:{type:'string'},repo:{type:'string'}},required:['action']}}},
  {type:'function',function:{name:'web_search',description:'Search the web and return the top results as text.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
- {type:'function',function:{name:'web_fetch',description:'Fetch a URL and return its readable text content.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}}
+ {type:'function',function:{name:'web_fetch',description:'Fetch a URL and return its readable text content.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
+ {type:'function',function:{name:'shell',description:'Run a POSIX-like shell command on the virtual disk: ls cat echo pwd cd mkdir touch rm mv cp grep head tail wc find, with pipes (|) and redirect (> >>).',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']}}}
 ];
 // sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
 const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
@@ -490,6 +543,7 @@ async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){
   if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[]); }
   if(name==='web_search'){ try{ const r=await fetch('https://s.jina.ai/'+encodeURIComponent(args.query||''),{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,4000); }catch(e){ return 'web_search error: '+e; } }
   if(name==='web_fetch'){ try{ const u=(args.url||''); const r=await fetch('https://r.jina.ai/'+u,{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,6000); }catch(e){ return 'web_fetch error: '+e; } }
+  if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
     if(a==='clone'){ await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return 'clonado'; }
     if(a==='commit'){ await gitCommit(args.message||'agents-web: update'); return 'commit hecho'; }
@@ -547,6 +601,7 @@ const IC_FILE=SVG('text-blue-400 shrink-0','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a
 const IC_SEARCH=SVG('text-purple-400 shrink-0','<circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>');
 const IC_TRASH=SVG('text-red-400 shrink-0','<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>');
 const IC_ASK=SVG('text-yellow-400 shrink-0','<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>');
+const IC_TERM=SVG('text-emerald-400 shrink-0','<polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>');
 const IC_CHECK=SVG('text-green-500 shrink-0','<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>');
 const IC_X=SVG('text-red-500 shrink-0','<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>');
 const IC_CHEV=SVG('mr-1.5','<polyline points="6 9 12 15 18 9"></polyline>');
@@ -555,7 +610,7 @@ function toolMeta(n){ return ({
   write_file:{v:'Escribiendo',i:IC_FILE,a:'path'}, delete_file:{v:'Borrando',i:IC_TRASH,a:'path'},
   ask_user:{v:'Preguntando',i:IC_ASK,a:'question'},
   web_search:{v:'Buscando',i:IC_SEARCH,a:'query'}, web_fetch:{v:'Abriendo',i:IC_SEARCH,a:'url'},
-  git:{v:'git',i:IC_FILE,a:'action'}, dispatch_agents:{v:'Delegando',i:IC_FILE,a:''} }[n]||{v:n,i:IC_FILE,a:''}); }
+  git:{v:'git',i:IC_FILE,a:'action'}, dispatch_agents:{v:'Delegando',i:IC_FILE,a:''}, shell:{v:'Shell',i:IC_TERM,a:'command'} }[n]||{v:n,i:IC_FILE,a:''}); }
 let curPanel=null;
 function actionPanel(){ const p=el('<div class="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden max-w-[90%]"></div>');
   const btn=el('<button class="w-full flex items-center p-2.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-700"></button>');
@@ -708,6 +763,7 @@ async function slashCmd(v){
     case '/git': await gitCmd(arg); break;
     case '/skill': await skillCmd(arg); break;
     case '/tool': await toolCmd(arg); break;
+    case '/sh': { const cwd=SHCWD; const out=await shRun(arg); termLine(arg||'', out, cwd); break; }
     default: tool('Comando desconocido: '+cmd+'. Prueba /help.');
   }
 }
@@ -831,7 +887,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/loop','Telemetría'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell)'],['/loop','Telemetría'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
@@ -893,7 +949,7 @@ async function runSkill(name,task){
   await agent('Sigue esta SKILL "'+name+'":\n'+p+'\n\nTarea: '+(task||'aplícala al contexto actual del disco.'));
 }
 /* ===== /tool: list the agent tools, or run one directly for testing ===== */
-function toolSafety(name){ return ['write_file','delete_file','git','dispatch_agents'].includes(name)?'warn':'safe'; }
+function toolSafety(name){ return ['write_file','delete_file','git','dispatch_agents','shell'].includes(name)?'warn':'safe'; }
 function toolsCard(){
   const c=el('<div class="bg-[#1a1d24] border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   const head=el('<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700/50"></div>');
