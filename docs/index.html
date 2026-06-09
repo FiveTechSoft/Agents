@@ -189,10 +189,11 @@ async function shExpandSubst(line){ let g=0; let m;
 const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 function parseMake(text){ const vars={}, targets={}; let cur=null;
-  (text||'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
-    if(/^\t/.test(raw)){ if(cur) targets[cur].recipe.push(mkExpand(raw.replace(/^\t/,''),vars)); return; }
-    const vm=raw.match(/^(\w+)\s*[:?]?=\s*(.*)$/); if(vm && raw.indexOf(':')<0 || (vm && raw.indexOf(':=')>=0)){ vars[vm[1]]=mkExpand(vm[2],vars); return; }
-    const tm=raw.match(/^([^:=]+):(.*)$/); if(tm){ cur=tm[1].trim(); targets[cur]={deps:tm[2].trim().split(/\s+/).filter(Boolean),recipe:[]}; } });
+  (text||'').replace(/\r/g,'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
+    if(/^[ \t]+/.test(raw) && cur){ targets[cur].recipe.push(mkExpand(raw.replace(/^[ \t]+@?/,''),vars)); return; }   // any indent = recipe (tabs optional)
+    const am=raw.match(/^(\w+)\s*:?=\s*(.*)$/) && raw.match(/^(\w+)\s*(?::=|\?=|=)\s*(.*)$/);
+    if(am){ vars[am[1]]=mkExpand(am[2],vars); return; }
+    const tm=raw.match(/^([^:=#]+):(?!=)(.*)$/); if(tm){ cur=tm[1].trim(); targets[cur]={deps:tm[2].trim().split(/\s+/).filter(Boolean),recipe:[]}; } });
   return targets; }
 function shNorm(p){ const out=[]; (p||'').split('/').forEach(s=>{ if(s===''||s==='.')return; if(s==='..')out.pop(); else out.push(s); }); return out.join('/'); }
 function shResolve(arg){ if(!arg) return shNorm(SHCWD); return shNorm(arg.startsWith('/')?arg:(SHCWD+'/'+arg)); }
