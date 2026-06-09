@@ -269,7 +269,25 @@ async function shOne(cmd, stdin){
       SH_EXIT=any?0:1; return out.join('\n'); }
     case 'head': case 'tail': { let n=10; const ni=toks.indexOf('-n'); if(ni>=0)n=parseInt(toks[ni+1])||10; let text=stdin; const file=a0.find(x=>x!==String(n)); if(file){ const f=await fsGet(shResolve(file)); text=f?f.content:''; } const L=(text||'').split('\n'); return (name==='head'?L.slice(0,n):L.slice(Math.max(0,L.length-n))).join('\n'); }
     case 'wc': { let text=stdin; if(a0[0]){ const f=await fsGet(shResolve(a0[0])); text=f?f.content:''; } const x=text||''; return (x?x.split('\n').length:0)+' '+x.split(/\s+/).filter(Boolean).length+' '+x.length; }
-    case 'find': { const items=await fsList(); const base=shResolve(a0[0]||''); return items.filter(f=>!base||f.path===base||f.path.startsWith(base+'/')).map(f=>'/'+f.path).join('\n'); }
+    case 'find': { let path='', nameRe=null, type=null, maxdepth=Infinity;
+      for(let i=0;i<toks.length;i++){ const t=toks[i];
+        if(t==='-name'||t==='-iname'){ const pat=toks[++i]||''; nameRe=new RegExp('^'+pat.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.')+'$', t==='-iname'?'i':''); }
+        else if(t==='-type'){ type=toks[++i]; }
+        else if(t==='-maxdepth'){ maxdepth=parseInt(toks[++i])||Infinity; }
+        else if(t==='.'){ path=''; }
+        else if(!t.startsWith('-') && !path){ path=t; } }
+      const base=shResolve(path); const all=await fsList(); const dirset=new Set(); const files=[];
+      for(const f of all){ if(base && f.path!==base && !f.path.startsWith(base+'/')) continue;
+        const parts=f.path.split('/'); for(let i=1;i<parts.length;i++) dirset.add(parts.slice(0,i).join('/'));
+        if(!f.path.endsWith('/.keep')) files.push(f.path); }
+      const entries=[]; files.forEach(p=>entries.push({path:p,type:'f'})); dirset.forEach(d=>{ if(!base||d===base||d.startsWith(base+'/')) entries.push({path:d,type:'d'}); });
+      const seen=new Set(); const out=[];
+      entries.sort((a,b)=>a.path.localeCompare(b.path)).forEach(e=>{ if(seen.has(e.type+e.path))return; seen.add(e.type+e.path);
+        if(type && e.type!==type) return;
+        const rel = base? (e.path===base?'':e.path.slice(base.length+1)) : e.path; const depth=rel?rel.split('/').length:0; if(depth>maxdepth) return;
+        if(nameRe && !nameRe.test(e.path.split('/').pop())) return;
+        out.push('/'+e.path); });
+      SH_EXIT=out.length?0:1; return out.join('\n'); }
     case 'write': { const fn=toks[0]||'untitled'; const c=toks.slice(1).join(' '); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
     case 'cc': case 'clang': case 'gcc': { if(!a0[0]){SH_EXIT=1;return T('uso: cc <fichero.c>','usage: cc <file.c>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'cc: '+T('no existe ','no such file ')+a0[0];} return await ccRun(f.content); }
     case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
