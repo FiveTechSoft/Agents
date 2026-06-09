@@ -126,22 +126,40 @@ async function fsDel(path){ const db=await idb(); return new Promise((res)=>{
 async function fsList(){ const db=await idb(); return new Promise((res)=>{
   const r=db.transaction(STORE).objectStore(STORE).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>res([]); }); }
 
-/* ---- disk UI ---- */
+/* ---- disk UI: folder tree (paths split on '/') ---- */
+let dirOpen=(()=>{ try{ return new Set(JSON.parse(localStorage.getItem('diropen')||'[]')); }catch(e){ return new Set(); } })();
+function saveDirOpen(){ try{ localStorage.setItem('diropen',JSON.stringify([...dirOpen])); }catch(e){} }
+function buildTree(items){ const root={dirs:{},files:[],path:''};
+  items.forEach(f=>{ const parts=f.path.split('/'); let node=root;
+    for(let i=0;i<parts.length-1;i++){ const d=parts[i]; if(!node.dirs[d]) node.dirs[d]={dirs:{},files:[],path:(node.path?node.path+'/':'')+d}; node=node.dirs[d]; }
+    node.files.push(f); });
+  return root; }
+function renderNode(node, box, depth){
+  Object.keys(node.dirs).sort().forEach(name=>{ const d=node.dirs[name], open=dirOpen.has(d.path);
+    const row=document.createElement('div'); row.className='flex items-center justify-between gap-1 py-1 rounded hover:bg-gray-800 cursor-pointer group'; row.style.paddingLeft=(depth*12+6)+'px';
+    const left=document.createElement('span'); left.className='truncate text-gray-300 flex items-center gap-1'; left.textContent=(open?'▾ 📂 ':'▸ 📁 ')+name;
+    left.onclick=()=>{ if(open)dirOpen.delete(d.path); else dirOpen.add(d.path); saveDirOpen(); refreshDisk(); };
+    const del=document.createElement('button'); del.className='opacity-0 group-hover:opacity-100 text-red-400 text-xs pr-1'; del.textContent='✕';
+    del.onclick=async(e)=>{ e.stopPropagation(); if(confirm('¿Borrar carpeta '+d.path+' y su contenido?')){ const all=await fsList(); for(const f of all){ if(f.path===d.path||f.path.startsWith(d.path+'/')) await fsDel(f.path); } refreshDisk(); } };
+    row.appendChild(left); row.appendChild(del); box.appendChild(row);
+    if(open) renderNode(d, box, depth+1); });
+  node.files.sort((a,b)=>a.path.localeCompare(b.path)).forEach(f=>{ const name=f.path.split('/').pop();
+    const row=document.createElement('div'); row.className='flex items-center justify-between gap-1 py-1 rounded hover:bg-gray-800 cursor-pointer group'; row.style.paddingLeft=(depth*12+6)+'px';
+    const nm=document.createElement('span'); nm.className='truncate text-gray-300'; nm.textContent='📄 '+name; nm.onclick=()=>openEd(f.path);
+    const del=document.createElement('button'); del.className='opacity-0 group-hover:opacity-100 text-red-400 text-xs pr-1'; del.textContent='✕'; del.onclick=async(e)=>{ e.stopPropagation(); await fsDel(f.path); refreshDisk(); };
+    row.appendChild(nm); row.appendChild(del); box.appendChild(row); });
+}
 async function refreshDisk(){
   const items=await fsList(); const box=document.getElementById('files'); box.innerHTML='';
-  let bytes=0;
-  items.sort((a,b)=>a.path.localeCompare(b.path)).forEach(f=>{ bytes+=(f.content||'').length;
-    const row=document.createElement('div');
-    row.className='flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-gray-800 cursor-pointer group';
-    const name=document.createElement('span'); name.className='truncate text-gray-300'; name.textContent='📄 '+f.path;
-    name.onclick=()=>openEd(f.path);
-    const del=document.createElement('button'); del.className='opacity-0 group-hover:opacity-100 text-red-400 text-xs'; del.textContent='✕';
-    del.onclick=async(e)=>{ e.stopPropagation(); await fsDel(f.path); refreshDisk(); };
-    row.appendChild(name); row.appendChild(del); box.appendChild(row); });
+  let bytes=0; items.forEach(f=>bytes+=(f.content||'').length);
+  renderNode(buildTree(items), box, 0);
   document.getElementById('diskinfo').textContent=items.length+' files · '+bytes+' B';
 }
-async function newFile(){ const p=document.getElementById('newpath').value.trim(); if(!p)return;
-  await fsPut(p,''); document.getElementById('newpath').value=''; refreshDisk(); openEd(p); }
+async function newFile(){ let p=document.getElementById('newpath').value.trim(); if(!p)return;
+  if(p.endsWith('/')){ p+='.keep'; }   // trailing slash -> create an empty folder marker
+  await fsPut(p,''); document.getElementById('newpath').value='';
+  const dir=p.includes('/')? p.slice(0,p.lastIndexOf('/')) : ''; if(dir) dirOpen.add(dir), saveDirOpen();
+  refreshDisk(); if(!p.endsWith('.keep')) openEd(p); }
 
 /* ---- editor ---- */
 let edCur=null;
