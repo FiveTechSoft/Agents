@@ -176,7 +176,7 @@ async function newFile(){ let p=document.getElementById('newpath').value.trim();
    ===================================================================== */
 let SHCWD='';   // disk-relative cwd ('' = root)
 let SH_EXIT=0;  // last command exit code (for && ||)
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 function parseMake(text){ const vars={}, targets={}; let cur=null;
   (text||'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
@@ -199,6 +199,7 @@ async function shOne(cmd, stdin){
     case 'echo': return toks.join(' ');
     case 'whoami': return 'agent';
     case 'hostname': return 'agents';
+    case 'seq': { let a=1,b=1,s=1; if(a0.length===1){b=parseInt(a0[0])||0;} else if(a0.length===2){a=parseInt(a0[0])||1;b=parseInt(a0[1])||0;} else if(a0.length>=3){a=parseInt(a0[0])||1;s=parseInt(a0[1])||1;b=parseInt(a0[2])||0;} const r=[]; if(s>0)for(let i=a;i<=b;i+=s)r.push(i); else if(s<0)for(let i=a;i>=b;i+=s)r.push(i); if(r.length>2000)return 'seq: rango demasiado grande'; return r.join('\n'); }
     case 'sleep': { const n=Math.min(5,parseInt(a0[0])||1); await new Promise(r=>setTimeout(r,n*1000)); return ''; }
     case 'uname': { if(flags.includes('a')) return 'Linux agents 6.0-agentsweb #1 WASM '+new Date().getFullYear()+' wasm32 Agents Web'; const r=[]; if(flags.includes('s')||!flags)r.push('Linux'); if(flags.includes('n'))r.push('agents'); if(flags.includes('r'))r.push('6.0-agentsweb'); if(flags.includes('m'))r.push('wasm32'); if(flags.includes('o'))r.push('Agents Web'); return r.join(' '); }
     case 'date': return new Date().toString();
@@ -252,8 +253,18 @@ async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>
   if(redir){ const k=shResolve(redir); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev?'\n':'')+out):out); refreshDisk(); return ''; }
   return out;
 }
-async function shRun(line){   // handle ; && || (with exit codes) + strip stderr redirects
+async function shGlob(item){ if(item.indexOf('*')<0 && item.indexOf('?')<0) return [item];
+  const {dirs,files}=await shList(shResolve('')); const all=dirs.map(d=>d+'/').concat(files);
+  const re=new RegExp('^'+item.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.')+'$');
+  const m=all.filter(x=>re.test(x)||re.test(x.replace(/\/$/,''))); return m.length?m.map(x=>x.replace(/\/$/,'')):[item]; }
+async function shRun(line){   // handle for/; && || (with exit codes) + strip stderr redirects
   line=(line||'').replace(/\s*2>\s*\/dev\/null/g,'').replace(/\s*2>&1/g,'').replace(/\s*1>&2/g,'').trim(); if(!line) return '';
+  // for VAR in LIST; do BODY; done
+  const fm=line.match(/^for\s+(\w+)\s+in\s+(.+?)\s*;\s*do\s+([\s\S]+?)\s*;?\s*done\s*$/);
+  if(fm){ const v=fm[1], body=fm[3]; let items=[]; for(const tok of fm[2].trim().split(/\s+/)) items=items.concat(await shGlob(tok));
+    const out=[]; const rev=new RegExp('\\$\\{?'+v+'\\}?','g');
+    for(const it of items){ const o=await shRun(body.replace(rev, it)); if(o)out.push(o); }
+    return out.join('\n'); }
   const parts=line.split(/\s*(&&|\|\||;)\s*/); const acc=[];
   for(let i=0;i<parts.length;i+=2){ const op=parts[i-1], seg=parts[i]; if(!seg)continue;
     if(op==='&&' && SH_EXIT!==0) continue;
