@@ -328,7 +328,17 @@ async function planReal(task){
   else if(localStorage.getItem('goal')){ userContent='Objetivo: '+localStorage.getItem('goal'); }
   else if(convo.length){ userContent='Basandote en esta conversacion, propon un plan para avanzar:\n'+
         convo.slice(-8).map(m=>m.role+': '+m.content).join('\n'); }
-  else { userContent='Tarea: migrar el sistema de autenticacion de JWT a sesiones con cookies'; }
+  else {
+    // no task, no goal, no conversation -> base the plan on the virtual disk
+    const files=await fsList();
+    if(files.length){
+      userContent='No hay objetivo definido. En el disco virtual hay estos ficheros:\n'+
+        files.map(f=>'- '+f.path+' ('+(f.content||'').length+' B)').join('\n')+
+        '\n\nPropon un plan corto y util para trabajar con estos ficheros (revisar, mejorar, organizar, generar, etc.).';
+    } else {
+      userContent='No hay objetivo, conversacion ni ficheros en el disco virtual. Propon un plan corto para arrancar algo util (crear una estructura de proyecto de ejemplo, un README, un primer fichero, etc.).';
+    }
+  }
 
   const wait=bot('<span class="text-gray-400">generando plan…</span>'); agentAbort=new AbortController();
   try{
