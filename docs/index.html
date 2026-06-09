@@ -52,6 +52,9 @@
         <span id="agi" class="inline-block">😎</span> Agents — Web
       </span>
       <div class="flex items-center gap-1.5 text-xs">
+        <select id="lang" onchange="setLang(this.value)" title="Idioma" class="bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs cursor-pointer">
+          <option value="es">🇪🇸 ES</option><option value="en">🇬🇧 EN</option><option value="fr">🇫🇷 FR</option><option value="de">🇩🇪 DE</option><option value="pt">🇵🇹 PT</option><option value="it">🇮🇹 IT</option>
+        </select>
         <button onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
         <button onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
         <button onclick="clearChat()" title="Limpiar" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
@@ -375,6 +378,9 @@ function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
 let agentAbort=null;
 let workN=0;                  // blink the 😎 icon while Agents is working
 function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getElementById('agi'); if(e) e.classList.toggle('blink',workN>0); }
+const LANGS={es:'español',en:'English',fr:'français',de:'Deutsch',pt:'português',it:'italiano'};
+let curLang=(()=>{ try{ return localStorage.getItem('lang')||'es'; }catch(e){ return 'es'; } })();
+function setLang(v){ curLang=v; try{ localStorage.setItem('lang',v); }catch(e){} tool('Idioma: '+(LANGS[v]||v)); }
 function saveSession(){ try{ localStorage.setItem('convo',JSON.stringify(convo)); localStorage.setItem('usage',JSON.stringify(usage)); }catch(e){} }
 function restoreSession(){ try{
   const su=JSON.parse(localStorage.getItem('usage')||'null'); if(su) usage=su;
@@ -414,7 +420,7 @@ async function streamChat(msgs, wait){
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
   convo.push({role:'user',content:text}); curPanel=null;
-  const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  const msgs=[{role:'system',content:'Eres Agents Web. Responde SIEMPRE en '+(LANGS[curLang]||'español')+'. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
   try{
     for(let step=0; step<8; step++){
@@ -653,6 +659,7 @@ document.addEventListener('keydown',(e)=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); clearChat(); clearDivider(); }
   else if(e.key==='Escape'){ stopAgent(); } });
 
+{ const ls=document.getElementById('lang'); if(ls) ls.value=curLang; }
 refreshDisk();
 if(!restoreSession()) bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
 </script>
