@@ -10,6 +10,8 @@
   html,body{height:100%}
   .scroll::-webkit-scrollbar{width:8px}
   .scroll::-webkit-scrollbar-thumb{background:#374151;border-radius:20px}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+  .blink{animation:blink .8s ease-in-out infinite}
 </style>
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
@@ -47,7 +49,7 @@
     <div class="p-3 border-b border-gray-800 bg-gray-850 flex items-center justify-between gap-2">
       <span class="font-semibold flex items-center gap-2">
         <button onclick="toggleDisk()" class="md:hidden bg-gray-800 border border-gray-700 rounded px-2 py-1" title="Disco">💾</button>
-        😎 Agents — Web
+        <span id="agi" class="inline-block">😎</span> Agents — Web
       </span>
       <div class="flex items-center gap-1.5 text-xs">
         <button onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
@@ -181,14 +183,28 @@ async function runDemo(){
   if(localStorage.getItem('ds_key')){ await runDemoLLM(); } else { await runDemoSim(); }
 }
 async function runDemoLLM(){
-  tool('▶ Demo (con LLM): el agente procesará la conversación de verdad.'); await sleep(400);
-  const seq=['/goal Mostrar las capacidades de Agents Web: gestionar ficheros en un disco virtual con IA, generar y ejecutar planes, y sincronizar con GitHub','/plan',
-    'Crea un fichero bienvenida.md que explique qué es Agents Web y guárdalo en el disco virtual',
-    'Ahora edita bienvenida.md y añade una sección con los comandos disponibles','/cost'];
+  setWorking(true);
+  tool('▶ Demo (con LLM): el agente procesará una conversación distinta cada vez.'); await sleep(300);
+  const key=localStorage.getItem('ds_key');
+  // ask DeepSeek for a fresh topic so every demo differs
+  let topic='organizar notas de un proyecto';
+  try{
+    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({model:'deepseek-chat',messages:[{role:'user',content:'Dame UNA idea breve (maximo 8 palabras, en espanol) de una mini-tarea distinta para demostrar un agente que crea y edita ficheros en un disco. Solo la idea, sin comillas ni puntuacion final.'}]})});
+    const j=await r.json(); if(j.usage){usage.pin+=j.usage.prompt_tokens||0;usage.pout+=j.usage.completion_tokens||0;}
+    topic=((j.choices&&j.choices[0].message.content)||topic).trim().replace(/^["']|["'.]+$/g,'');
+  }catch(e){ tool('(no pude pedir tema; uso uno por defecto)'); }
+  tool('Tema de la demo: '+topic);
+  const seq=['/goal '+topic, '/plan',
+    'Crea un fichero (en el disco virtual) relacionado con: '+topic+'. Inventa un nombre adecuado y un contenido breve.',
+    'Ahora edita ese fichero para ampliarlo un poco', '/cost'];
   for(const p of seq){ const i=document.getElementById('prompt'); i.value=p; await run(); await sleep(900); }
   tool('✓ Demo (LLM) completada.');
+  setWorking(false);
 }
 async function runDemoSim(){
+  setWorking(true);
   tool('▶ Demo (simulada — sin API key): cards de muestra.'); await sleep(400);
   user('/goal'); goalCard('Mostrar las capacidades de Agents Web: gestionar ficheros en un disco virtual (IndexedDB) con un agente IA, generar y ejecutar planes, y sincronizar con un repo de GitHub.'); await sleep(800);
   user('/plan'); planCard([{title:'Crear ficheros en el disco virtual',state:'done'},{title:'Editar un fichero y mostrar el diff de cambios',state:'active',note:'Modificando bienvenida.md…'},{title:'Sincronizar el disco con GitHub (Push)',state:'pending'}]); await sleep(900);
@@ -206,6 +222,7 @@ async function runDemoSim(){
   user('/loop'); loopCard({iter:3,max:15,cmds:8}); await sleep(400);
   user('/help'); helpCard();
   tool('✓ Demo completada — goal · plan · acciones · diff · permit · ask_user · cost · compact · init · loop · help.');
+  setWorking(false);
 }
 
 async function run(){
@@ -317,6 +334,8 @@ function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
   }); }
 
 let agentAbort=null;
+let workN=0;                  // blink the 😎 icon while Agents is working
+function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getElementById('agi'); if(e) e.classList.toggle('blink',workN>0); }
 let lastPlan=null;            // last generated plan (steps[]) -> /plan with no arg shows it
 const convo=[];              // running conversation, used to invent a plan from context
 function stopAgent(){ if(agentAbort){ agentAbort.abort(); tool('Detenido.'); } }
@@ -329,6 +348,8 @@ async function agent(text){
   const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'}].concat(convo.map(m=>({role:m.role,content:m.content})));
   let wait=bot('<span class="text-gray-400">pensando…</span>');
   agentAbort=new AbortController();
+  setWorking(true);
+  try{
   for(let step=0; step<8; step++){
     let r;
     try{ r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
@@ -359,6 +380,7 @@ async function agent(text){
     return;
   }
   wait.innerHTML+='<div class="text-xs text-gray-500 mt-2">(límite de pasos)</div>';
+  } finally{ setWorking(false); }
 }
 
 /* ===================== slash commands (como en la app Agents) ===================== */
@@ -542,6 +564,7 @@ async function planReal(task){
   }
 
   const wait=bot('<span class="text-gray-400">generando plan…</span>'); agentAbort=new AbortController();
+  setWorking(true);
   try{
     const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key}, signal:agentAbort.signal,
@@ -553,6 +576,7 @@ async function planReal(task){
     try{ steps=(JSON.parse(m?m[0]:txt).steps)||[]; }catch(e){}
     wait.remove(); lastPlan=steps.length?steps:lastPlan; planCard(steps);
   }catch(e){ if(e.name==='AbortError') wait.innerHTML='(detenido)'; else wait.innerHTML='Error: '+e+' (posible CORS de DeepSeek)'; }
+  finally{ setWorking(false); }
 }
 
 function toggleHelp(){ bot('<b>Comandos slash:</b> <code>/help</code> <code>/clear</code> <code>/key &lt;k&gt;</code> <code>/ghtoken &lt;t&gt;</code> <code>/goal [texto]</code> <code>/plan [tarea]</code> <code>/run</code> (ejecuta el plan) <code>/loop</code><br><b>Disco</b> (IndexedDB, izq): <code>ls</code> <code>read &lt;f&gt;</code> <code>write &lt;f&gt; &lt;txt&gt;</code> <code>del &lt;f&gt;</code>.<br>Cualquier otra cosa va al <b>LLM</b> (DeepSeek, tools sobre el disco). ⬇/⬆ sincroniza con el repo.'); }
