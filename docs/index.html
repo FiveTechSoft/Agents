@@ -289,7 +289,7 @@ async function shOne(cmd, stdin){
         out.push('/'+e.path); });
       SH_EXIT=out.length?0:1; return out.join('\n'); }
     case 'write': { const fn=toks[0]||'untitled'; const c=toks.slice(1).join(' '); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
-    case 'cc': case 'clang': case 'gcc': { if(!a0[0]){SH_EXIT=1;return T('uso: cc <fichero.c>','usage: cc <file.c>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'cc: '+T('no existe ','no such file ')+a0[0];} return await ccRun(f.content); }
+    case 'cc': case 'clang': case 'gcc': { if(!toks.length){SH_EXIT=1;return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');} return await ccExec(toks); }
     case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
     case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?url.split('/').pop()||'index.html':null);
       if(!url){SH_EXIT=1;return name+': '+T('falta URL','missing URL');}
@@ -406,16 +406,30 @@ async function ensureClang(){ if(clangPkg) return clangPkg;
   tool('⚙️ Cargando clang (Wasmer SDK, primera vez, descarga grande)…');
   wasmerMod=await import('https://unpkg.com/@wasmer/sdk@latest/dist/index.mjs');
   await wasmerMod.init(); clangPkg=await wasmerMod.Wasmer.fromRegistry('clang/clang'); return clangPkg; }
-async function ccRun(code){
+// Full-ish clang invocation: multiple sources, -o, -c, flags, linking. Mounts the
+// disk's .c/.h/.cpp so #include resolves; runs the resulting wasm unless -c.
+async function ccExec(argv, inlineCode){
   let clang; try{ clang=await ensureClang(); }catch(e){ return 'clang no disponible: '+e; }
   try{
-    const project=new wasmerMod.Directory(); await project.writeFile('main.c', code);
-    const ins=await clang.entrypoint.run({args:['/project/main.c','-o','/project/main.wasm'],mount:{'/project':project}});
-    const o=await ins.wait(); if(!o.ok){ return 'compilación falló (exit '+o.code+'):\n'+(o.stderr||''); }
-    const wasm=await project.readFile('main.wasm');
-    const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
-    return ('✓ compilado + ejecutado\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim();
+    const project=new wasmerMod.Directory();
+    const all=await fsList(); for(const f of all){ if(/\.(c|h|hpp|hxx|cpp|cc|cxx)$/i.test(f.path)) await project.writeFile(f.path.split('/').pop(), f.content); }
+    if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); argv=['__main.c']; }
+    let outName=null, compileOnly=false; const cargs=[]; let nSrc=0;
+    for(let i=0;i<argv.length;i++){ const a=argv[i];
+      if(a==='-o'){ outName=argv[++i]; }
+      else if(a==='-c'){ compileOnly=true; cargs.push('-c'); }
+      else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ cargs.push('/project/'+a.split('/').pop()); nSrc++; }
+      else cargs.push(a); }
+    if(!nSrc) return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');
+    outName=outName||(compileOnly?'a.o':'a.out.wasm'); cargs.push('-o','/project/'+outName);
+    const ins=await clang.entrypoint.run({args:cargs, mount:{'/project':project}}); const o=await ins.wait();
+    if(!o.ok) return T('compilación falló','compilation failed')+' (exit '+o.code+'):\n'+(o.stderr||'');
+    if(compileOnly) return '✓ '+T('compilado','compiled')+' '+outName+(o.stderr?'\n'+o.stderr:'');
+    try{ const wasm=await project.readFile(outName); const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
+      return ('✓ '+outName+'\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim(); }
+    catch(e){ return '✓ '+T('compilado','compiled')+' '+outName+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
   }catch(e){ return 'cc error: '+e; } }
+async function ccRun(code){ return await ccExec([], code); }   // inline code path (/cc <code>, cc tool)
 
 /* ---- editor ---- */
 let edCur=null;
@@ -983,7 +997,7 @@ async function slashCmd(v){
     case '/tool': await toolCmd(arg); break;
     case '/sh': case '/shell': case '/bash': { const cwd=SHCWD; const out=await shRun(arg); termLine(arg||'', out, cwd); break; }
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
-    case '/cc': { let code=arg; if(/^[\w./-]+\.c$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await ccRun(code); setWorking(false); termLine('clang '+( /\.c$/.test(arg.trim())?arg:'‹code›'), out, SHCWD); break; }
+    case '/cc': { setWorking(true); const out = /\.c(\s|$)/.test(arg)? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(/\.c/.test(arg)?arg:'‹code›'), out, SHCWD); break; }
     default: tool(T('Comando desconocido: ','Unknown command: ')+cmd+'. '+T('Prueba /help.','Try /help.'));
   }
 }
