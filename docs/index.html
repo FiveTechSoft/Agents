@@ -177,6 +177,7 @@ async function newFile(){ let p=document.getElementById('newpath').value.trim();
 let SHCWD='';   // disk-relative cwd ('' = root)
 let SH_EXIT=0;  // last command exit code (for && ||)
 const SH_VARS={};  // shell variables
+let SH_BRK=false, SH_CONT=false;   // break / continue signals for loops
 function shVarSub(s){ return (s||'').replace(/\$\{(\w+)\}/g,(m,n)=>SH_VARS[n]!==undefined?SH_VARS[n]:'').replace(/\$(\w+)/g,(m,n)=>SH_VARS[n]!==undefined?SH_VARS[n]:''); }
 async function shExpandSubst(line){ let g=0; let m;
   while(g++<60){
@@ -185,7 +186,7 @@ async function shExpandSubst(line){ let g=0; let m;
     if(m=line.match(/`([^`]*)`/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
     break; }
   return line; }
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','if','test','[','true','false','export','unset']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 function parseMake(text){ const vars={}, targets={}; let cur=null;
   (text||'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
@@ -213,6 +214,8 @@ async function shOne(cmd, stdin){
     case 'hostname': return 'agents';
     case 'true': SH_EXIT=0; return '';
     case 'false': SH_EXIT=1; return '';
+    case 'break': SH_BRK=true; SH_EXIT=0; return '';
+    case 'continue': SH_CONT=true; SH_EXIT=0; return '';
     case 'export': { for(const x of a0){ const e=x.match(/^(\w+)=(.*)$/); if(e)SH_VARS[e[1]]=e[2]; } return ''; }
     case 'unset': { for(const x of a0) delete SH_VARS[x]; return ''; }
     case 'test': case '[': { const A=a0.slice(); if(name==='[' && A[A.length-1]===']') A.pop(); let ok=false;
@@ -286,10 +289,13 @@ async function shRun(line){   // for/while/if, ; && ||, $() $(()) vars, exit cod
   // for VAR in LIST; do BODY; done
   const fm=line.match(/^for\s+(\w+)\s+in\s+(.+?)\s*;\s*do\s+([\s\S]+?)\s*;?\s*done\s*$/);
   if(fm){ const v=fm[1], body=fm[3]; let items=[]; for(const tok of fm[2].trim().split(/\s+/)) items=items.concat(await shGlob(tok));
-    const out=[]; for(const it of items){ SH_VARS[v]=it; const o=await shRun(body); if(o)out.push(o); } return out.join('\n'); }
+    const out=[]; for(const it of items){ SH_VARS[v]=it; const o=await shRun(body); if(o)out.push(o); if(SH_BRK){SH_BRK=false;break;} if(SH_CONT)SH_CONT=false; } return out.join('\n'); }
   // while COND; do BODY; done
   const wm=line.match(/^while\s+([\s\S]+?)\s*;\s*do\s+([\s\S]+?)\s*;?\s*done\s*$/);
-  if(wm){ const out=[]; let g=0; while(g++<2000){ await shRun(wm[1]); if(SH_EXIT!==0)break; const o=await shRun(wm[2]); if(o)out.push(o); } if(g>=2000)out.push('while: '+T('límite de iteraciones','iteration limit')); return out.join('\n'); }
+  if(wm){ const out=[]; let g=0; while(g++<2000){ await shRun(wm[1]); if(SH_EXIT!==0)break; const o=await shRun(wm[2]); if(o)out.push(o); if(SH_BRK){SH_BRK=false;break;} if(SH_CONT){SH_CONT=false;continue;} } if(g>=2000)out.push('while: '+T('límite de iteraciones','iteration limit')); return out.join('\n'); }
+  // until COND; do BODY; done
+  const um=line.match(/^until\s+([\s\S]+?)\s*;\s*do\s+([\s\S]+?)\s*;?\s*done\s*$/);
+  if(um){ const out=[]; let g=0; while(g++<2000){ await shRun(um[1]); if(SH_EXIT===0)break; const o=await shRun(um[2]); if(o)out.push(o); if(SH_BRK){SH_BRK=false;break;} if(SH_CONT){SH_CONT=false;continue;} } if(g>=2000)out.push('until: '+T('límite de iteraciones','iteration limit')); return out.join('\n'); }
   // if COND; then BODY; [else BODY2;] fi
   const im=line.match(/^if\s+([\s\S]+?)\s*;\s*then\s+([\s\S]+?)(?:\s*;\s*else\s+([\s\S]+?))?\s*;?\s*fi\s*$/);
   if(im){ await shRun(im[1]); if(SH_EXIT===0) return await shRun(im[2]); if(im[3]) return await shRun(im[3]); return ''; }
@@ -297,7 +303,7 @@ async function shRun(line){   // for/while/if, ; && ||, $() $(()) vars, exit cod
   for(let i=0;i<parts.length;i+=2){ const op=parts[i-1], seg=parts[i]; if(!seg)continue;
     if(op==='&&' && SH_EXIT!==0) continue;
     if(op==='||' && SH_EXIT===0) continue;
-    const o=await shPipe(seg); if(o) acc.push(o); }
+    const o=await shPipe(seg); if(o) acc.push(o); if(SH_BRK||SH_CONT) break; }
   return acc.join('\n');
 }
 function termLine(cmd, out, cwd){
