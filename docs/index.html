@@ -28,9 +28,12 @@
   <!-- ====== Simulated disk (IndexedDB) — off-canvas drawer on mobile ====== -->
   <aside id="disk" class="w-72 max-w-[85vw] shrink-0 bg-gray-950 border-r border-gray-800 flex flex-col
          fixed md:static inset-y-0 left-0 z-40 -translate-x-full md:translate-x-0 transition-transform duration-200">
-    <div class="p-3 border-b border-gray-800 flex items-center justify-between">
-      <span class="font-semibold flex items-center gap-2">💾 Disco virtual</span>
-      <span id="diskinfo" class="text-[10px] text-gray-500"></span>
+    <div class="p-3 border-b border-gray-800 flex items-center justify-between gap-2">
+      <span class="font-semibold flex items-center gap-2 shrink-0">💾 Disco virtual</span>
+      <div class="flex items-center gap-2">
+        <span id="diskinfo" class="text-[10px] text-gray-500"></span>
+        <button onclick="eraseDisk()" title="Borrar todo el disco virtual" class="text-[10px] text-red-400 hover:text-red-200 border border-red-900/50 hover:bg-red-900/30 rounded px-2 py-0.5">Erase</button>
+      </div>
     </div>
     <div id="files" class="flex-1 overflow-y-auto scroll p-2 space-y-1 text-xs"></div>
     <div class="p-2 border-t border-gray-800 space-y-2">
@@ -155,6 +158,8 @@ async function refreshDisk(){
   renderNode(buildTree(items), box, 0);
   document.getElementById('diskinfo').textContent=items.length+' files · '+bytes+' B';
 }
+async function eraseDisk(){ if(!confirm('¿Borrar TODO el disco virtual? No se puede deshacer.')) return;
+  const all=await fsList(); for(const f of all) await fsDel(f.path); refreshDisk(); tool('🗑 Disco virtual borrado ('+all.length+' ficheros).'); }
 async function newFile(){ let p=document.getElementById('newpath').value.trim(); if(!p)return;
   if(p.endsWith('/')){ p+='.keep'; }   // trailing slash -> create an empty folder marker
   await fsPut(p,''); document.getElementById('newpath').value='';
@@ -786,11 +791,12 @@ function planCard(steps){
     if(s.state==='done'){ dot='<div class="dot h-5 w-5 rounded-full bg-green-500 border-4 border-gray-800 flex items-center justify-center shrink-0 z-10 cursor-pointer"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg></div>'; cls='text-xs font-semibold text-gray-300 line-through'; }
     else if(s.state==='active'){ dot='<div class="dot h-5 w-5 rounded-full bg-blue-500 border-4 border-gray-800 shrink-0 z-10 animate-pulse cursor-pointer"></div>'; cls='text-xs font-semibold text-blue-400'; }
     else { dot='<div class="dot h-5 w-5 rounded-full bg-gray-700 border-4 border-gray-800 shrink-0 z-10 cursor-pointer"></div>'; cls='text-xs font-medium text-gray-500'; }
-    const row=el('<div class="relative flex items-start gap-3"><div class="shrink-0">'+dot+'</div><div class="pt-0.5 flex-1 min-w-0 flex items-start gap-2"><h5 class="'+cls+' flex-1 outline-none" contenteditable="true"></h5><button class="del text-red-400 hover:text-red-300 text-xs shrink-0">✕</button></div></div>');
+    const row=el('<div class="relative flex items-start gap-3"><div class="shrink-0">'+dot+'</div><div class="pt-0.5 flex-1 min-w-0 flex items-start gap-2"><h5 class="'+cls+' flex-1 outline-none focus:bg-gray-900 focus:px-1 focus:rounded" contenteditable="true"></h5><button class="edt text-blue-400 hover:text-blue-300 text-xs shrink-0" title="Editar">✎</button><button class="del text-red-400 hover:text-red-300 text-xs shrink-0" title="Borrar">✕</button></div></div>');
     const h5=row.querySelector('h5'); h5.textContent=s.title||'';
     h5.onblur=()=>{ s.title=h5.textContent.trim(); };
     h5.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); h5.blur(); } };
     row.querySelector('.dot').onclick=()=>{ cycleState(s); planCard(steps); };
+    row.querySelector('.edt').onclick=()=>{ h5.focus(); const r=document.createRange(); r.selectNodeContents(h5); const sl=getSelection(); sl.removeAllRanges(); sl.addRange(r); };
     row.querySelector('.del').onclick=()=>{ steps.splice(idx,1); planCard(steps); };
     if(s.note){ const p=document.createElement('p'); p.className='text-[10px] text-gray-400 mt-1'; p.textContent=s.note; row.querySelector('.pt-0\\.5').appendChild(p); }
     body.appendChild(row); });
