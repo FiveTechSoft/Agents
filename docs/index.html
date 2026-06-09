@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agents — Web (simulated disk)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  html,body{height:100%}
+  .scroll::-webkit-scrollbar{width:8px}
+  .scroll::-webkit-scrollbar-thumb{background:#374151;border-radius:20px}
+</style>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen overflow-hidden font-sans text-sm">
+
+<div class="flex h-full relative">
+
+  <!-- mobile backdrop -->
+  <div id="backdrop" onclick="toggleDisk()" class="hidden fixed inset-0 bg-black/50 z-30 md:hidden"></div>
+
+  <!-- ====== Simulated disk (IndexedDB) — off-canvas drawer on mobile ====== -->
+  <aside id="disk" class="w-72 max-w-[85vw] shrink-0 bg-gray-950 border-r border-gray-800 flex flex-col
+         fixed md:static inset-y-0 left-0 z-40 -translate-x-full md:translate-x-0 transition-transform duration-200">
+    <div class="p-3 border-b border-gray-800 flex items-center justify-between">
+      <span class="font-semibold flex items-center gap-2">💾 Disco simulado</span>
+      <span id="diskinfo" class="text-[10px] text-gray-500"></span>
+    </div>
+    <div id="files" class="flex-1 overflow-y-auto scroll p-2 space-y-1 text-xs"></div>
+    <div class="p-2 border-t border-gray-800 space-y-2">
+      <div class="flex gap-1">
+        <input id="newpath" placeholder="ruta/archivo.txt" class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs">
+        <button onclick="newFile()" class="bg-gray-700 hover:bg-gray-600 rounded px-2 text-xs">+</button>
+      </div>
+      <div class="grid grid-cols-2 gap-1">
+        <button onclick="ghPull()" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1 text-xs">⬇ Pull repo</button>
+        <button onclick="ghPush()" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1 text-xs">⬆ Push repo</button>
+      </div>
+      <input id="ghrepo" placeholder="owner/name (push/pull)" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[11px]" value="FiveTechSoft/Agents">
+      <input id="ghpath" placeholder="carpeta destino en el repo" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[11px]" value="docs/space">
+      <input id="ghtok" type="password" placeholder="GitHub token (solo push)" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[11px]">
+    </div>
+  </aside>
+
+  <!-- ====== Chat / shell ====== -->
+  <main class="flex-1 flex flex-col min-w-0">
+    <div class="p-3 border-b border-gray-800 bg-gray-850 flex items-center justify-between gap-2">
+      <span class="font-semibold flex items-center gap-2">
+        <button onclick="toggleDisk()" class="md:hidden bg-gray-800 border border-gray-700 rounded px-2 py-1" title="Disco">💾</button>
+        😎 Agents — Web
+      </span>
+      <button onclick="toggleHelp()" class="text-xs text-gray-400 hover:text-gray-200">/help</button>
+    </div>
+    <div id="chat" class="flex-1 overflow-y-auto scroll p-4 space-y-4"></div>
+    <div class="p-3 border-t border-gray-800 flex gap-2">
+      <input id="prompt" placeholder="comando: ls · write a.txt Hola · read a.txt · del a.txt · (o pregunta al LLM)"
+        onkeydown="if(event.key==='Enter')run()"
+        class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500">
+      <button onclick="run()" class="bg-blue-600 hover:bg-blue-500 rounded-lg px-4">Enviar</button>
+    </div>
+  </main>
+</div>
+
+<!-- editor modal -->
+<div id="ed" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center p-6 z-50">
+  <div class="bg-gray-800 border border-gray-700 rounded-xl w-full max-w-2xl flex flex-col" style="height:70vh">
+    <div class="p-3 border-b border-gray-700 flex items-center justify-between">
+      <span id="edpath" class="font-mono text-xs text-pink-400"></span>
+      <div class="flex gap-2">
+        <button onclick="saveEd()" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs">Guardar</button>
+        <button onclick="closeEd()" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">Cerrar</button>
+      </div>
+    </div>
+    <textarea id="edtext" class="flex-1 bg-gray-900 p-3 font-mono text-xs resize-none focus:outline-none"></textarea>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   Simulated storage unit: a virtual filesystem on IndexedDB.
+   Each file = { path, content, mtime }. This is the "disk" the page
+   reads/writes; optionally synced to a GitHub repo via the Contents API.
+   ===================================================================== */
+const DB='agents-disk', STORE='files';
+function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB,1);
+  r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:'path'});
+  r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function fsPut(path,content){ const db=await idb(); return new Promise((res,rej)=>{
+  const t=db.transaction(STORE,'readwrite'); t.objectStore(STORE).put({path,content,mtime:Date.now()});
+  t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+async function fsGet(path){ const db=await idb(); return new Promise((res)=>{
+  const r=db.transaction(STORE).objectStore(STORE).get(path); r.onsuccess=()=>res(r.result||null); r.onerror=()=>res(null); }); }
+async function fsDel(path){ const db=await idb(); return new Promise((res)=>{
+  const t=db.transaction(STORE,'readwrite'); t.objectStore(STORE).delete(path); t.oncomplete=res; }); }
+async function fsList(){ const db=await idb(); return new Promise((res)=>{
+  const r=db.transaction(STORE).objectStore(STORE).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>res([]); }); }
+
+/* ---- disk UI ---- */
+async function refreshDisk(){
+  const items=await fsList(); const box=document.getElementById('files'); box.innerHTML='';
+  let bytes=0;
+  items.sort((a,b)=>a.path.localeCompare(b.path)).forEach(f=>{ bytes+=(f.content||'').length;
+    const row=document.createElement('div');
+    row.className='flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-gray-800 cursor-pointer group';
+    const name=document.createElement('span'); name.className='truncate text-gray-300'; name.textContent='📄 '+f.path;
+    name.onclick=()=>openEd(f.path);
+    const del=document.createElement('button'); del.className='opacity-0 group-hover:opacity-100 text-red-400 text-xs'; del.textContent='✕';
+    del.onclick=async(e)=>{ e.stopPropagation(); await fsDel(f.path); refreshDisk(); };
+    row.appendChild(name); row.appendChild(del); box.appendChild(row); });
+  document.getElementById('diskinfo').textContent=items.length+' files · '+bytes+' B';
+}
+async function newFile(){ const p=document.getElementById('newpath').value.trim(); if(!p)return;
+  await fsPut(p,''); document.getElementById('newpath').value=''; refreshDisk(); openEd(p); }
+
+/* ---- editor ---- */
+let edCur=null;
+async function openEd(path){ const f=await fsGet(path); edCur=path;
+  document.getElementById('edpath').textContent=path; document.getElementById('edtext').value=f?f.content:'';
+  document.getElementById('ed').classList.remove('hidden'); }
+function closeEd(){ document.getElementById('ed').classList.add('hidden'); }
+async function saveEd(){ if(edCur!=null){ await fsPut(edCur,document.getElementById('edtext').value); refreshDisk(); closeEd(); } }
+
+/* ---- chat helpers ---- */
+function el(h){ const t=document.createElement('template'); t.innerHTML=h.trim(); return t.content.firstChild; }
+const chat=()=>document.getElementById('chat');
+function down(){ const c=chat(); c.scrollTop=c.scrollHeight; }
+function user(t){ const d=el('<div class="flex justify-end"><div class="bg-blue-600 text-white p-2 px-4 rounded-xl rounded-tr-none max-w-[80%] whitespace-pre-wrap"></div></div>'); d.firstElementChild.textContent=t; chat().appendChild(d); down(); }
+function bot(html){ const d=el('<div class="bg-gray-800 border border-gray-700 p-3 rounded-xl rounded-tl-none max-w-[90%]"></div>'); d.innerHTML=html; chat().appendChild(d); down(); return d; }
+function tool(t){ const d=el('<div class="text-xs text-gray-400 border-l-2 border-green-600 pl-3 whitespace-pre-wrap"></div>'); d.textContent=t; chat().appendChild(d); down(); }
+
+/* =====================================================================
+   GitHub repo as durable storage (Contents API over fetch).
+   Pull: read every file under <path> into the disk. Push: commit each
+   disk file under <path>.
+   ===================================================================== */
+function ghHeaders(){ const h={'Accept':'application/vnd.github+json'}; const t=document.getElementById('ghtok').value.trim(); if(t)h['Authorization']='Bearer '+t; return h; }
+async function ghPull(){ const repo=document.getElementById('ghrepo').value.trim(), base=document.getElementById('ghpath').value.trim();
+  tool('Pull '+repo+'/'+base+' ...');
+  try{ const r=await fetch('https://api.github.com/repos/'+repo+'/contents/'+base,{headers:ghHeaders()});
+    if(!r.ok){ tool('Pull error '+r.status); return; }
+    const list=await r.json(); let n=0;
+    for(const it of list){ if(it.type==='file'){ const fr=await fetch(it.download_url); await fsPut(base+'/'+it.name,await fr.text()); n++; } }
+    refreshDisk(); tool('Pulled '+n+' files.');
+  }catch(e){ tool('Pull failed: '+e); } }
+async function ghPush(){ const repo=document.getElementById('ghrepo').value.trim(), base=document.getElementById('ghpath').value.trim();
+  if(!document.getElementById('ghtok').value.trim()){ tool('Push necesita un token.'); return; }
+  const items=await fsList(); let n=0; tool('Push '+items.length+' files to '+repo+'/'+base+' ...');
+  for(const f of items){ const url='https://api.github.com/repos/'+repo+'/contents/'+base+'/'+f.path;
+    let sha=''; const g=await fetch(url,{headers:ghHeaders()}); if(g.ok){ sha=(await g.json()).sha; }
+    const body={message:'agents-web: save '+f.path,content:btoa(unescape(encodeURIComponent(f.content||'')))}; if(sha)body.sha=sha;
+    const p=await fetch(url,{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body)}); if(p.ok)n++; }
+  tool('Pushed '+n+' files.'); }
+
+/* =====================================================================
+   Mini command shell + optional LLM agent (DeepSeek, function calling).
+   Shell commands operate directly on the simulated disk.
+   ===================================================================== */
+async function run(){
+  const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
+  const m=v.match(/^(ls|read|write|del|cat|rm)\b\s*(.*)$/i);
+  if(m){ const cmd=m[1].toLowerCase(), rest=m[2];
+    if(cmd==='ls'){ const f=await fsList(); tool(f.length?f.map(x=>x.path).join('\n'):'(disco vacío)'); }
+    else if(cmd==='read'||cmd==='cat'){ const f=await fsGet(rest.trim()); tool(f?f.content:'no existe: '+rest); }
+    else if(cmd==='del'||cmd==='rm'){ await fsDel(rest.trim()); refreshDisk(); tool('borrado '+rest); }
+    else if(cmd==='write'){ const sp=rest.indexOf(' '); const p=sp<0?rest:rest.slice(0,sp); const c=sp<0?'':rest.slice(sp+1); await fsPut(p,c); refreshDisk(); tool('escrito '+p+' ('+c.length+' B)'); }
+    return;
+  }
+  // otherwise: send to the LLM agent
+  await agent(v);
+}
+
+/* ---- LLM agent with tools over the disk ---- */
+const TOOLS=[
+ {type:'function',function:{name:'list_files',description:'List files on the disk',parameters:{type:'object',properties:{}}}},
+ {type:'function',function:{name:'read_file',description:'Read a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
+ {type:'function',function:{name:'write_file',description:'Create/overwrite a file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},
+ {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}}
+];
+async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
+  if(name==='list_files'){ return (await fsList()).map(f=>f.path).join('\n')||'(empty)'; }
+  if(name==='read_file'){ const f=await fsGet(args.path); return f?f.content:'not found'; }
+  if(name==='write_file'){ await fsPut(args.path,args.content||''); refreshDisk(); return 'wrote '+args.path; }
+  if(name==='delete_file'){ await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
+  return 'unknown tool'; }
+
+function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
+
+async function agent(text){
+  const key=getKey(); if(!key){ tool('Sin API key.'); return; }
+  const msgs=[{role:'system',content:'Eres Agents Web. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Responde breve.'},{role:'user',content:text}];
+  const wait=bot('<span class="text-gray-400">pensando…</span>');
+  for(let step=0; step<8; step++){
+    let r;
+    try{ r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({model:'deepseek-chat',messages:msgs,tools:TOOLS})}); }
+    catch(e){ wait.innerHTML='Error de red/CORS: '+e+'. (DeepSeek puede bloquear peticiones de navegador; usa un proxy CORS o el disco con comandos ls/read/write.)'; return; }
+    if(!r.ok){ wait.innerHTML='Error LLM '+r.status; return; }
+    const j=await r.json(); const mo=j.choices[0].message; msgs.push(mo);
+    if(mo.tool_calls&&mo.tool_calls.length){
+      for(const tc of mo.tool_calls){ tool('▸ '+tc.function.name+' '+tc.function.arguments);
+        const out=await execTool(tc.function.name,tc.function.arguments);
+        msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
+      continue;
+    }
+    wait.innerHTML=window.marked?marked.parse(mo.content||''):(mo.content||''); return;
+  }
+  wait.innerHTML+='<div class="text-xs text-gray-500 mt-2">(límite de pasos)</div>';
+}
+
+function toggleHelp(){ bot('<b>Disco simulado</b> (IndexedDB) a la izquierda.<br>Comandos: <code>ls</code>, <code>read &lt;f&gt;</code>, <code>write &lt;f&gt; &lt;texto&gt;</code>, <code>del &lt;f&gt;</code>.<br>Cualquier otra cosa va al <b>LLM</b> (DeepSeek, con tools sobre el disco).<br>⬇/⬆ sincroniza el disco con una carpeta del repo (Contents API).'); }
+
+function toggleDisk(){ const d=document.getElementById('disk'), b=document.getElementById('backdrop');
+  const open=d.classList.contains('-translate-x-full');
+  d.classList.toggle('-translate-x-full',!open); d.classList.toggle('translate-x-0',open);
+  b.classList.toggle('hidden',!open); }
+// auto-close the drawer after picking a file on mobile
+document.getElementById('files').addEventListener('click',()=>{ if(window.innerWidth<768) setTimeout(()=>{ const d=document.getElementById('disk'); if(!d.classList.contains('-translate-x-full')){} },0); });
+
+refreshDisk();
+bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es una <b>unidad de almacenamiento simulada</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
+</script>
+</body>
+</html>

@@ -32,7 +32,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"/{obj,gen,jni-libs/arm64-v8a,apk,classes,res-compi
 
 # ---- 1. PRG -> C (native host harbour.exe) ----
 echo ">>> [1/8] harbour.exe (app + ccharbour core)"
-PRGS="$APP/src/prg/agenticai_droid.prg /c/fwteam/samples/AgenticAI/ccguistub.prg \
+PRGS="$APP/src/prg/agents.prg /c/fwteam/samples/AgenticAI/ccguistub.prg \
   $CC_SRC/ccconfig.prg $CC_SRC/ccsse.prg $CC_SRC/cchttp.prg $CC_SRC/ccapi.prg \
   $CC_SRC/ccagent.prg $CC_SRC/cctools.prg $CC_SRC/cctools_file.prg \
   $CC_SRC/cctools_search.prg $CC_SRC/cctools_shell.prg $CC_SRC/cctools_web.prg \

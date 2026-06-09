@@ -26,6 +26,7 @@ STATIC s_cGhToken             // runtime GitHub token (/ghtoken overrides the fi
 THREAD STATIC t_nId           // this thread's agent id
 THREAD STATIC t_oClient, t_aMessages, t_aSchemas, t_bExec, t_bTransport
 THREAD STATIC t_lStop, t_lYolo, t_lRunning, t_nTurn, t_cAskAnswer, t_cPermit
+THREAD STATIC t_cGoal         // active goal set by /goal, used by /plan
 
 // ---------------------------------------------------------------------------
 // Dispatcher thread.
@@ -199,10 +200,23 @@ STATIC FUNCTION SlashCommand( cLine )
          s_cGhToken := cArg
          WCall( "addNote", "GitHub token set. github_read/list/write enabled." )
       ENDIF
+   CASE cCmd == "/goal"
+      IF !Empty( cArg )
+         t_cGoal := cArg
+      ENDIF
+      WCall( "goalCard", iif( Empty( t_cGoal ), ;
+         "Migrar todo el sistema de autenticacion de JWT a sesiones basadas en " + ;
+         "cookies y asegurar que la cobertura de pruebas no baje del 90%.", t_cGoal ) )
+   CASE cCmd == "/plan"
+      PlanReal( iif( !Empty( cArg ), cArg, ;
+                iif( !Empty( t_cGoal ), t_cGoal, ;
+                "Migrar el sistema de autenticacion de JWT a sesiones con cookies" ) ) )
+   CASE cCmd == "/loop"
+      WCall( "loopCard", hb_jsonEncode( { "iter" => 3, "max" => 15, "cmds" => 8 } ) )
    CASE cCmd == "/clear"
       ClearAll()
    CASE cCmd == "/help"
-      WCall( "addNote", "Commands: /key <api-key>  /ghtoken <token>  /clear  /help" )
+      WCall( "addNote", "Commands: /key  /ghtoken  /goal  /plan  /loop  /clear  /help" )
    OTHERWISE
       WCall( "addNote", "Unknown command. Try /key, /clear, /help." )
    ENDCASE
@@ -447,6 +461,57 @@ STATIC FUNCTION WhatsNew()
           "- DeepSeek respondiendo en el movil; markdown (marked.js)." + Chr( 10 ) + ;
           "- API key desde fichero local; /key override; boton de envio." + Chr( 10 ) + ;
           "Pendiente: multi-agente concurrente (hb_threadStart), streaming."
+
+// /plan, real: ask the LLM to break the task into steps and render the plan card.
+STATIC FUNCTION PlanReal( cTask )
+   LOCAL aMsg, hRes, cAns, cJson, oErr, hPlan
+   WCall( "addUser", "/plan " + cTask )
+   WCall( "setStatus", "Generando plan...", "busy" )
+   WCall( "setRunning", "1" )
+
+   aMsg := { { "role" => "system", "content" => ;
+             "You are a planner. Break the user's task into 3 to 6 short concrete " + ;
+             "steps. Reply ONLY with compact JSON (real double quotes): an object " + ;
+             "with key 'steps', an array of objects each with keys 'title' (string) " + ;
+             "and 'state'. Make the FIRST step state 'active' and the rest 'pending'. " + ;
+             "No markdown, no prose, JSON only." }, ;
+             { "role" => "user", "content" => cTask } }
+
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      hRes := CC_AgentRun( t_oClient, aMsg, ;
+                 { "model" => "deepseek-chat", "transport" => t_bTransport, ;
+                   "max_iterations" => 1 }, NIL )
+      cAns  := LastAssistant( hRes )
+   RECOVER USING oErr
+      cAns := ""
+   END SEQUENCE
+
+   cJson := ExtractJson( cAns )
+   hPlan := hb_jsonDecode( cJson )       // direct-return form
+   IF ValType( hPlan ) == "H" .AND. hb_HHasKey( hPlan, "steps" )
+      WCall( "planCard", hb_jsonEncode( hPlan ) )
+   ELSE
+      WCall( "planCard", cJson )        // let the page try JSON.parse as a fallback
+   ENDIF
+   WCall( "setRunning", "0" )
+   WCall( "setStatus", "Ready.", "idle" )
+RETURN NIL
+
+STATIC FUNCTION ExtractJson( cText )
+   LOCAL n1, n2, c
+   cText := hb_CStr( cText )
+   n1 := At( "{", cText )
+   n2 := RAt( "}", cText )
+   IF n1 == 0 .OR. n2 <= n1
+      RETURN '{"steps":[]}'
+   ENDIF
+   c := SubStr( cText, n1, n2 - n1 + 1 )
+   // normalize: collapse newlines/tabs and strip trailing commas (LLMs add them)
+   c := StrTran( StrTran( StrTran( c, Chr( 13 ), " " ), Chr( 10 ), " " ), Chr( 9 ), " " )
+   DO WHILE ", }" $ c .OR. ", ]" $ c .OR. ",}" $ c .OR. ",]" $ c
+      c := StrTran( StrTran( StrTran( StrTran( c, ", }", " }" ), ", ]", " ]" ), ",}", "}" ), ",]", "]" )
+   ENDDO
+RETURN c
 
 STATIC FUNCTION SystemPrompt()
    RETURN "You are Agents, a coding agent running on Android. Be concise. " + ;
@@ -773,6 +838,48 @@ STATIC FUNCTION ChatHtml()
     card.appendChild(btn); card.appendChild(body); c.appendChild(card);
     c.scrollTop=0;   // keep the version line in view on startup
   }
+  function userBubble(id, text){ const c=panel(id); if(!c)return;
+    const d=el('<div class="flex justify-end mb-1"><div class="bg-blue-600 text-white p-2 px-4 rounded-xl rounded-tr-none text-xs font-mono"></div></div>');
+    d.firstElementChild.textContent=text; c.appendChild(d); down(id); }
+
+  // /goal -> "Objetivo Activo" card
+  function goalCard(id, text){ const c=panel(id); if(!c)return; userBubble(id,'/goal');
+    const card=el('<div class="bg-gradient-to-br from-indigo-900/40 to-gray-800 border border-indigo-500/50 p-4 rounded-xl shadow-sm relative overflow-hidden"></div>');
+    card.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="absolute -right-4 -bottom-4 text-indigo-500/10"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>'+
+      '<div class="flex items-start gap-3 relative z-10"><div class="p-2 bg-indigo-500/20 text-indigo-400 rounded-lg shrink-0 mt-0.5"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></div>'+
+      '<div><h4 class="text-indigo-300 font-semibold text-xs uppercase tracking-wider mb-1">Objetivo Activo</h4><p class="text-gray-200 text-sm leading-relaxed goaltext"></p></div></div>';
+    card.querySelector('.goaltext').textContent=text||'(sin objetivo definido)'; c.appendChild(card); down(id); }
+
+  // /plan -> "Plan de Accion" timeline. steps: [{title,state}] state=done|active|pending
+  function planCard(id, json){ const c=panel(id); if(!c)return; userBubble(id,'/plan');
+    let d; try{ d=JSON.parse(json); }catch(e){ d={steps:[]}; }
+    const steps=d.steps||[]; const done=steps.filter(function(s){return s.state==='done';}).length;
+    const card=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl shadow-sm"></div>');
+    card.innerHTML='<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700"><h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-blue-400"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>Plan de Accion</h4><span class="text-[10px] bg-blue-900/50 text-blue-300 px-2 py-1 rounded font-medium">'+done+' / '+steps.length+' Completado</span></div><div class="planbody space-y-4 relative before:absolute before:inset-0 before:ml-2.5 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-green-500 before:via-blue-500 before:to-gray-700"></div>';
+    const body=card.querySelector('.planbody');
+    steps.forEach(function(s){
+      let dot,cls;
+      if(s.state==='done'){ dot='<div class="h-5 w-5 rounded-full bg-green-500 border-4 border-gray-800 flex items-center justify-center shrink-0 z-10"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg></div>'; cls='text-xs font-semibold text-gray-300 line-through'; }
+      else if(s.state==='active'){ dot='<div class="h-5 w-5 rounded-full bg-blue-500 border-4 border-gray-800 shrink-0 z-10 animate-pulse"></div>'; cls='text-xs font-semibold text-blue-400'; }
+      else { dot='<div class="h-5 w-5 rounded-full bg-gray-700 border-4 border-gray-800 shrink-0 z-10"></div>'; cls='text-xs font-medium text-gray-500'; }
+      const row=el('<div class="relative flex items-start gap-4">'+dot+'<div class="pt-0.5"><h5 class="'+cls+'"></h5></div></div>');
+      row.querySelector('h5').textContent=s.title||'';
+      if(s.note){ const p=document.createElement('p'); p.className='text-[10px] text-gray-400 mt-1'; p.textContent=s.note; row.querySelector('h5').parentNode.appendChild(p); }
+      body.appendChild(row);
+    });
+    c.appendChild(card); down(id); }
+
+  // /loop -> "Telemetria del Bucle" card. d:{iter,max,cmds}
+  function loopCard(id, json){ const c=panel(id); if(!c)return; userBubble(id,'/loop');
+    let d; try{ d=JSON.parse(json); }catch(e){ d={}; }
+    const card=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl shadow-sm"></div>');
+    card.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-4 flex items-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-orange-400"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.5"></path></svg>Telemetria del Bucle</h4>'+
+      '<div class="grid grid-cols-2 gap-3 mb-4"><div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-gray-100">'+(d.iter||0)+' <span class="text-xs text-gray-500 font-normal">/ '+(d.max||0)+'</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Iteracion Actual</div></div>'+
+      '<div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-orange-400">'+(d.cmds||0)+' <span class="text-xs text-gray-500 font-normal">cmds</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Limite Autonomo</div></div></div>'+
+      '<div class="flex items-center justify-between bg-gray-900 p-2.5 rounded border border-gray-700"><div class="flex items-center gap-2"><span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500"></span></span><span class="text-xs text-gray-300">Bucle en ejecucion</span></div><button class="loopstop text-[10px] bg-red-900/50 text-red-300 hover:bg-red-800/60 px-2 py-1 rounded border border-red-800/50">Interrumpir</button></div>';
+    card.querySelector('.loopstop').onclick=function(){ send(id,'stop',''); };
+    c.appendChild(card); down(id); }
+
   function setStatus(id, text, state){ /* could show a per-tab dot */ }
   function setRunning(id, b){ if(A[id]) A[id].running=(b==='1'); }
   function clearChat(id){ const c=panel(id); if(c) c.innerHTML=''; }
@@ -833,6 +940,14 @@ STATIC FUNCTION ChatHtml()
     const tabs=document.getElementById('tabs');
     const add=el('<button class="tab tab-off">+</button>');
     add.onclick=function(){ send(0,'newagent',''); }; tabs.appendChild(add);
+
+    // stop + clear buttons, fixed top-right (left of the kebab), inside the tab bar
+    const stp=el('<button class="fbtn" style="position:fixed;top:8px;right:80px;z-index:60;background:#273244" title="Detener"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="margin:auto"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg></button>');
+    stp.onclick=function(ev){ ev.stopPropagation(); send(cur,'stop',''); };
+    document.body.appendChild(stp);
+    const clr=el('<button class="fbtn" style="position:fixed;top:8px;right:44px;z-index:60;background:#273244" title="Limpiar chat"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin:auto"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>');
+    clr.onclick=function(ev){ ev.stopPropagation(); send(cur,'clear',''); };
+    document.body.appendChild(clr);
 
     // config kebab (three vertical dots), fixed at the very top-right so the
     // agent tabs (added later, scrolling) never push it out of place.
