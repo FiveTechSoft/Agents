@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u16';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q='?u='+Date.now();try{var ss=new URLSearchParams(location.search).get('session');if(ss)q+='&session='+encodeURIComponent(ss);}catch(e){}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u17';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q='?u='+Date.now();try{var ss=new URLSearchParams(location.search).get('session');if(ss)q+='&session='+encodeURIComponent(ss);}catch(e){}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1151,7 +1151,7 @@ async function shareSession(){
   c.innerHTML='<h4 class="text-sm font-semibold text-blue-300 mb-2">🔗 '+T('Sesión compartida (solo lectura)','Shared session (read-only)')+'</h4>';
   const inp=el('<input readonly class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs font-mono text-gray-300">'); inp.value=url; inp.onclick=()=>inp.select();
   const note=el('<p class="text-[10px] text-gray-500 mt-2"></p>');
-  note.textContent=T('Copiado al portapapeles. Quien abra el enlace verá la conversación','Copied to clipboard. Anyone opening the link sees the conversation')+(data.disk?T(' y el disco ('+Object.keys(data.disk).length+' ficheros).',' and the disk ('+Object.keys(data.disk).length+' files).'):'.');
+  note.textContent=T('Copiado al portapapeles. Quien abra el enlace verá la conversación','Copied to clipboard. Anyone opening the link sees the conversation')+(data.disk?T(' y el disco ('+Object.keys(data.disk).length+' ficheros).',' and the disk ('+Object.keys(data.disk).length+' files).'):'.')+(url.length>2000?' '+T('💡 Con un token GitHub (/ghtoken) el enlace sería corto (Gist).','💡 With a GitHub token (/ghtoken) the link would be short (Gist).'):'');
   c.appendChild(inp); c.appendChild(note); chat().appendChild(c); down();
 }
 async function loadShared(){
