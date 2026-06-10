@@ -195,7 +195,7 @@ function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
     if(/^[ \t]+/.test(raw) && cur){ targets[cur].recipe.push(mkExpand(raw.replace(/^[ \t]+@?/,''),vars)); return; }   // any indent = recipe (tabs optional)
     const am=raw.match(/^(\w+)\s*:?=\s*(.*)$/) && raw.match(/^(\w+)\s*(?::=|\?=|=)\s*(.*)$/);
     if(am){ vars[am[1]]=mkExpand(am[2],vars); return; }
-    const tm=raw.match(/^([^:=#]+):(?!=)(.*)$/); if(tm){ cur=tm[1].trim(); targets[cur]={deps:tm[2].trim().split(/\s+/).filter(Boolean),recipe:[]}; } });
+    const tm=raw.match(/^([^:=#]+):(?!=)(.*)$/); if(tm){ cur=mkExpand(tm[1].trim(),vars); targets[cur]={deps:mkExpand(tm[2].trim(),vars).split(/\s+/).filter(d=>d&&d!=='|'),recipe:[]}; } });
   return targets; }
 function shNorm(p){ const out=[]; (p||'').split('/').forEach(s=>{ if(s===''||s==='.')return; if(s==='..')out.pop(); else out.push(s); }); return out.join('/'); }
 function shResolve(arg){ if(!arg) return shNorm(SHCWD); return shNorm(arg.startsWith('/')?arg:(SHCWD+'/'+arg)); }
