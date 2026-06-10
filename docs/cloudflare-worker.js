@@ -1,18 +1,31 @@
 /**
- * Agents Web — CORS proxy (Cloudflare Worker, free tier).
+ * Agents Web — CORS proxy + short session links (Cloudflare Worker, free tier).
  *
- * Two call styles:
- *   1) Generic:  https://YOUR-WORKER/?url=https%3A%2F%2Fhost%2Ffile.zip   (curl/wget, binary OK)
- *   2) Path:     https://YOUR-WORKER/https://github.com/owner/repo.git/...  (isomorphic-git smart-http)
+ * Call styles:
+ *   1) Generic proxy:  https://YOUR-WORKER/?url=https%3A%2F%2Fhost%2Ffile.zip   (curl/wget, binary OK)
+ *   2) Path proxy:     https://YOUR-WORKER/https://github.com/owner/repo.git/...  (isomorphic-git smart-http)
+ *   3) Sessions (KV):  POST /session  (JSON body)  -> {"id":"aB3xYz12k"}
+ *                      GET  /session/<id>          -> the stored JSON
  *
- * Passes method, headers (incl. Authorization) and body through; streams binary
+ * Proxy passes method, headers (incl. Authorization) and body through; streams binary
  * responses unchanged; adds permissive CORS so a static page can use it.
  *
- * Deploy (1 minute):
- *   - https://dash.cloudflare.com -> Workers & Pages -> Create Worker
- *   - paste this file, Deploy. Copy the *.workers.dev URL.
+ * Deploy (2 minutes):
+ *   - https://dash.cloudflare.com -> Workers & Pages -> Create Worker -> paste this file, Deploy.
+ *   - Sessions need a KV namespace: Storage & Databases -> KV -> Create namespace "agents-sessions",
+ *     then Worker -> Settings -> Bindings -> Add -> KV namespace, variable name SESSIONS.
  *   - in Agents Web run:  /proxy https://your-worker.your-name.workers.dev
- * Or with wrangler:  npx wrangler deploy cloudflare-worker.js
+ *     From then on the Share button stores sessions in KV and yields short links.
+ * Or with wrangler, create wrangler.toml:
+ *   name = "agents-proxy"
+ *   main = "cloudflare-worker.js"
+ *   compatibility_date = "2026-01-01"
+ *   [[kv_namespaces]]
+ *   binding = "SESSIONS"
+ *   id = "<your-kv-namespace-id>"
+ * and run:  npx wrangler deploy
+ *
+ * Sessions expire after 180 days (SESSION_TTL). Size cap 2 MB.
  */
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -21,17 +34,49 @@ const CORS = {
   'Access-Control-Expose-Headers': '*',
   'Access-Control-Max-Age': '86400',
 };
+const SESSION_TTL = 60 * 60 * 24 * 180;   // 180 days
+const SESSION_MAX = 2_000_000;            // 2 MB
+
+const json = (obj, status = 200) =>
+  new Response(JSON.stringify(obj), { status, headers: { ...CORS, 'content-type': 'application/json' } });
+
+const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function newId(len = 10) {
+  const r = crypto.getRandomValues(new Uint8Array(len));
+  let id = ''; for (const b of r) id += ALPHA[b % ALPHA.length];
+  return id;
+}
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
     const u = new URL(request.url);
+
+    // ---- short session links (KV) ----
+    if (u.pathname === '/session' && request.method === 'POST') {
+      if (!env || !env.SESSIONS) return json({ error: 'KV namespace SESSIONS not bound (see file header)' }, 501);
+      const body = await request.text();
+      if (!body) return json({ error: 'empty body' }, 400);
+      if (body.length > SESSION_MAX) return json({ error: 'session too big (2MB max)' }, 413);
+      try { JSON.parse(body); } catch (e) { return json({ error: 'body must be JSON' }, 400); }
+      const id = newId();
+      await env.SESSIONS.put(id, body, { expirationTtl: SESSION_TTL });
+      return json({ id });
+    }
+    if (u.pathname.startsWith('/session/') && request.method === 'GET') {
+      if (!env || !env.SESSIONS) return json({ error: 'KV namespace SESSIONS not bound (see file header)' }, 501);
+      const v = await env.SESSIONS.get(u.pathname.slice('/session/'.length));
+      if (v == null) return json({ error: 'not found or expired' }, 404);
+      return new Response(v, { headers: { ...CORS, 'content-type': 'application/json' } });
+    }
+
+    // ---- generic CORS proxy ----
     // target: ?url=<encoded>  OR  everything after the leading slash (git smart-http style)
     let target = u.searchParams.get('url');
     if (!target) target = decodeURIComponent(u.pathname.slice(1)) + (u.search || '');
     if (!/^https?:\/\//i.test(target)) {
-      return new Response('Usage: /?url=<https url>  or  /<https url>', { status: 400, headers: CORS });
+      return new Response('Usage: /?url=<https url>  or  /<https url>  or  POST /session', { status: 400, headers: CORS });
     }
 
     const h = new Headers(request.headers);

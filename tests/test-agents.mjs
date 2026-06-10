@@ -210,6 +210,41 @@ try {
   ok('Share: click genera enlace o aviso');
 } catch (e) { ko('Share: botón cabecera (excepción)', String(e).slice(0, 150)); }
 
+// ---------- 5d. KV short links via Cloudflare Worker (mocked) ----------
+// own context with the COI service worker blocked: SW-originated fetches bypass page.route
+try {
+  const ctx2 = await browser.newContext({ serviceWorkers: 'block' });
+  const p2 = await ctx2.newPage();
+  await p2.route('https://mock-worker.test/session', r => r.fulfill({
+    status: 200, contentType: 'application/json',
+    headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ id: 'TESTID123' })
+  }));
+  await p2.route('https://mock-worker.test/session/TESTID123', r => r.fulfill({
+    status: 200, contentType: 'application/json',
+    headers: { 'access-control-allow-origin': '*' },
+    body: JSON.stringify({ v: 1, chat: '<div class="font-mono">KV_MARKER transcript via worker</div>', convo: [{ role: 'user', content: 'kv' }] })
+  }));
+  await p2.goto(URL, { waitUntil: 'domcontentloaded' });
+  await p2.waitForSelector('#prompt', { timeout: 15000 });
+  await p2.waitForTimeout(1000);
+  await p2.evaluate(() => setProxy('https://mock-worker.test'));
+  await p2.click('button:text-is("🔗 Share")');
+  await p2.waitForFunction(() => {
+    const inp = [...document.querySelectorAll('#chat input[readonly]')].pop();
+    return inp && inp.value.includes('session=kv-');
+  }, null, { timeout: 8000 });
+  const link = await p2.evaluate(() => [...document.querySelectorAll('#chat input[readonly]')].pop().value);
+  link.includes('?session=kv-TESTID123') && link.includes('via=mock-worker.test')
+    ? ok('KV: share genera enlace corto', link.slice(link.indexOf('?')))
+    : ko('KV: share genera enlace corto', link);
+  await p2.goto(URL.replace(/[#?].*$/, '') + '?session=kv-TESTID123&via=mock-worker.test', { waitUntil: 'domcontentloaded' });
+  await p2.waitForSelector('#prompt', { timeout: 15000 });
+  await p2.waitForFunction(() => document.getElementById('chat').innerText.includes('KV_MARKER'), null, { timeout: 8000 })
+    .then(() => ok('KV: visor carga sesión desde worker'))
+    .catch(async () => ko('KV: visor carga sesión', (await p2.innerText('#chat')).slice(0, 120)));
+  await ctx2.close();
+} catch (e) { ko('KV (excepción)', String(e).slice(0, 200)); }
+
 // ---------- 6. markdown preview ----------
 try {
   await page.fill('#newpath', 'notas.md');

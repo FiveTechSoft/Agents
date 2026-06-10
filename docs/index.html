@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u17';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q='?u='+Date.now();try{var ss=new URLSearchParams(location.search).get('session');if(ss)q+='&session='+encodeURIComponent(ss);}catch(e){}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u18';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1139,7 +1139,12 @@ async function shareSession(){
   // or a disk file, redact it before the session leaves this browser
   try{ const secrets=[localStorage.getItem('ds_key')||'', ghTok()||''].filter(s=>s.length>8);
     for(const s of secrets){ if(json.indexOf(s)>=0){ json=json.split(s).join('[REDACTED]'); tool(T('⚠️ Una clave aparecía en la sesión y se ha ocultado en el enlace.','⚠️ A key appeared in the session and was redacted from the link.')); } } }catch(e){}
-  if(ghTok()){
+  if(PROXY){   // shortest links: the Cloudflare Worker stores the session in KV (see docs/cloudflare-worker.js)
+    try{ const r=await fetch(PROXY+'/session',{method:'POST',body:json});
+      if(r.ok){ const j=await r.json(); url=base+'?session=kv-'+j.id+'&via='+encodeURIComponent(new URL(PROXY).host); }
+      else tool('KV: HTTP '+r.status+' — '+T('¿falta el binding SESSIONS en el worker?','is the SESSIONS binding missing on the worker?'));
+    }catch(e){ tool('KV: '+e); } }
+  if(!url && ghTok()){
     try{ const r=await fetch('https://api.github.com/gists',{method:'POST',headers:ghHeaders(),
         body:JSON.stringify({description:'Agents Web — shared session',public:false,files:{'agents-session.json':{content:json}}})});
       if(r.ok) url=base+'?session='+(await r.json()).id; else tool('gist: HTTP '+r.status);
@@ -1157,8 +1162,14 @@ async function shareSession(){
 async function loadShared(){
   let json=null;
   try{
-    const sid=new URLSearchParams(location.search).get('session');
-    if(sid){ const r=await fetch('https://api.github.com/gists/'+encodeURIComponent(sid)); if(!r.ok) throw new Error('gist HTTP '+r.status);
+    const sp=new URLSearchParams(location.search); const sid=sp.get('session');
+    if(sid && sid.startsWith('kv-')){   // short link served by the user's Cloudflare Worker (&via=<host>)
+      const host=(sp.get('via')||'').trim();
+      if(!/^[\w.-]+(:\d+)?$/.test(host)) throw new Error(T('enlace sin host válido (&via=)','link has no valid host (&via=)'));
+      const r=await fetch('https://'+host+'/session/'+encodeURIComponent(sid.slice(3)));
+      if(!r.ok) throw new Error('KV HTTP '+r.status);
+      json=await r.text(); }
+    else if(sid){ const r=await fetch('https://api.github.com/gists/'+encodeURIComponent(sid)); if(!r.ok) throw new Error('gist HTTP '+r.status);
       const j=await r.json(); const f=j.files&&(j.files['agents-session.json']||Object.values(j.files)[0]); json=f&&f.content; }
     else if(location.hash.startsWith('#s=')){ json=await inflateB64(location.hash.slice(3)); }
   }catch(e){ tool(T('No se pudo cargar la sesión compartida (enlace incompleto o dañado — ¿se cortó al copiarlo?): ','Could not load the shared session (incomplete or corrupted link — was it cut when copying?): ')+e); return false; }
