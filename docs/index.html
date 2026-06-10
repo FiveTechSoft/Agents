@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u31';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u32';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1010,6 +1010,7 @@ function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
   }); }
 
 let agentAbort=null;
+let AGENT_WAITING=false;      // last agent turn ended asking the user something (pauses /run)
 let workN=0;                  // blink the 😎 icon while Agents is working
 let tStart=0, tTimer=null, tOutTok=0;   // live timer + token flow
 function kfmt(n){ n=n||0; return n>=1000? (n/1000).toFixed(1)+'k' : String(Math.round(n)); }
@@ -1110,6 +1111,7 @@ async function streamChat(msgs, wait){
 
 async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
+  AGENT_WAITING=false;
   convo.push({role:'user',content:text}); curPanel=null;
   const snap=await snapshotDisk();   // for rollback on abort
   const skillsTxt=await activeSkillsPrompt();
@@ -1142,7 +1144,8 @@ async function agent(text){
         continue;
       }
       convo.push({role:'assistant',content:res.content||''});
-      if(/[?¿]/.test(res.content||'')){ const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus(); doneLine('Esperando respuesta del usuario…'); }
+      AGENT_WAITING=/[?¿]/.test(res.content||'');
+      if(AGENT_WAITING){ const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus(); doneLine('Esperando respuesta del usuario…'); }
       return;
     }
   } finally{ setWorking(false); saveSession(); checkContext(); }
@@ -1308,14 +1311,19 @@ function planCard(steps){
   curPlanCard=c; down();
 }
 
-// Run the plan step by step: each step is sent to the agent (tools over the disk).
+// Run the plan step by step: each step goes to the agent WITH the plan as context;
+// if the agent ends a step asking the user something, the run pauses there.
 async function executePlan(steps){
   if(!steps||!steps.length){ tool('No hay plan. Usa /plan primero.'); return; }
-  for(let i=0;i<steps.length;i++){
+  const goal=localStorage.getItem('goal')||'';
+  const planTxt=steps.map((s,k)=>(k+1)+'. '+s.title).join('\n');
+  const start=steps.findIndex(s=>s.state!=='done');
+  for(let i=(start<0?0:start);i<steps.length;i++){
     steps.forEach((s,k)=>{ s.state = k<i?'done':(k===i?'active':'pending'); });
     planCard(steps);                       // show progress
     tool('▶ Paso '+(i+1)+'/'+steps.length+': '+steps[i].title);
-    await agent(steps[i].title);
+    await agent((goal?('Objetivo: '+goal+'\n'):'')+'Plan en curso:\n'+planTxt+'\n\nEjecuta SOLO el paso '+(i+1)+': "'+steps[i].title+'". Los pasos anteriores ya están hechos (su resultado está en la conversación/disco). No preguntes salvo bloqueo real.');
+    if(AGENT_WAITING){ planCard(steps); tool('⏸ Plan pausado en el paso '+(i+1)+': el agente espera tu respuesta. Contesta y usa /run para continuar.'); return; }
     steps[i].state='done';
   }
   steps.forEach(s=>s.state='done'); lastPlan=steps; planCard(steps); tool('✓ Plan completado.');
