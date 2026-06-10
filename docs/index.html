@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u21';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u22';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -325,7 +325,7 @@ async function shOne(cmd, stdin){
           out.push(line); const o=await shRun(line); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
       await runT(tgt); return out.join('\n'); }
     case 'git': { const sub=(a0[0]||'').replace(/^--/,''); if(sub==='version'){ return 'git version 1.27.1 (isomorphic-git, WASM-free, en navegador)'; }
-      if(a0[0]==='clone'){ await gitClone(a0[1]||GIT_REPO||'FiveTechSoft/Agents'); return ''; } await gitCmd(rest); return ''; }
+      if(a0[0]==='clone'){ const okc=await gitClone(a0[1]||GIT_REPO||'FiveTechSoft/Agents'); if(!okc){ SH_EXIT=1; return 'git clone: '+T('falló (ver card de error)','failed (see error card)'); } return ''; } await gitCmd(rest); return ''; }
     case 'apt': case 'apt-get': { const sub=(a0[0]||'').toLowerCase(); const avail=Object.keys(APT_ALIAS).filter(k=>k.length>2);
       if(sub==='install'){ const pkgs=a0.slice(1).filter(x=>x!=='-y'); if(!pkgs.length){SH_EXIT=1;return T('uso: apt install <paquete>. Disponibles: ','usage: apt install <package>. Available: ')+avail.join(' ');}
         const out=[]; for(const p of pkgs){ out.push('Get: '+p+' (Wasmer registry)…'); try{ const ref=await aptInstall(p); out.push('✓ '+p+' '+T('instalado','installed')+' ['+ref+']'); }catch(e){ SH_EXIT=1; out.push('✗ '+p+': '+T('no está en el registry Wasmer.','not in the Wasmer registry.')+' '+T('Disponibles: ','Available: ')+avail.join(' ')); } } return out.join('\n'); }
@@ -598,6 +598,12 @@ function ghTok(){ const e=document.getElementById('ghtok'); return e?e.value.tri
 function gitAuthor(){ return {name:'Agents Web', email:'agents@web.local'}; }
 function gitOnAuth(){ return ()=>({username: ghTok()||'anonymous', password: ghTok()? 'x-oauth-basic':''}); }
 async function mkdirp(dir){ const parts=dir.split('/').filter(Boolean); let cur=''; for(const p of parts){ cur+='/'+p; try{ await GP.mkdir(cur); }catch(e){} } }
+async function rmrfFS(dir){ let st; try{ st=await GP.stat(dir); }catch(e){ return; }   // LightningFS rmdir is NOT recursive
+  if(st.type==='dir'){ let names=[]; try{ names=await GP.readdir(dir); }catch(e){}
+    for(const n of names) await rmrfFS(dir+'/'+n);
+    try{ await GP.rmdir(dir); }catch(e){} }
+  else { try{ await GP.unlink(dir); }catch(e){} } }
+function normRepo(r){ return (r||'').trim().replace(/^https?:\/\/(www\.)?github\.com\//i,'').replace(/^git@github\.com:/i,'').replace(/\.git$/i,'').replace(/\/+$/,''); }
 async function walkFS(dir, base){ let out=[]; let names; try{ names=await GP.readdir(dir); }catch(e){ return out; }
   for(const n of names){ if(n==='.git')continue; const full=dir+'/'+n, rel=base?base+'/'+n:n; let st;
     try{ st=await GP.stat(full);}catch(e){continue;}
@@ -624,11 +630,12 @@ async function gitCard(){
 async function gitCloneSmart(repo){   // real git smart-http through the CORS proxy
   GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
   tool('git clone '+repo+' (smart-http via proxy)…'); setWorking(true);
-  try{ try{ await GP.rmdir(GITDIR,{recursive:true}); }catch(e){}
+  try{ await rmrfFS(GITDIR);
     await git.clone({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:PROXY,url:'https://github.com/'+repo+'.git',singleBranch:true,depth:25,onAuth:gitOnAuth()});
     const n=await mirrorToDisk(); gitCard(); tool('clonado (git real): '+n+' ficheros.'); return true;
   }catch(e){ errorCard('git clone falló', String(e), 'proxy: '+PROXY, null); return false; } finally{ setWorking(false); } }
 async function gitClone(repo){
+  repo=normRepo(repo)||'FiveTechSoft/Agents';   // accepts owner/name, full URL or git@ form
   if(!gitReady()){ tool('isomorphic-git no cargó (revisa conexión).'); return false; }
   if(PROXY) return await gitCloneSmart(repo);   // use real git if a proxy is configured
   GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
@@ -641,7 +648,7 @@ async function gitClone(repo){
     if(!tr.tree) throw new Error(tr.message||'sin árbol');
     let blobs=tr.tree.filter(t=>t.type==='blob');
     if(blobs.length>300){ tool('repo grande ('+blobs.length+'); clono 300 ficheros.'); blobs=blobs.slice(0,300); }
-    try{ await GP.rmdir(GITDIR,{recursive:true}); }catch(e){}
+    await rmrfFS(GITDIR);
     await mkdirp(GITDIR); await git.init({fs:GFS,dir:GITDIR,defaultBranch:branch});
     let n=0;
     for(const b of blobs){
