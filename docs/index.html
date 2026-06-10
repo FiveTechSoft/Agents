@@ -23,6 +23,8 @@
 </style>
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
+<!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
+<script>(function(){var BUILD='u2';fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&location.search.indexOf('u=')<0){location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
