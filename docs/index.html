@@ -256,7 +256,8 @@ async function shOne(cmd, stdin){
       const ic=flags.includes('i'), inv=flags.includes('v'), num=flags.includes('n'), cnt=flags.includes('c'),
             only=flags.includes('o'), word=flags.includes('w'), rec=flags.includes('r')||flags.includes('R'),
             flist=flags.includes('l'), fixedF=flags.includes('F'), noFn=flags.includes('h');
-      if(fixedF) pat=pat.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); if(word) pat='\\b(?:'+pat+')\\b';
+      if(fixedF) pat=pat.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); else if(!flags.includes('E')) pat=pat.replace(/\\([|+?(){}])/g,'$1');   // BRE -> ERE (\| \+ etc)
+      if(word) pat='\\b(?:'+pat+')\\b';
       let re=null, reg=null, lit=false; try{ re=new RegExp(pat, ic?'i':''); reg=new RegExp(pat, ic?'gi':'g'); }catch(e){ lit=true; }   // bad regex -> literal substring
       const test=(l)=> lit ? (ic? l.toLowerCase().indexOf(pat.toLowerCase())>=0 : l.indexOf(pat)>=0) : re.test(l);
       let sources=[];
