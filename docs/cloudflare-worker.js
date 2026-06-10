@@ -75,6 +75,8 @@ export default {
     // target: ?url=<encoded>  OR  everything after the leading slash (git smart-http style)
     let target = u.searchParams.get('url');
     if (!target) target = decodeURIComponent(u.pathname.slice(1)) + (u.search || '');
+    // isomorphic-git's corsProxy strips the scheme: /github.com/owner/repo.git/... -> add https://
+    if (!/^https?:\/\//i.test(target) && /^[\w.-]+\.[a-z]{2,}(:\d+)?\//i.test(target)) target = 'https://' + target;
     if (!/^https?:\/\//i.test(target)) {
       return new Response('Usage: /?url=<https url>  or  /<https url>  or  POST /session', { status: 400, headers: CORS });
     }

@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u20';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u21';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -626,10 +626,10 @@ async function gitCloneSmart(repo){   // real git smart-http through the CORS pr
   tool('git clone '+repo+' (smart-http via proxy)…'); setWorking(true);
   try{ try{ await GP.rmdir(GITDIR,{recursive:true}); }catch(e){}
     await git.clone({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:PROXY,url:'https://github.com/'+repo+'.git',singleBranch:true,depth:25,onAuth:gitOnAuth()});
-    const n=await mirrorToDisk(); gitCard(); tool('clonado (git real): '+n+' ficheros.');
-  }catch(e){ errorCard('git clone falló', String(e), 'proxy: '+PROXY, null); } finally{ setWorking(false); } }
+    const n=await mirrorToDisk(); gitCard(); tool('clonado (git real): '+n+' ficheros.'); return true;
+  }catch(e){ errorCard('git clone falló', String(e), 'proxy: '+PROXY, null); return false; } finally{ setWorking(false); } }
 async function gitClone(repo){
-  if(!gitReady()){ tool('isomorphic-git no cargó (revisa conexión).'); return; }
+  if(!gitReady()){ tool('isomorphic-git no cargó (revisa conexión).'); return false; }
   if(PROXY) return await gitCloneSmart(repo);   // use real git if a proxy is configured
   GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
   tool('Clonando '+repo+' (GitHub API)…'); setWorking(true);
@@ -652,8 +652,8 @@ async function gitClone(repo){
       await git.add({fs:GFS,dir:GITDIR,filepath:b.path}); n++;
     }
     await git.commit({fs:GFS,dir:GITDIR,message:'clone '+repo,author:gitAuthor()});
-    refreshDisk(); gitCard(); tool('clonado: '+n+' ficheros · git local iniciado (branch '+branch+').');
-  }catch(e){ errorCard('clone falló', String(e), T('Repo privado o rate limit (60/h sin token) → pon token con /ghtoken (sube a 5000/h).','Private repo or rate limit (60/h unauthenticated) → set a token with /ghtoken (raises it to 5000/h).'), null); }
+    refreshDisk(); gitCard(); tool('clonado: '+n+' ficheros · git local iniciado (branch '+branch+').'); return true;
+  }catch(e){ errorCard('clone falló', String(e), T('Repo privado o rate limit (60/h sin token) → pon token con /ghtoken (sube a 5000/h).','Private repo or rate limit (60/h unauthenticated) → set a token with /ghtoken (raises it to 5000/h).'), null); return false; }
   finally{ setWorking(false); } }
 async function gitCommit(msg){ if(!gitReady()){tool('git no listo.');return;} await mirrorFromDisk();
   const m=await git.statusMatrix({fs:GFS,dir:GITDIR});
@@ -869,7 +869,7 @@ async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
-    if(a==='clone'){ await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return 'clonado'; }
+    if(a==='clone'){ const okc=await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return okc?'clonado':'ERROR: el clone falló (repo inexistente, demasiado grande, rate limit o proxy caído). NO busques los ficheros: no están.'; }
     if(a==='commit'){ await gitCommit(args.message||'agents-web: update'); return 'commit hecho'; }
     if(a==='push'){ await gitPush(); return 'push lanzado'; }
     if(a==='pull'){ await gitPull(); return 'pull hecho'; }
