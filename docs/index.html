@@ -257,16 +257,17 @@ async function shOne(cmd, stdin){
             only=flags.includes('o'), word=flags.includes('w'), rec=flags.includes('r')||flags.includes('R'),
             flist=flags.includes('l'), fixedF=flags.includes('F'), noFn=flags.includes('h');
       if(fixedF) pat=pat.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); if(word) pat='\\b(?:'+pat+')\\b';
-      let re, reg; try{ re=new RegExp(pat, ic?'i':''); reg=new RegExp(pat, ic?'gi':'g'); }catch(e){ SH_EXIT=1; return 'grep: '+T('regex inválida','invalid regex'); }
+      let re=null, reg=null, lit=false; try{ re=new RegExp(pat, ic?'i':''); reg=new RegExp(pat, ic?'gi':'g'); }catch(e){ lit=true; }   // bad regex -> literal substring
+      const test=(l)=> lit ? (ic? l.toLowerCase().indexOf(pat.toLowerCase())>=0 : l.indexOf(pat)>=0) : re.test(l);
       let sources=[];
       if(rec){ const base=files[0]?shResolve(files[0]):shNorm(SHCWD); const all=await fsList(); for(const f of all){ if(!base||f.path===base||f.path.startsWith(base+'/')) sources.push({name:'/'+f.path,text:f.content||''}); } }
       else if(files.length){ for(const x of files){ const f=await fsGet(shResolve(x)); if(!f)SH_EXIT=1; sources.push({name:x,text:f?f.content:''}); } }
       else sources.push({name:'',text:stdin||''});
       const showFn=rec||files.length>1; const out=[]; let any=false;
       for(const src of sources){ const lines=src.text.split('\n'); const matched=[]; let fc=0;
-        lines.forEach((l,i)=>{ let hit=re.test(l); if(inv)hit=!hit; if(!hit)return; any=true; fc++;
+        lines.forEach((l,i)=>{ let hit=test(l); if(inv)hit=!hit; if(!hit)return; any=true; fc++;
           const pre=(showFn&&!noFn?src.name+':':'')+(num?(i+1)+':':'');
-          if(only&&!inv){ (l.match(reg)||[]).forEach(mm=>matched.push(pre+mm)); } else matched.push(pre+l); });
+          if(only&&!inv){ if(lit){ matched.push(pre+pat); } else (l.match(reg)||[]).forEach(mm=>matched.push(pre+mm)); } else matched.push(pre+l); });
         if(flist){ if(fc>0)out.push(src.name); } else if(cnt){ out.push((showFn&&!noFn?src.name+':':'')+fc); } else out.push(...matched); }
       SH_EXIT=any?0:1; return out.join('\n'); }
     case 'head': case 'tail': { let n=10; const ni=toks.indexOf('-n'); if(ni>=0)n=parseInt(toks[ni+1])||10; let text=stdin; const file=a0.find(x=>x!==String(n)); if(file){ const f=await fsGet(shResolve(file)); text=f?f.content:''; } const L=(text||'').split('\n'); return (name==='head'?L.slice(0,n):L.slice(Math.max(0,L.length-n))).join('\n'); }
@@ -305,7 +306,9 @@ async function shOne(cmd, stdin){
       return '['+T('binario','binary')+' '+got.buf.length+' B, '+ct+'] '+T('usa -o fichero','use -o file'); }
     case 'make': { if(a0[0]==='--version'||flags.includes('v')) return 'GNU Make (Agents Web, simulado)'; const mk=await fsGet(shResolve('Makefile'))||await fsGet(shResolve('makefile')); if(!mk){SH_EXIT=1;return 'make: '+T('no hay Makefile','no Makefile');}
       const targets=parseMake(mk.content); const tgt=a0[0]||Object.keys(targets)[0]; if(!targets[tgt]){SH_EXIT=1;return 'make: *** No rule to make target \''+tgt+'\'.';}
-      const out=[], done=new Set(); const runT=async(t)=>{ if(done.has(t))return; done.add(t); const T2=targets[t]; if(!T2)return; for(const d of T2.deps){ if(targets[d]) await runT(d); } for(const line of T2.recipe){ out.push((line.startsWith('@')?'':line)); const o=await shRun(line.replace(/^@/,'')); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
+      const out=[], done=new Set(); const runT=async(t)=>{ if(done.has(t))return; done.add(t); const T2=targets[t]; if(!T2)return; for(const d of T2.deps){ if(targets[d]) await runT(d); }
+        for(const raw of T2.recipe){ const line=raw.replace(/\$@/g,t).replace(/\$</g,T2.deps[0]||'').replace(/\$\^/g,T2.deps.join(' ')).replace(/\$\?/g,T2.deps.join(' '));   // automatic vars
+          out.push(line); const o=await shRun(line); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
       await runT(tgt); return out.join('\n'); }
     case 'git': { const sub=(a0[0]||'').replace(/^--/,''); if(sub==='version'){ return 'git version 1.27.1 (isomorphic-git, WASM-free, en navegador)'; }
       if(a0[0]==='clone'){ await gitClone(a0[1]||GIT_REPO||'FiveTechSoft/Agents'); return ''; } await gitCmd(rest); return ''; }
@@ -339,11 +342,21 @@ async function shOne(cmd, stdin){
     default: if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } } SH_EXIT=1; return name+': '+T('orden no encontrada','command not found');
   }
 }
+function shSplitTop(line, seps){   // split on operators that are OUTSIDE quotes
+  const out=[]; let buf='', q=null, i=0;
+  while(i<line.length){ const c=line[i];
+    if(q){ buf+=c; if(c===q)q=null; i++; continue; }
+    if(c==='"'||c==="'"){ q=c; buf+=c; i++; continue; }
+    let m=null; for(const s of seps){ if(line.startsWith(s,i)){ m=s; break; } }
+    if(m){ out.push(buf, m); buf=''; i+=m.length; continue; }
+    buf+=c; i++; }
+  out.push(buf); return out; }
 async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>)
   line=(line||'').trim(); if(!line) return '';
   let redir=null, app=false; const rm=line.match(/\s(>>?)\s*(\S+)\s*$/); if(rm){ app=rm[1]==='>>'; redir=rm[2]; line=line.slice(0,rm.index); }
   let stdin=null, out='';
-  for(const st of line.split('|').map(s=>s.trim()).filter(Boolean)){ out=await shOne(st, stdin); stdin=out; }
+  const stages=shSplitTop(line,['|']).filter((_,i)=>i%2===0).map(s=>s.trim()).filter(Boolean);
+  for(const st of stages){ out=await shOne(st, stdin); stdin=out; }
   if(redir){ const k=shResolve(redir); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev?'\n':'')+out):out); refreshDisk(); return ''; }
   return out;
 }
@@ -367,8 +380,8 @@ async function shRun(line){   // for/while/if, ; && ||, $() $(()) vars, exit cod
   // if COND; then BODY; [else BODY2;] fi
   const im=line.match(/^if\s+([\s\S]+?)\s*;\s*then\s+([\s\S]+?)(?:\s*;\s*else\s+([\s\S]+?))?\s*;?\s*fi\s*$/);
   if(im){ await shRun(im[1]); if(SH_EXIT===0) return await shRun(im[2]); if(im[3]) return await shRun(im[3]); return ''; }
-  const parts=line.split(/\s*(&&|\|\||;)\s*/); const acc=[];
-  for(let i=0;i<parts.length;i+=2){ const op=parts[i-1], seg=parts[i]; if(!seg)continue;
+  const parts=shSplitTop(line,['&&','||',';']); const acc=[];
+  for(let i=0;i<parts.length;i+=2){ const op=parts[i-1], seg=(parts[i]||'').trim(); if(!seg)continue;
     if(op==='&&' && SH_EXIT!==0) continue;
     if(op==='||' && SH_EXIT===0) continue;
     const o=await shPipe(seg); if(o) acc.push(o); if(SH_BRK||SH_CONT) break; }
@@ -444,12 +457,15 @@ async function ccExec(argv, inlineCode){
       else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ cargs.push('/project/'+a.split('/').pop()); nSrc++; }
       else cargs.push(a); }
     if(!nSrc) return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');
-    outName=outName||(compileOnly?'a.o':'a.out.wasm'); cargs.push('-o','/project/'+outName);
+    const outBase=(outName||(compileOnly?'a.o':'a.out.wasm')).split('/').pop();   // compile inside /project (flat); subdirs not mounted
+    cargs.push('-o','/project/'+outBase);
     const ins=await clang.entrypoint.run({args:cargs, mount:{'/project':project}}); const o=await ins.wait();
     if(!o.ok) return T('compilación falló','compilation failed')+' (exit '+o.code+'):\n'+(o.stderr||'');
-    if(compileOnly) return '✓ '+T('compilado','compiled')+' '+outName+(o.stderr?'\n'+o.stderr:'');
-    try{ const wasm=await project.readFile(outName); const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
-      return ('✓ '+outName+'\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim(); }
+    // persist the output to the virtual disk at the requested path (wasm binary -> base64)
+    try{ const w=await project.readFile(outBase); if(outName){ let bin=''; for(let k=0;k<w.length;k++)bin+=String.fromCharCode(w[k]); await fsPut(shResolve(outName),' B64 '+btoa(bin)); refreshDisk(); } }catch(e){}
+    if(compileOnly) return '✓ '+T('compilado','compiled')+' '+(outName||outBase)+(o.stderr?'\n'+o.stderr:'');
+    try{ const wasm=await project.readFile(outBase); const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
+      return ('✓ '+(outName||outBase)+'\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim(); }
     catch(e){ return '✓ '+T('compilado','compiled')+' '+outName+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
   }catch(e){ return 'cc error: '+e; } }
 async function ccRun(code){ return await ccExec([], code); }   // inline code path (/cc <code>, cc tool)
@@ -786,13 +802,13 @@ function renderClarify(question, options, res){
 }
 async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
   if(name==='list_files'){ return (await fsList()).map(f=>f.path).join('\n')||'(empty)'; }
-  if(name==='read_file'){ const f=await fsGet(args.path); return f?f.content:'not found'; }
-  if(name==='write_file'){ if(!(await askPermit('escribir el archivo',args.path))) return 'Rechazado por el usuario.';
-    const old=await fsGet(args.path); await fsPut(args.path,args.content||''); refreshDisk();
-    if(old && old.content!==(args.content||'')) diffCard(args.path, diffLines(old.content,args.content||''));
-    return 'wrote '+args.path; }
-  if(name==='delete_file'){ if(!(await askPermit('borrar el archivo',args.path))) return 'Rechazado por el usuario.';
-    await fsDel(args.path); refreshDisk(); return 'deleted '+args.path; }
+  if(name==='read_file'){ const p=shResolve(args.path); const f=await fsGet(p); return f?f.content:'not found'; }
+  if(name==='write_file'){ const p=shResolve(args.path); if(!(await askPermit('escribir el archivo',p))) return 'Rechazado por el usuario.';
+    const old=await fsGet(p); await fsPut(p,args.content||''); refreshDisk();
+    if(old && old.content!==(args.content||'')) diffCard(p, diffLines(old.content,args.content||''));
+    return 'wrote '+p; }
+  if(name==='delete_file'){ const p=shResolve(args.path); if(!(await askPermit('borrar el archivo',p))) return 'Rechazado por el usuario.';
+    await fsDel(p); refreshDisk(); return 'deleted '+p; }
   if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
   if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[]); }
   if(name==='web_search'){ try{ const r=await fetch('https://s.jina.ai/'+encodeURIComponent(args.query||''),{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,4000); }catch(e){ return 'web_search error: '+e; } }
