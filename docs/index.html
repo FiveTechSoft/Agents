@@ -24,7 +24,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u7';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u8';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -453,28 +453,29 @@ async function aptInstall(name){ const ref=APT_ALIAS[name]||name; const w=await 
 async function ccExec(argv, inlineCode){
   let clang; try{ clang=await ensureClang(); }catch(e){ return 'clang no disponible: '+e; }
   try{
-    const project=new wasmerMod.Directory();
-    // mount the disk under /project preserving full paths (no basename collisions)
-    const all=await fsList(); for(const f of all){ if(/\.(c|h|hpp|hxx|cpp|cc|cxx)$/i.test(f.path)){ try{ await project.writeFile(f.path, f.content); }catch(e){} } }
-    if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); argv=['__main.c']; }
-    let outName=null, compileOnly=false; const cargs=[]; let nSrc=0;
+    const project=new wasmerMod.Directory();   // Wasmer Directory has no nested mkdir -> mount FLAT (basename) at /project root
+    // mount all headers (so #include "x.h" resolves) by basename
+    const all=await fsList(); for(const f of all){ if(/\.(h|hpp|hxx)$/i.test(f.path)){ try{ await project.writeFile(f.path.split('/').pop(), f.content); }catch(e){} } }
+    let outName=null, compileOnly=false, missing=null; const cargs=[]; let nSrc=0;
+    if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); cargs.push('/project/__main.c'); nSrc=1; }
     for(let i=0;i<argv.length;i++){ const a=argv[i];
       if(a==='-o'){ outName=argv[++i]; }
       else if(a==='-c'){ compileOnly=true; cargs.push('-c'); }
-      else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ const p=inlineCode!=null?a:shResolve(a); cargs.push('/project/'+p); nSrc++; }
+      else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ const base=a.split('/').pop(); const f=await fsGet(shResolve(a)); if(!f){ missing=a; break; } try{ await project.writeFile(base, f.content); }catch(e){} cargs.push('/project/'+base); nSrc++; }
       else cargs.push(a); }
+    if(missing) return 'cc: '+T('no existe ','no such file ')+missing;
     if(!nSrc) return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');
-    const outRel = outName? (inlineCode!=null?outName:shResolve(outName)) : (compileOnly?'a.o':'a.out.wasm');
-    const odir = outRel.indexOf('/')>=0? outRel.slice(0,outRel.lastIndexOf('/')) : '';
-    if(odir){ try{ await project.writeFile(odir+'/.keep',''); }catch(e){} }   // ensure output dir exists
-    cargs.push('-o','/project/'+outRel);
+    const outBase=(outName||(compileOnly?'a.o':'a.out.wasm')).split('/').pop();   // flat output in /project
+    cargs.push('-o','/project/'+outBase);
     const ins=await clang.entrypoint.run({args:cargs, mount:{'/project':project}}); const o=await ins.wait();
     if(!o.ok) return T('compilación falló','compilation failed')+' (exit '+o.code+'):\n'+(o.stderr||'');
-    try{ const w=await project.readFile(outRel); if(outName){ let bin=''; for(let k=0;k<w.length;k++)bin+=String.fromCharCode(w[k]); await fsPut(outRel,' B64 '+btoa(bin)); refreshDisk(); } }catch(e){}
-    if(compileOnly) return '✓ '+T('compilado','compiled')+' '+(outName||outRel)+(o.stderr?'\n'+o.stderr:'');
-    try{ const wasm=await project.readFile(outRel); const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
-      return ('✓ '+(outName||outRel)+'\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim(); }
-    catch(e){ return '✓ '+T('compilado','compiled')+' '+(outName||outRel)+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
+    // persist the output back to the virtual disk at the requested path (wasm binary -> base64)
+    const savePath = outName? (inlineCode!=null?outName:shResolve(outName)) : null;
+    try{ const w=await project.readFile(outBase); if(savePath){ let bin=''; for(let k=0;k<w.length;k++)bin+=String.fromCharCode(w[k]); await fsPut(savePath,' B64 '+btoa(bin)); refreshDisk(); } }catch(e){}
+    if(compileOnly) return '✓ '+T('compilado','compiled')+' '+(outName||outBase)+(o.stderr?'\n'+o.stderr:'');
+    try{ const wasm=await project.readFile(outBase); const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
+      return ('✓ '+(outName||outBase)+'\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim(); }
+    catch(e){ return '✓ '+T('compilado','compiled')+' '+(outName||outBase)+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
   }catch(e){ return 'cc error: '+e; } }
 async function ccRun(code){ return await ccExec([], code); }   // inline code path (/cc <code>, cc tool)
 
