@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u35';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u36';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -82,6 +82,7 @@
         <button id="thinkbtn" onclick="toggleThink()" title="Ver razonamiento del modelo (deepseek-reasoner)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🧠</button>
         <button onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
         <button onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
+        <button onclick="flowCard()" title="Flow: secuencia de lo que hizo el agente (didáctico)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🔀 Flow</button>
         <button onclick="shareSession()" title="Compartir sesión (URL de solo lectura)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🔗 Share</button>
         <button onclick="copyChat()" title="Copiar conversación" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">📋 Copy</button>
         <button onclick="runCmd('/clear')" title="Limpiar (/clear)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
@@ -602,6 +603,7 @@ function tool(t){ const d=el('<div class="text-xs text-gray-400 border-l-2 borde
 function thinkingCard(text){ const d=el('<div class="pl-4 border-l-2 border-purple-500 text-xs text-gray-400 italic py-1 max-w-[90%] whitespace-pre-wrap"></div>'); d.textContent=text; chat().appendChild(d); down(); }
 /* error card with terminal block + Auto-corregir (mockup 4 case 6) */
 function errorCard(title,detail,term,onFix){
+  try{ flowAdd('error',title,(detail||'')+(term?(' — '+term):'')); }catch(e){}
   const c=el('<div class="bg-red-950/40 border border-red-800/50 p-3.5 rounded-lg max-w-[90%]"></div>');
   const head=el('<div class="flex items-start mb-2"></div>');
   head.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round" class="mr-2 mt-0.5 shrink-0"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
@@ -857,11 +859,11 @@ async function runDemoSim(){
 async function run(){
   const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
   hist.push(v); histI=hist.length; saveHist();
-  if(v[0]==='/'){ await slashCmd(v); nextHint(); return; }
+  if(v[0]==='/'){ flowAdd('slash',v); await slashCmd(v); nextHint(); return; }
   const cmd0=v.split(/\s+/)[0];
-  if(SHELL_CMDS.has(cmd0) || cmd0.startsWith('./')){ const cwd=SHCWD; const out=await shRun(v); termLine(v, out, cwd); nextHint(); return; }
+  if(SHELL_CMDS.has(cmd0) || cmd0.startsWith('./')){ const cwd=SHCWD; const out=await shRun(v); flowAdd('cmd',v,(out||'').slice(0,200)); termLine(v, out, cwd); nextHint(); return; }
   // otherwise: send to the LLM agent
-  await agent(v); nextHint();
+  flowAdd('user',v); await agent(v); nextHint();
 }
 
 /* ---- LLM agent with tools over the disk ---- */
@@ -923,7 +925,14 @@ function renderClarify(question, options, res){
   btn.onclick=()=>{ if(sel==null) sel=options[0].label; card.querySelectorAll('input,button').forEach(x=>x.disabled=true); res(sel); };
   card.appendChild(btn); chat().appendChild(card); down();
 }
-async function execTool(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
+// wrapper: every agent tool call passes through here -> record it in the didactic Flow
+async function execTool(name,rawArgs){
+  const out=await execToolRaw(name,rawArgs);
+  try{ let a={}; try{a=JSON.parse(rawArgs||'{}');}catch(e){}
+    flowAdd('tool',name,{args:a,result:String(out||'')}); }catch(e){}
+  return out;
+}
+async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
   if(name==='list_files'){ return (await fsList()).map(f=>f.path).join('\n')||'(empty)'; }
   if(name==='read_file'){ const p=shResolve(args.path); const f=await fsGet(p); return f?f.content:'not found'; }
   if(name==='write_file'){ const p=shResolve(args.path); if(!(await askPermit('escribir el archivo',p))) return 'Rechazado por el usuario.';
@@ -990,6 +999,77 @@ async function dispatchAgents(tasks){
 
 function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
 
+/* ===== Flow: didactic timeline of what the agent did (prompts, tool calls, replies) ===== */
+let FLOW=(()=>{ try{ return JSON.parse(sessionStorage.getItem('flow')||'[]'); }catch(e){ return []; } })();
+function flowAdd(kind,label,detail){ FLOW.push({k:kind,l:String(label||''),d:detail,ts:Date.now()});
+  if(FLOW.length>2000) FLOW.shift(); try{ sessionStorage.setItem('flow',JSON.stringify(FLOW.slice(-2000))); }catch(e){} }
+function flowClear(){ FLOW.length=0; try{ sessionStorage.removeItem('flow'); }catch(e){} }
+// visual style per event kind: emoji, dot colour, ring colour, label
+const FLOW_META={
+  user:  {i:'🧑',dot:'bg-blue-500',   ring:'ring-blue-500/30',   v:'Tú pides'},
+  think: {i:'🧠',dot:'bg-purple-500', ring:'ring-purple-500/30', v:'El agente razona'},
+  tool:  {i:'🔧',dot:'bg-amber-500',  ring:'ring-amber-500/30',  v:'Usa una herramienta'},
+  permit:{i:'🔐',dot:'bg-orange-500', ring:'ring-orange-500/30', v:'Pide permiso'},
+  reply: {i:'🤖',dot:'bg-emerald-500',ring:'ring-emerald-500/30',v:'El agente responde'},
+  cmd:   {i:'⌨️',dot:'bg-teal-500',   ring:'ring-teal-500/30',   v:'Comando shell'},
+  slash: {i:'⚡',dot:'bg-fuchsia-500',ring:'ring-fuchsia-500/30',v:'Slash command'},
+  error: {i:'❌',dot:'bg-red-500',    ring:'ring-red-500/30',    v:'Error'} };
+const TOOL_ICON={ list_files:'📂',read_file:'📄',write_file:'✏️',delete_file:'🗑',ask_user:'❓',dispatch_agents:'👥',git:'🔀',web_search:'🔎',web_fetch:'🌐',shell:'⌨️',python:'🐍',cc:'⚙️' };
+const TOOL_VERB={ list_files:'Lista los ficheros',read_file:'Lee un fichero',write_file:'Escribe un fichero',delete_file:'Borra un fichero',ask_user:'Te pregunta',dispatch_agents:'Lanza sub-agentes',git:'Operación git',web_search:'Busca en la web',web_fetch:'Abre una URL',shell:'Ejecuta shell',python:'Ejecuta Python',cc:'Compila C' };
+function flowCard(){
+  const ov=el('<div class="fixed inset-0 bg-black/70 flex items-center justify-center p-3 md:p-6 z-50"></div>');
+  const box=el('<div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-3xl flex flex-col shadow-2xl" style="height:90vh"></div>');
+  const head=el('<div class="p-4 border-b border-gray-700 flex items-center justify-between shrink-0 bg-gradient-to-r from-gray-800 to-gray-900 rounded-t-xl"></div>');
+  // legend chips
+  const kinds=[...new Set(FLOW.map(e=>e.k))];
+  const legend=kinds.map(k=>{ const m=FLOW_META[k]; return m?'<span class="inline-flex items-center gap-1 text-[10px] text-gray-400"><span class="inline-block w-2 h-2 rounded-full '+m.dot+'"></span>'+m.i+'</span>':''; }).join('');
+  head.innerHTML='<div><div class="font-semibold text-gray-100 flex items-center gap-2 text-base">🔀 Flow</div><div class="text-[11px] text-gray-400 mt-0.5">'+T('Qué hizo el agente, paso a paso','What the agent did, step by step')+' · <span class="text-gray-300">'+FLOW.length+' '+T('pasos','steps')+'</span></div><div class="flex gap-2 mt-1.5 flex-wrap">'+legend+'</div></div>';
+  const btns=el('<div class="flex gap-2 shrink-0"></div>');
+  const cp=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">📋 '+T('Copiar','Copy')+'</button>');
+  const cl=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">🗑</button>');
+  const cls=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">✕</button>');
+  btns.appendChild(cp); btns.appendChild(cl); btns.appendChild(cls); head.appendChild(btns); box.appendChild(head);
+  const body=el('<div class="flex-1 overflow-y-auto scroll p-4"></div>');
+  if(!FLOW.length){ body.innerHTML='<div class="text-gray-500 text-center mt-10 text-sm">'+T('Aún no hay actividad.<br>Pídele algo al agente y vuelve aquí.','No activity yet.<br>Ask the agent to do something and come back.')+'</div>'; }
+  else {
+    const t0=FLOW[0].ts; const tl=el('<div class="relative"></div>');
+    FLOW.forEach((e,i)=>{ const m=FLOW_META[e.k]||FLOW_META.tool;
+      const sec=((e.ts-t0)/1000).toFixed(1);
+      const dt=i>0?((e.ts-FLOW[i-1].ts)/1000):0;
+      const icon=e.k==='tool'?(TOOL_ICON[e.l]||'🔧'):m.i;
+      const title=e.k==='tool'?(TOOL_VERB[e.l]||e.l):m.v;
+      const node=el('<div class="relative pl-12 pb-4"></div>');
+      // vertical connector (except last)
+      if(i<FLOW.length-1) node.appendChild(el('<div class="absolute left-[18px] top-9 bottom-0 w-px bg-gray-700"></div>'));
+      // dot with emoji
+      const dot=el('<div class="absolute left-0 top-1 w-9 h-9 rounded-full '+m.dot+'/20 ring-2 '+m.ring+' flex items-center justify-center text-base"></div>'); dot.textContent=icon; node.appendChild(dot);
+      // header line
+      const h=el('<div class="flex items-baseline gap-2"></div>');
+      h.innerHTML='<span class="text-[10px] font-mono text-gray-600">#'+(i+1)+'</span><span class="font-semibold text-gray-100 text-sm">'+title+'</span>'+(e.k==='tool'?'<code class="text-[10px] text-amber-300/80 bg-amber-900/20 px-1 rounded">'+e.l+'</code>':'')+'<span class="ml-auto text-[10px] text-gray-500 font-mono">+'+sec+'s'+(dt>=0.1?(' · Δ'+dt.toFixed(1)+'s'):'')+'</span>';
+      node.appendChild(h);
+      // detail
+      const card=el('<div class="mt-1 bg-gray-800/60 border border-gray-700/50 rounded-lg p-2.5 text-[11px]"></div>');
+      let shown=false;
+      if(e.k==='tool' && e.d){ const a=e.d.args||{}; const ak=Object.keys(a);
+        if(ak.length){ const ag=document.createElement('div'); ag.className='space-y-0.5'; ak.forEach(k=>{ const r=document.createElement('div'); r.innerHTML='<span class="text-gray-500">'+k+':</span> <span class="text-gray-200 font-mono break-all">'+esc((''+a[k]).slice(0,120))+'</span>'; ag.appendChild(r); }); card.appendChild(ag); shown=true; }
+        const res=(e.d.result||'').trim(); if(res){ const rr=document.createElement('div'); rr.className='mt-1.5 pt-1.5 border-t border-gray-700/50 text-gray-400 whitespace-pre-wrap break-words font-mono max-h-24 overflow-y-auto'; rr.textContent='→ '+res.slice(0,300); card.appendChild(rr); shown=true; } }
+      else if(typeof e.d==='string' && e.d){ const d=document.createElement('div'); d.className='text-gray-300 whitespace-pre-wrap break-words'+(e.k==='think'?' italic':''); d.textContent=e.d.slice(0,400); card.appendChild(d); shown=true; }
+      else if(e.l && e.k!=='tool'){ const d=document.createElement('div'); d.className='text-gray-200 whitespace-pre-wrap break-words'; d.textContent=e.l.slice(0,300); card.appendChild(d); shown=true; }
+      if(shown) node.appendChild(card);
+      tl.appendChild(node); });
+    body.appendChild(tl);
+  }
+  box.appendChild(body); ov.appendChild(box); document.body.appendChild(ov);
+  const close=()=>ov.remove(); cls.onclick=close; ov.onclick=(e)=>{ if(e.target===ov) close(); };
+  const t0c=FLOW.length?FLOW[0].ts:0;
+  cp.onclick=async()=>{ const txt=FLOW.map((e,i)=>{ const sec=((e.ts-t0c)/1000).toFixed(1); let s=(i+1)+'. ['+sec+'s] '+(e.k==='tool'?('tool '+e.l):(FLOW_META[e.k]||{}).v||e.k);
+      if(e.k==='tool'&&e.d){ const a=e.d.args||{}; s+=' '+JSON.stringify(a); if(e.d.result) s+=' => '+e.d.result.slice(0,150); }
+      else if(typeof e.d==='string'&&e.d) s+=': '+e.d; else if(e.l) s+=': '+e.l; return s; }).join('\n');
+    try{ await navigator.clipboard.writeText(txt); cp.textContent='✓'; }catch(e){} };
+  cl.onclick=()=>{ flowClear(); close(); };
+}
+function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
 /* ===== collapsible "N acciones" panel with per-tool icons + check (mockup 1) ===== */
 const SVG=(cls,b)=>'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'+cls+'">'+b+'</svg>';
 const IC_FILE=SVG('text-blue-400 shrink-0','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
@@ -1039,7 +1119,7 @@ function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
     const al=el('<button class="bg-yellow-700/40 hover:bg-yellow-700/60 text-yellow-100 text-xs py-2 px-2 rounded">Siempre</button>');
     const no=el('<button class="flex-1 bg-gray-700 hover:bg-gray-600 text-white text-xs py-2 rounded">Rechazar</button>');
     const dis=()=>btns.querySelectorAll('button').forEach(b=>b.disabled=true);
-    ok.onclick=()=>{ dis(); res(true); }; al.onclick=()=>{ autoApprove=true; dis(); res(true); }; no.onclick=()=>{ dis(); res(false); };
+    ok.onclick=()=>{ dis(); flowAdd('permit',action+': '+detail,'✓ permitido'); res(true); }; al.onclick=()=>{ autoApprove=true; dis(); flowAdd('permit',action+': '+detail,'✓ siempre'); res(true); }; no.onclick=()=>{ dis(); flowAdd('permit',action+': '+detail,'✗ rechazado'); res(false); };
     btns.appendChild(ok); btns.appendChild(al); btns.appendChild(no); card.appendChild(btns); chat().appendChild(card); down();
   }); }
 
@@ -1168,6 +1248,7 @@ async function agent(text){
         wait.remove(); convo.pop(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS de DeepSeek).',String(e),()=>agent(text)); return; }   // pop: agent(text) re-pushes it on retry
       addUsage(res.usage);
       const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
+      if(res.reasoning) flowAdd('think',res.reasoning.slice(0,400));
       if(res.tool_calls.length){
         if(!res.content) wait.remove();
         for(const tc of res.tool_calls){ let a={}; try{a=JSON.parse(tc.function.arguments||'{}');}catch(e){}
@@ -1178,6 +1259,7 @@ async function agent(text){
         continue;
       }
       convo.push({role:'assistant',content:res.content||''});
+      if(res.content) flowAdd('reply',res.content.slice(0,300));
       AGENT_WAITING=/[?¿]/.test(res.content||'');
       if(AGENT_WAITING){ const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus(); doneLine('Esperando respuesta del usuario…'); }
       return;
