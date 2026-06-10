@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u25';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u26';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -402,8 +402,13 @@ async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>
   return out;
 }
 async function shGlob(item){ if(item.indexOf('*')<0 && item.indexOf('?')<0) return [item];
+  const mkRe=s=>new RegExp('^'+s.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'[^/]*').replace(/\?/g,'[^/]')+'$');
+  if(item.indexOf('/')>=0){   // path glob (src/compiler/*.c): match against full disk paths
+    const re=mkRe(shResolve(item)); const all=await fsList();
+    const m=all.map(f=>f.path).filter(p=>re.test(p));
+    return m.length? m.map(p=>'/'+p) : [item]; }
   const {dirs,files}=await shList(shResolve('')); const all=dirs.map(d=>d+'/').concat(files);
-  const re=new RegExp('^'+item.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.')+'$');
+  const re=mkRe(item);
   const m=all.filter(x=>re.test(x)||re.test(x.replace(/\/$/,''))); return m.length?m.map(x=>x.replace(/\/$/,'')):[item]; }
 async function shRun(line){   // for/while/if, ; && ||, $() $(()) vars, exit codes
   line=(line||'').replace(/\s*2>\s*\/dev\/null/g,'').replace(/\s*2>&1/g,'').replace(/\s*1>&2/g,'').trim(); if(!line) return '';
@@ -490,7 +495,7 @@ async function ccExec(argv, inlineCode){
   try{
     const project=new wasmerMod.Directory();   // Wasmer Directory has no nested mkdir -> mount FLAT (basename) at /project root
     // mount all headers (so #include "x.h" resolves) by basename
-    const all=await fsList(); for(const f of all){ if(/\.(h|hpp|hxx)$/i.test(f.path)){ try{ await project.writeFile(f.path.split('/').pop(), f.content); }catch(e){} } }
+    const all=await fsList(); for(const f of all){ if(/\.(h|hpp|hxx|ch|api)$/i.test(f.path)){ try{ await project.writeFile(f.path.split('/').pop(), f.content); }catch(e){} } }   // .ch/.api: xBase-style headers (Harbour etc.)
     let outName=null, compileOnly=false, missing=null; const cargs=[]; let nSrc=0;
     if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); cargs.push('/project/__main.c'); nSrc=1; }
     for(let i=0;i<argv.length;i++){ const a=argv[i];
@@ -745,7 +750,7 @@ async function runDemoLLM(){
     const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
       body:JSON.stringify({model:MODEL,messages:[{role:'user',content:'Give ONE short idea (max 8 words, in '+(LANGS[curLang]||'español')+') of a small distinct task to demo an agent that creates and edits files on a disk. Only the idea, no quotes or trailing punctuation.'}]})});
-    const j=await r.json(); if(j.usage){usage.pin+=j.usage.prompt_tokens||0;usage.pout+=j.usage.completion_tokens||0;}
+    const j=await r.json(); addUsage(j.usage);
     topic=((j.choices&&j.choices[0].message.content)||topic).trim().replace(/^["']|["'.]+$/g,'');
   }catch(e){ tool('(no pude pedir tema; uso uno por defecto)'); }
   tool('Tema de la demo: '+topic);
@@ -910,7 +915,7 @@ async function subAgent(task,setStatus){
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},signal:agentAbort.signal,
       body:JSON.stringify({model:MODEL,messages:msgs,tools:SUBTOOLS})});
     if(!r.ok) throw new Error('LLM '+r.status);
-    const j=await r.json(); if(j.usage){usage.pin+=j.usage.prompt_tokens||0;usage.pout+=j.usage.completion_tokens||0;}
+    const j=await r.json(); addUsage(j.usage);
     const mo=j.choices[0].message; msgs.push(mo);
     if(mo.tool_calls&&mo.tool_calls.length){
       for(const tc of mo.tool_calls){ setStatus(tc.function.name+'…'); const out=await execTool(tc.function.name,tc.function.arguments); msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
@@ -1018,7 +1023,7 @@ document.addEventListener('click',()=>{ const m=document.getElementById('langmen
 function setLang(v){ curLang=v; try{ localStorage.setItem('lang',v); }catch(e){} renderLangBtn(); tool('Idioma: '+(LANGS[v]||v)); }
 function saveSession(){ try{ localStorage.setItem('convo',JSON.stringify(convo)); localStorage.setItem('usage',JSON.stringify(usage)); }catch(e){} }
 function restoreSession(){ try{
-  const su=JSON.parse(localStorage.getItem('usage')||'null'); if(su) usage=su;
+  const su=JSON.parse(localStorage.getItem('usage')||'null'); if(su) usage={pin:su.pin||0,pout:su.pout||0,phit:su.phit||0};
   const sc=JSON.parse(localStorage.getItem('convo')||'[]');
   if(sc.length){ sc.forEach(m=>{ convo.push(m); if(m.role==='user') user(m.content); else if(m.role==='assistant') bot(md(m.content)); });
     tool('↻ Sesión restaurada ('+sc.length+' mensajes). Ctrl+K para limpiar.'); return true; }
@@ -1104,7 +1109,7 @@ async function agent(text){
       try{ res=await streamChat(msgs, wait); }
       catch(e){ if(e.name==='AbortError'){ wait.remove(); convo.pop(); await restoreDisk(snap); abortCard(true); return; }
         wait.remove(); convo.pop(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS de DeepSeek).',String(e),()=>agent(text)); return; }   // pop: agent(text) re-pushes it on retry
-      if(res.usage){ usage.pin+=res.usage.prompt_tokens||0; usage.pout+=res.usage.completion_tokens||0; }
+      addUsage(res.usage);
       const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
       if(res.tool_calls.length){
         if(!res.content) wait.remove();
@@ -1327,7 +1332,7 @@ async function loopRun(goal, maxIter){
       if(btwPending){ msgs.push({role:'user',content:'[interjección del usuario] '+btwPending}); btwPending=null; }
       let wait=bot('<span class="text-gray-400">iteración '+iter+'…</span>'); let res;
       try{ res=await streamChat(msgs, wait); }catch(e){ if(e.name==='AbortError'){ wait.innerHTML='(detenido)'; break; } wait.remove(); errorCard('Bucle: error',String(e),'',null); break; }
-      if(res.usage){ usage.pin+=res.usage.prompt_tokens||0; usage.pout+=res.usage.completion_tokens||0; }
+      addUsage(res.usage);
       const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
       if(res.tool_calls.length){
         if(!res.content) wait.remove();
@@ -1368,15 +1373,20 @@ function diffCard(path, ops){
 }
 
 /* ===== session usage + /cost /compact /init /help cards (mockup 3) ===== */
-let usage={pin:0,pout:0};
-function estCost(u){ return (u.pin/1e6*0.14 + u.pout/1e6*0.28); }   // ~DeepSeek pricing
+let usage={pin:0,pout:0,phit:0};
+function addUsage(u){ if(!u)return; usage.pin+=u.prompt_tokens||0; usage.pout+=u.completion_tokens||0; usage.phit+=u.prompt_cache_hit_tokens||0; }
+// DeepSeek pricing: $0.14/M input cache-miss, $0.0028/M input cache-HIT (98% off), $0.28/M output.
+// Agent loops re-send the conversation prefix every step (= cache hits), so billing all input
+// as cache-miss overstated the session cost several-fold.
+function estCost(u){ const hit=Math.min(u.phit||0,u.pin); return ((u.pin-hit)/1e6*0.14 + hit/1e6*0.0028 + u.pout/1e6*0.28); }
 function costCard(u){
   const tot=u.pin+u.pout||1, pi=Math.round(u.pin/tot*100), po=100-pi;
   const c=el('<div class="bg-gradient-to-br from-emerald-900/40 to-gray-800 border border-emerald-800/50 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<div class="flex justify-between items-center mb-3"><h4 class="text-emerald-400 font-semibold flex items-center gap-2">'+
     SVG('','<line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>')+'Métricas de Sesión</h4><span class="text-xl font-bold text-white">$'+estCost(u).toFixed(2)+'</span></div>'+
     '<div class="space-y-2 text-xs"><div><div class="flex justify-between text-gray-400 mb-1"><span>Input (contexto)</span><span class="text-gray-200">'+u.pin.toLocaleString()+' tokens</span></div><div class="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden"><div class="h-full bg-blue-500" style="width:'+pi+'%"></div></div></div>'+
-    '<div><div class="flex justify-between text-gray-400 mb-1"><span>Output (generado)</span><span class="text-gray-200">'+u.pout.toLocaleString()+' tokens</span></div><div class="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden"><div class="h-full bg-emerald-500" style="width:'+po+'%"></div></div></div></div>';
+    '<div><div class="flex justify-between text-gray-400 mb-1"><span>Output (generado)</span><span class="text-gray-200">'+u.pout.toLocaleString()+' tokens</span></div><div class="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden"><div class="h-full bg-emerald-500" style="width:'+po+'%"></div></div></div>'+
+    ((u.phit||0)>0?('<div class="flex justify-between text-[10px] text-gray-500"><span>⚡ '+T('de input, en caché (98% dto.)','of input, cached (98% off)')+'</span><span>'+u.phit.toLocaleString()+' tokens</span></div>'):'')+'</div>';
   chat().appendChild(c); down();
 }
 function compactCard(before,after){
