@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u38';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u39';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1189,7 +1189,7 @@ function stopAgent(){ loopStop=true; if(agentAbort){ agentAbort.abort(); tool('D
 async function copyChat(){ const txt=(document.getElementById('chat').innerText||'').trim();
   try{ await navigator.clipboard.writeText(txt); tool(T('📋 Conversación copiada (','📋 Conversation copied (')+txt.length+' '+T('caracteres)','chars)')); }
   catch(e){ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(e2){} ta.remove(); tool('📋 '+T('copiado','copied')); } }
-function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; try{localStorage.removeItem('convo');}catch(e){} }
+function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; flowClear(); try{localStorage.removeItem('convo');}catch(e){} }
 
 // Streamed chat completion (SSE). Updates `wait` live with the text as it arrives;
 // assembles tool_calls across deltas. Returns {content, tool_calls, usage}.
