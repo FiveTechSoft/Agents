@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u26';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u27';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -365,11 +365,26 @@ async function shOne(cmd, stdin){
     case 'basename': { let p=(a0[0]||'').replace(/\/+$/,''); let b=p.split('/').pop()||p; if(a0[1]&&b.endsWith(a0[1]))b=b.slice(0,-a0[1].length); return b; }
     case 'dirname': { let p=(a0[0]||'').replace(/\/+$/,''); const i=p.lastIndexOf('/'); return i<0?'.':(i===0?'/':p.slice(0,i)); }
     default: { if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } }
-      // run a wasm binary from the disk (compiled with cc -o): ./prog or prog
+      // run a wasm binary from the disk (compiled with cc -o): ./prog [args].
+      // The disk's text files are mounted FLAT at /project (unique basenames only) so the
+      // program can READ them; files it creates/changes under /project are written back
+      // to the disk afterwards (e.g. hbpp generating pptable.c).
       const exe=await fsGet(shResolve(name.replace(/^\.\//,'')));
       if(exe && (exe.content||'').startsWith(' B64 ')){
         try{ await ensureWasmer(); const bin=atob(exe.content.slice(5)); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
-          const pkg=await wasmerMod.Wasmer.fromFile(bytes); const ins=await pkg.entrypoint.run({args:toks}); const o=await ins.wait();
+          const project=new wasmerMod.Directory();
+          const all=await fsList(); const byBase={}, mounted={};
+          for(const f of all){ const c=f.content||''; if(c.startsWith(' B64 '))continue; const b=f.path.split('/').pop(); (byBase[b]=byBase[b]||[]).push(f.path); }
+          for(const b in byBase){ if(byBase[b].length===1){ const src=all.find(f=>f.path===byBase[b][0]); try{ await project.writeFile(b, src.content||''); mounted[b]=src.content||''; }catch(e){} } }
+          const pkg=await wasmerMod.Wasmer.fromFile(bytes);
+          const ins=await pkg.entrypoint.run({args:toks, mount:{'/project':project}, cwd:'/project'}); const o=await ins.wait();
+          try{ let ents=await project.readDir('/'); let nNew=0;
+            for(const ent of (ents||[])){ const nm=(ent&&ent.name)||ent; if(typeof nm!=='string')continue;
+              let c2; try{ c2=new TextDecoder().decode(await project.readFile(nm)); }catch(e){ continue; }
+              if(mounted[nm]===c2) continue;
+              const target=(byBase[nm]&&byBase[nm].length===1)?byBase[nm][0]:nm;
+              await fsPut(target,c2); nNew++; }
+            if(nNew) refreshDisk(); }catch(e){}
           SH_EXIT=o.code||0; return ((o.stdout||'')+(o.stderr?('\n'+o.stderr):'')).replace(/\n$/,'');
         }catch(e){ SH_EXIT=126; return name+': '+T('no se pudo ejecutar el wasm: ','could not run the wasm: ')+e; } }
       SH_EXIT=1; return name+': '+T('orden no encontrada','command not found'); }
