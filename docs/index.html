@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u30';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u31';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -528,7 +528,7 @@ async function ccExec(argv, inlineCode){
     const outBase=(outName||(compileOnly?'a.o':'a.out.wasm')).split('/').pop();   // flat output in /project
     cargs.push('-o','/project/'+outBase);
     const ins=await clang.entrypoint.run({args:cargs, mount:{'/project':project}}); const o=await ins.wait();
-    if(!o.ok) return T('compilación falló','compilation failed')+' (exit '+o.code+'):\n'+(o.stderr||'');
+    if(!o.ok) return T('compilación falló','compilation failed')+' (exit '+o.code+'):\n'+((o.stdout?o.stdout+'\n':'')+(o.stderr||''));   // diagnostics can land on either stream
     // persist the output back to the virtual disk at the requested path (wasm binary -> base64)
     const savePath = outName? (inlineCode!=null?outName:shResolve(outName)) : null;
     try{ const w=await project.readFile(outBase); if(savePath){ let bin=''; for(let k=0;k<w.length;k++)bin+=String.fromCharCode(w[k]); await fsPut(savePath,' B64 '+btoa(bin)); refreshDisk(); } }catch(e){}
