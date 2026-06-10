@@ -993,7 +993,7 @@ async function agent(text){
   const key=getKey(); if(!key){ tool('Sin API key.'); return; }
   convo.push({role:'user',content:text}); curPanel=null;
   const skillsTxt=await activeSkillsPrompt();
-  const msgs=[{role:'system',content:'Eres Agents Web. Responde SIEMPRE en '+(LANGS[curLang]||'español')+'. Tienes un disco virtual; usa las tools list_files/read_file/write_file/delete_file. Si necesitas elegir entre opciones concretas, puedes usar ask_user. Si haces una pregunta abierta, termina tu turno y el usuario te respondera en el siguiente mensaje. Responde breve.'+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
   try{
     let step=0, limit=14;
@@ -1365,7 +1365,7 @@ document.addEventListener('keydown',(e)=>{
 buildLangMenu(); renderLangBtn();
 { const tb=document.getElementById('thinkbtn'); if(tb&&THINK) tb.classList.add('bg-purple-700'); }
 refreshDisk();
-if(!restoreSession()) bot('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.');
+if(!restoreSession()) bot(T('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.','Welcome to <b>Agents Web</b>. The left panel is a <b>virtual disk</b> (IndexedDB), persistent in this browser. Syncable with the GitHub repo. Type <code>/help</code>... or <code>ls</code>.'));
 </script>
 </body>
 </html>
