@@ -24,7 +24,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u4';fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&location.search.indexOf('u=')<0){location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u5';fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&location.search.indexOf('u=')<0){location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -972,6 +972,7 @@ function restoreSession(){ try{
 let lastPlan=null;            // last generated plan (steps[]) -> /plan with no arg shows it
 const convo=[];              // running conversation, used to invent a plan from context
 let loopStop=false;
+let btwPending=null;   // user interjection injected between agent actions (/btw)
 function stopLoop(){ loopStop=true; if(agentAbort) agentAbort.abort(); }
 /* ---- disk snapshot / rollback (abort) ---- */
 async function snapshotDisk(){ const m={}; for(const f of await fsList()) m[f.path]=f.content; return m; }
@@ -1044,6 +1045,7 @@ async function agent(text){
         limit+=14;
       }
       step++;
+      if(btwPending){ msgs.push({role:'user',content:'[interjección del usuario] '+btwPending}); convo.push({role:'user',content:btwPending}); btwPending=null; }
       let wait=bot('<span class="text-gray-400">pensando…</span>'); let res;
       try{ res=await streamChat(msgs, wait); }
       catch(e){ if(e.name==='AbortError'){ wait.remove(); convo.pop(); await restoreDisk(snap); abortCard(true); return; }
@@ -1092,6 +1094,9 @@ async function slashCmd(v){
     case '/skill': await skillCmd(arg); break;
     case '/tool': await toolCmd(arg); break;
     case '/sh': case '/shell': case '/bash': { const cwd=SHCWD; const out=await shRun(arg); termLine(arg||'', out, cwd); break; }
+    case '/btw': { const note=arg||T('¿Qué estás haciendo ahora y por qué? Resúmelo en una frase y continúa.','What are you doing right now and why? One sentence, then continue.');
+      if(workN>0){ btwPending=note; user('💬 '+(arg||T('¿Qué estás haciendo?','What are you doing?'))); tool(T('Enviado al agente; responderá entre acciones, sin interrumpir.','Sent to the agent; it will answer between actions, without interrupting.')); }
+      else { await agent(note); } break; }
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
     case '/cc': { setWorking(true); const out = /\.c(\s|$)/.test(arg)? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(/\.c/.test(arg)?arg:'‹code›'), out, SHCWD); break; }
     default: tool(T('Comando desconocido: ','Unknown command: ')+cmd+'. '+T('Prueba /help.','Try /help.'));
@@ -1178,6 +1183,7 @@ async function loopRun(goal, maxIter){
   try{
     while(iter<maxIter && !loopStop){
       iter++; card.setIter(iter); agentAbort=new AbortController();
+      if(btwPending){ msgs.push({role:'user',content:'[interjección del usuario] '+btwPending}); btwPending=null; }
       let wait=bot('<span class="text-gray-400">iteración '+iter+'…</span>'); let res;
       try{ res=await streamChat(msgs, wait); }catch(e){ if(e.name==='AbortError'){ wait.innerHTML='(detenido)'; break; } wait.remove(); errorCard('Bucle: error',String(e),'',null); break; }
       if(res.usage){ usage.pin+=res.usage.prompt_tokens||0; usage.pout+=res.usage.completion_tokens||0; }
@@ -1254,7 +1260,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
