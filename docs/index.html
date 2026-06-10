@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u10';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u11';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -197,7 +197,7 @@ async function shExpandSubst(line){ let g=0; let m;
     if(m=line.match(/`([^`]*)`/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
     break; }
   return line; }
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 let MK_VARS={};
 function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
@@ -250,7 +250,7 @@ async function shOne(cmd, stdin){
     case 'clear': clearChat(); return '';
     case 'which': { const found=a0.filter(x=>SHELL_CMDS.has(x)); SH_EXIT=(a0.length&&found.length===a0.length)?0:1; return found.map(x=>'/usr/bin/'+x).join('\n'); }
     case 'type': { const r=a0.map(x=> SHELL_CMDS.has(x)? x+' is /usr/bin/'+x : x+': '+T('no encontrado','not found')); SH_EXIT=a0.every(x=>SHELL_CMDS.has(x))?0:1; return r.join('\n'); }
-    case 'help': return 'ls cat echo pwd cd mkdir touch rm[-r] mv cp grep head tail wc find which date whoami env cc python git curl wget make apt | > >> && || ;';
+    case 'help': return 'ls cat echo pwd cd mkdir touch rm[-r] mv cp grep diff head tail wc find which date whoami env cc python git curl wget make apt | > >> && || ;';
     case 'ls': { const d=shResolve(a0[0]||'');
       { const bm=d.match(/^(?:usr\/bin|usr\/local\/bin|bin|sbin)(?:\/(.*))?$/); if(bm){ const list=[...SHELL_CMDS].sort(); if(bm[1]){ return list.includes(bm[1])? '/usr/bin/'+bm[1] : (SH_EXIT=1,'ls: '+a0[0]+': '+T('no existe','No such file')); } return list.join('  '); } }
       const {dirs,files}=await shList(d);
@@ -350,6 +350,12 @@ async function shOne(cmd, stdin){
     case 'sed': { const expr=a0[0]||''; const sm=expr.match(/^s([\/|#])(.*)\1(.*)\1(g?)$/); if(!sm){SH_EXIT=1;return 'sed: '+T('solo s/a/b/[g]','only s/a/b/[g]');} let txt=stdin; for(const x of a0.slice(1)){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||''; let re; try{re=new RegExp(sm[2], sm[4]?'g':'');}catch(e){SH_EXIT=1;return 'sed: regex';} return txt.split('\n').map(l=>l.replace(re,sm[3])).join('\n'); }
     case 'awk': { const fi=toks.indexOf('-F'); const FS=fi>=0?toks[fi+1]:null; const prog=a0.find(x=>x.indexOf('{')>=0)||''; let txt=stdin; for(const x of a0){ if(x===prog)continue; const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||'';
       const pm=prog.match(/\{\s*print\s+([^}]*)\}/); return txt.split('\n').filter(l=>l!=='').map(line=>{ const F=[line].concat(FS?line.split(FS):line.trim().split(/\s+/)); if(!pm) return line; return pm[1].split(',').map(t=>{ t=t.trim(); const f2=t.match(/^\$(\d+)$/); if(f2)return F[parseInt(f2[1])]||''; if(t==='NF')return String(F.length-1); return t.replace(/^"|"$/g,''); }).join(' '); }).join('\n'); }
+    case 'diff': { if(a0.length<2){SH_EXIT=1;return 'diff: '+T('faltan argumentos','missing operand');}
+      const A=await fsGet(shResolve(a0[0])), B=await fsGet(shResolve(a0[1]));
+      if(!A||!B){SH_EXIT=1;return 'diff: '+(A?a0[1]:a0[0])+': '+T('no existe','No such file');}
+      const ops=diffLines(A.content,B.content); const out=[]; let chg=false;
+      ops.forEach(o=>{ if(o.t==='-'){ out.push('< '+o.x); chg=true; } else if(o.t==='+'){ out.push('> '+o.x); chg=true; } else if(flags.includes('u')) out.push('  '+o.x); });
+      SH_EXIT=chg?1:0; return chg?out.join('\n'):''; }
     case 'basename': { let p=(a0[0]||'').replace(/\/+$/,''); let b=p.split('/').pop()||p; if(a0[1]&&b.endsWith(a0[1]))b=b.slice(0,-a0[1].length); return b; }
     case 'dirname': { let p=(a0[0]||'').replace(/\/+$/,''); const i=p.lastIndexOf('/'); return i<0?'.':(i===0?'/':p.slice(0,i)); }
     default: if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } } SH_EXIT=1; return name+': '+T('orden no encontrada','command not found');
@@ -378,7 +384,7 @@ async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>
   let stdin=null, out='';
   const stages=shSplitTop(line,['|']).filter((_,i)=>i%2===0).map(s=>s.trim()).filter(Boolean);
   for(const st of stages){ out=await shOne(st, stdin); stdin=out; }
-  if(redir){ const k=shResolve(redir); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev?'\n':'')+out):out); refreshDisk(); return ''; }
+  if(redir){ const k=shResolve(redir); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev&&!prev.endsWith('\n')?'\n':'')+out):out); refreshDisk(); return ''; }
   return out;
 }
 async function shGlob(item){ if(item.indexOf('*')<0 && item.indexOf('?')<0) return [item];

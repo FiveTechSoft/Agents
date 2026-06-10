@@ -88,6 +88,21 @@ try {
   /^1\s+2\s+10$/.test(t.wc) ? ok('grep | wc', t.wc) : ko('grep | wc', JSON.stringify(t.wc));
   t.app = await sh('echo extra >> src/a.txt && cat src/a.txt');
   t.app === 'hola mundo\nextra' ? ok('>> append && cat', t.app.replace('\n', '\\n')) : ko('>> append && cat', JSON.stringify(t.app));
+  // append to a file that already ends in \n must not produce a blank line
+  await sh('printf "uno\\n" > src/nl.txt');
+  t.app2 = await sh('echo dos >> src/nl.txt && cat src/nl.txt');
+  !t.app2.includes('\n\n') && t.app2.includes('uno') && t.app2.includes('dos')
+    ? ok('>> sin línea en blanco extra (fichero acaba en \\n)', JSON.stringify(t.app2))
+    : ko('>> sin línea en blanco extra', JSON.stringify(t.app2));
+  // diff command
+  await sh('printf "a\\nb\\n" > src/f1.txt');
+  await sh('printf "a\\nc\\n" > src/f2.txt');
+  t.diff = await sh('diff src/f1.txt src/f2.txt');
+  t.diff.includes('< b') && t.diff.includes('> c')
+    ? ok('diff f1 f2', t.diff.replace(/\n/g, ' | '))
+    : ko('diff f1 f2', JSON.stringify(t.diff));
+  t.diffSame = await sh('diff src/f1.txt src/f1.txt && echo IGUALES');
+  t.diffSame.includes('IGUALES') ? ok('diff iguales → exit 0', t.diffSame) : ko('diff iguales → exit 0', JSON.stringify(t.diffSame));
 } catch (e) { ko('Shell (excepción)', String(e)); }
 
 // ---------- 3. disk panel via real UI ----------
