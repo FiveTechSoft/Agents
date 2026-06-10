@@ -72,6 +72,7 @@
         <button id="thinkbtn" onclick="toggleThink()" title="Ver razonamiento del modelo (deepseek-reasoner)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🧠</button>
         <button onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
         <button onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
+        <button onclick="copyChat()" title="Copiar conversación" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">📋 Copy</button>
         <button onclick="runCmd('/clear')" title="Limpiar (/clear)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
         <button onclick="runCmd('/help')" class="text-gray-400 hover:text-gray-200 px-1">/help</button>
       </div>
@@ -940,6 +941,9 @@ const convo=[];              // running conversation, used to invent a plan from
 let loopStop=false;
 function stopLoop(){ loopStop=true; if(agentAbort) agentAbort.abort(); }
 function stopAgent(){ loopStop=true; if(agentAbort){ agentAbort.abort(); tool('Detenido.'); } }
+async function copyChat(){ const txt=(document.getElementById('chat').innerText||'').trim();
+  try{ await navigator.clipboard.writeText(txt); tool(T('📋 Conversación copiada (','📋 Conversation copied (')+txt.length+' '+T('caracteres)','chars)')); }
+  catch(e){ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(e2){} ta.remove(); tool('📋 '+T('copiado','copied')); } }
 function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; try{localStorage.removeItem('convo');}catch(e){} }
 
 // Streamed chat completion (SSE). Updates `wait` live with the text as it arrives;
