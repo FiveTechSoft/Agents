@@ -24,7 +24,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u5';fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&location.search.indexOf('u=')<0){location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u6';fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&location.search.indexOf('u=')<0){location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -659,19 +659,18 @@ async function gitCmd(arg){ const sp=(arg||'').indexOf(' '); const sub=(sp<0?arg
    Mini command shell + optional LLM agent (DeepSeek, function calling).
    Shell commands operate directly on the virtual disk.
    ===================================================================== */
-const HINTS=['Prueba /plan para generar un plan…','Pide: "crea notas.txt con…" (el agente escribe en el disco)',
-  'ls · read &lt;f&gt; · write &lt;f&gt; &lt;txt&gt; · del &lt;f&gt;','/cost para ver el gasto de sesión',
-  'Edita un fichero existente y verás el diff','/goal para fijar un objetivo, luego /plan',
-  '/compact para resumir el historial','/run para ejecutar el plan','Toca 💾 para ver el disco virtual'];
+// runnable suggestions: shown as placeholder AND inserted by Tab
+const HINTS=['ls -la','/plan crea un README del proyecto','/cost','write notas.txt Hola mundo',
+  '/sh find . -type f | sort','python -c "print(sum(range(101)))"','/help','/skill','/goal '];
 let hintIdx=0;
-function nextHint(){ hintIdx=(hintIdx+1)%HINTS.length; const p=document.getElementById('prompt'); const t=document.createElement('textarea'); t.innerHTML=HINTS[hintIdx]; p.placeholder=t.value; }
+function nextHint(){ hintIdx=(hintIdx+1)%HINTS.length; const p=document.getElementById('prompt'); if(p) p.placeholder=HINTS[hintIdx]; }
 
 /* prompt history: Up/Down navigate previous/next used prompts */
 const hist=[]; let histI=0;
 function runCmd(cmd){ const p=document.getElementById('prompt'); p.value=cmd; run(); }
 function promptKey(e){ const i=e.target;
   if(e.key==='Enter'){ run(); return; }
-  if(e.key==='Tab'){ if(!i.value && i.placeholder){ i.value=i.placeholder; e.preventDefault(); } return; }   // accept the hint
+  if(e.key==='Tab'){ if(!i.value){ i.value=HINTS[hintIdx]; e.preventDefault(); } return; }   // accept the current runnable hint (not the static placeholder)
   if(e.key==='ArrowUp'){ if(hist.length && histI>0){ histI--; i.value=hist[histI]; e.preventDefault(); setTimeout(()=>i.setSelectionRange(i.value.length,i.value.length),0); } }
   else if(e.key==='ArrowDown'){ if(histI<hist.length-1){ histI++; i.value=hist[histI]; } else { histI=hist.length; i.value=''; } e.preventDefault(); }
 }
