@@ -264,6 +264,23 @@ try {
   await ctx2.close();
 } catch (e) { ko('KV (excepción)', String(e).slice(0, 200)); }
 
+// ---------- 5e. HTML rendered view ----------
+try {
+  await page.fill('#newpath', 'pagina.html');
+  await page.click('button:text-is("+")');
+  await page.waitForSelector('#ed:not(.hidden)', { timeout: 5000 });
+  await page.fill('#edtext', '<!doctype html><html><body><h1 id="hb">HOLA_HTML</h1><script>document.getElementById("hb").textContent="JS_RAN"</scr' + 'ipt></body></html>');
+  const hbtn = page.locator('#edhtml');
+  await hbtn.isVisible() ? ok('HTML: botón Ver visible para .html') : ko('HTML: botón Ver visible');
+  await hbtn.click();
+  await page.waitForSelector('#edhtmlframe:not(.hidden)', { timeout: 5000 });
+  const fr = page.frameLocator('#edhtmlframe');
+  await page.waitForTimeout(500);
+  const txt = await fr.locator('#hb').innerText();
+  txt === 'JS_RAN' ? ok('HTML: iframe renderiza y ejecuta JS', txt) : ko('HTML: iframe render', txt);
+  await page.click('button:text-is("Cerrar")');
+} catch (e) { ko('HTML view (excepción)', String(e).slice(0, 150)); }
+
 // ---------- 6. markdown preview ----------
 try {
   await page.fill('#newpath', 'notas.md');

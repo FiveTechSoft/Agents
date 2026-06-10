@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u32';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u34';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -116,12 +116,14 @@
       <span id="edpath" class="font-mono text-xs text-pink-400"></span>
       <div class="flex gap-2">
         <button id="edprev" onclick="togglePreview()" class="hidden bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">👁 Preview</button>
+        <button id="edhtml" onclick="toggleHtmlView()" class="hidden bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">🌐 Ver</button>
         <button onclick="saveEd()" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs">Guardar</button>
         <button onclick="closeEd()" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">Cerrar</button>
       </div>
     </div>
     <textarea id="edtext" class="flex-1 bg-gray-900 p-3 font-mono text-xs resize-none focus:outline-none"></textarea>
     <div id="edpreview" class="hidden flex-1 overflow-y-auto bg-gray-900 p-4 text-sm prose-invert"></div>
+    <iframe id="edhtmlframe" class="hidden flex-1 bg-white rounded-b-xl" sandbox="allow-scripts allow-modals allow-forms allow-popups"></iframe>
   </div>
 </div>
 
@@ -516,19 +518,22 @@ async function ccExec(argv, inlineCode){
     const all=await fsList(); for(const f of all){ if(/\.(h|hpp|hxx|ch|api)$/i.test(f.path)){ try{ await project.writeFile(f.path.split('/').pop(), f.content); }catch(e){} } }   // .ch/.api: xBase-style headers (Harbour etc.)
     { const cBase={}; for(const f of all){ if(/\.c$/i.test(f.path)){ const bn=f.path.split('/').pop(); (cBase[bn]=cBase[bn]||[]).push(f); } }   // sources with a unique basename too: some projects #include "x.c" (Harbour's hbpp)
       for(const bn in cBase){ if(cBase[bn].length===1){ try{ await project.writeFile(bn, cBase[bn][0].content||''); }catch(e){} } } }
-    let outName=null, compileOnly=false, missing=null; const cargs=[]; let nSrc=0;
-    if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); cargs.push('/project/__main.c'); nSrc=1; }
+    let outName=null, compileOnly=false, missing=null; const cargs=[]; let nSrc=0; const srcParts=[], userFlags=[];
+    if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); cargs.push('/project/__main.c'); nSrc=1; srcParts.push(inlineCode); }
     for(let i=0;i<argv.length;i++){ const a=argv[i];
       if(a==='-o'){ outName=argv[++i]; }
       else if(a==='-c'){ compileOnly=true; cargs.push('-c'); }
-      else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ const base=a.split('/').pop(); const f=await fsGet(shResolve(a)); if(!f){ missing=a; break; } try{ await project.writeFile(base, f.content); }catch(e){} cargs.push('/project/'+base); nSrc++; }
-      else cargs.push(a); }
+      else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ const base=a.split('/').pop(); const f=await fsGet(shResolve(a)); if(!f){ missing=a; break; } try{ await project.writeFile(base, f.content); }catch(e){} cargs.push('/project/'+base); nSrc++; srcParts.push('/* === '+base+' === */\n'+(f.content||'')); }
+      else { cargs.push(a); if(/^-(O|std=|D|W|f|m)/.test(a)) userFlags.push(a); } }
     if(missing) return 'cc: '+T('no existe ','no such file ')+missing;
     if(!nSrc) return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');
     const outBase=(outName||(compileOnly?'a.o':'a.out.wasm')).split('/').pop();   // flat output in /project
     cargs.push('-o','/project/'+outBase);
     const ins=await clang.entrypoint.run({args:cargs, mount:{'/project':project}}); const o=await ins.wait();
-    if(!o.ok) return T('compilación falló','compilation failed')+' (exit '+o.code+'):\n'+((o.stdout?o.stdout+'\n':'')+(o.stderr||''));   // diagnostics can land on either stream
+    if(!o.ok){ const local=((o.stdout?o.stdout+'\n':'')+(o.stderr||'')).trim();
+      const muted=!/:\d+:\d+:/.test(local);   // a real diagnostic has a file:line:col position; "clang frontend command failed" (exit 45) does not -> ask Godbolt
+      const second= muted ? await godboltDiagnose(srcParts.join('\n'), userFlags) : '';
+      return T('compilación falló','compilation failed')+' (exit '+o.code+')'+(local?':\n'+local:'')+second; }
     // persist the output back to the virtual disk at the requested path (wasm binary -> base64)
     const savePath = outName? (inlineCode!=null?outName:shResolve(outName)) : null;
     try{ const w=await project.readFile(outBase); if(savePath){ let bin=''; for(let k=0;k<w.length;k++)bin+=String.fromCharCode(w[k]); await fsPut(savePath,' B64 '+btoa(bin)); refreshDisk(); } }catch(e){}
@@ -538,6 +543,26 @@ async function ccExec(argv, inlineCode){
     catch(e){ return '✓ '+T('compilado','compiled')+' '+(outName||outBase)+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
   }catch(e){ return 'cc error: '+e; } }
 async function ccRun(code){ return await ccExec([], code); }   // inline code path (/cc <code>, cc tool)
+// Fallback diagnosis: when the in-browser clang dies with a mute crash (the wasm cc1 hits its
+// stack limit on a big file -> "exit 45" with no error), send the same source to Compiler
+// Explorer (godbolt.org) — a NATIVE clang with no such limit — to get the real verdict.
+// CORS-friendly; goes through the proxy if one is set. Diagnostic only (no execution: that
+// compiler is freestanding, no wasi-libc, so it cannot produce a runnable executable).
+async function godboltDiagnose(source, userFlags){
+  if(!source || source.length>180000) return '';   // keep the request reasonable
+  const args=(userFlags&&userFlags.length?userFlags.join(' ')+' ':'')+'--target=wasm32-wasip1 -c -fsyntax-only';
+  const body=JSON.stringify({source, options:{userArguments:args, filters:{}}});
+  const url='https://godbolt.org/api/compiler/wasm32cclang/compile';
+  try{
+    const r=await fetch(PROXY?(PROXY+'/?url='+encodeURIComponent(url)):url,
+      {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const err=(j.stderr||[]).map(x=>x.text).join('\n').replace(/\[[\d;]*m/g,'').trim();   // strip ANSI colours
+    if(j.code===0){ return '\n\n'+T('↪ El clang del navegador no pudo con este fichero (límite del compilador WASM), pero un clang nativo (Compiler Explorer) lo compila SIN errores: tu C es válido.','↪ The in-browser clang could not handle this file (WASM compiler limit), but a native clang (Compiler Explorer) compiles it with NO errors: your C is valid.')+(err?('\n'+err.split('\n').filter(l=>/warning:/i.test(l)).slice(0,5).join('\n')):''); }
+    return '\n\n'+T('↪ Segunda opinión (clang nativo, Compiler Explorer) — errores reales:','↪ Second opinion (native clang, Compiler Explorer) — real errors:')+'\n'+(err.split('\n').slice(0,25).join('\n')||('exit '+j.code)); }
+  catch(e){ return '\n\n'+T('(no pude consultar Compiler Explorer: ','(could not reach Compiler Explorer: ')+e+')'; }
+}
 
 /* ---- editor ---- */
 let edCur=null;
@@ -545,12 +570,19 @@ async function openEd(path){ const f=await fsGet(path); edCur=path;
   if(window.innerWidth<768){ const d=document.getElementById('disk'); if(d && !d.classList.contains('-translate-x-full')) toggleDisk(); }   // close the drawer on mobile so the editor is visible
   document.getElementById('edpath').textContent=path; document.getElementById('edtext').value=f?f.content:'';
   document.getElementById('edtext').classList.remove('hidden'); document.getElementById('edpreview').classList.add('hidden');
-  document.getElementById('edprev').classList.toggle('hidden', !/\.md$/i.test(path));   // preview only for .md
+  document.getElementById('edhtmlframe').classList.add('hidden');
+  document.getElementById('edprev').classList.toggle('hidden', !/\.md$/i.test(path));   // markdown preview only for .md
+  document.getElementById('edhtml').classList.toggle('hidden', !/\.(html?|svg)$/i.test(path));   // rendered view for .html/.svg
   document.getElementById('ed').classList.remove('hidden'); }
-function closeEd(){ document.getElementById('ed').classList.add('hidden'); }
+function closeEd(){ document.getElementById('ed').classList.add('hidden'); const fr=document.getElementById('edhtmlframe'); if(fr) fr.srcdoc=''; }   // unload iframe
 function togglePreview(){ const ta=document.getElementById('edtext'), pv=document.getElementById('edpreview'), b=document.getElementById('edprev');
   if(pv.classList.contains('hidden')){ pv.innerHTML=md(ta.value); pv.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
   else { pv.classList.add('hidden'); ta.classList.remove('hidden'); b.textContent='👁 Preview'; } }
+// render the .html/.svg being edited in a sandboxed iframe (scripts allowed, but no same-origin
+// access -> can't touch the disk, localStorage or the parent page)
+function toggleHtmlView(){ const ta=document.getElementById('edtext'), fr=document.getElementById('edhtmlframe'), b=document.getElementById('edhtml');
+  if(fr.classList.contains('hidden')){ fr.srcdoc=ta.value; fr.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
+  else { fr.classList.add('hidden'); fr.srcdoc=''; ta.classList.remove('hidden'); b.textContent='🌐 Ver'; } }
 async function saveEd(){ if(edCur!=null){ await fsPut(edCur,document.getElementById('edtext').value); refreshDisk(); closeEd(); } }
 
 /* ---- chat helpers ---- */
