@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u18';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u19';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1110,7 +1110,8 @@ async function agent(text){
   } finally{ setWorking(false); saveSession(); checkContext(); }
 }
 
-/* ===== shareable read-only session links: /share -> ?session=<gist-id> or #s=<deflate+b64url> ===== */
+/* ===== shareable read-only session links: /share -> ?session=kv-<id> (worker KV), ?session=<gist-id> or #s=<deflate+b64url> ===== */
+const SHARE_WORKER='agents-proxy.antonio-fivetech.workers.dev';   // default session store (KV); /proxy overrides
 function b64urlEnc(bin){ return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function b64urlDec(t){ return atob(t.replace(/-/g,'+').replace(/_/g,'/')); }
 async function deflateB64(s){ try{
@@ -1139,10 +1140,12 @@ async function shareSession(){
   // or a disk file, redact it before the session leaves this browser
   try{ const secrets=[localStorage.getItem('ds_key')||'', ghTok()||''].filter(s=>s.length>8);
     for(const s of secrets){ if(json.indexOf(s)>=0){ json=json.split(s).join('[REDACTED]'); tool(T('⚠️ Una clave aparecía en la sesión y se ha ocultado en el enlace.','⚠️ A key appeared in the session and was redacted from the link.')); } } }catch(e){}
-  if(PROXY){   // shortest links: the Cloudflare Worker stores the session in KV (see docs/cloudflare-worker.js)
-    try{ const r=await fetch(PROXY+'/session',{method:'POST',body:json});
-      if(r.ok){ const j=await r.json(); url=base+'?session=kv-'+j.id+'&via='+encodeURIComponent(new URL(PROXY).host); }
-      else tool('KV: HTTP '+r.status+' — '+T('¿falta el binding SESSIONS en el worker?','is the SESSIONS binding missing on the worker?'));
+  { // shortest links: a Cloudflare Worker stores the session in KV (see docs/cloudflare-worker.js).
+    // Default worker = the app's own; /proxy overrides it with your own deployment.
+    const shareHost = PROXY? new URL(PROXY).host : SHARE_WORKER;
+    try{ const r=await fetch('https://'+shareHost+'/session',{method:'POST',body:json});
+      if(r.ok){ const j=await r.json(); url=base+'?session=kv-'+j.id+'&via='+encodeURIComponent(shareHost); }
+      else tool('KV: HTTP '+r.status+' — '+T('caigo a Gist/enlace #.','falling back to Gist/# link.'));
     }catch(e){ tool('KV: '+e); } }
   if(!url && ghTok()){
     try{ const r=await fetch('https://api.github.com/gists',{method:'POST',headers:ghHeaders(),
