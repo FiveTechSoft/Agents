@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u28';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u29';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -200,7 +200,7 @@ async function shExpandSubst(line){ let g=0; let m;
   return line; }
 const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
-let MK_VARS={};
+let MK_VARS={}, MK_SKIPPED=0;
 function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
   (text||'').replace(/\r/g,'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
     if(/^[ \t]+/.test(raw) && cur){ targets[cur].recipe.push(mkExpand(raw.replace(/^[ \t]+@?/,''),vars)); return; }   // any indent = recipe (tabs optional)
@@ -319,15 +319,18 @@ async function shOne(cmd, stdin){
       return '['+T('binario','binary')+' '+got.buf.length+' B, '+ct+'] '+T('usa -o fichero','use -o file'); }
     case 'make': { if(a0[0]==='--version'||flags.includes('v')) return 'GNU Make (Agents Web, simulado)'; const mk=await fsGet(shResolve('Makefile'))||await fsGet(shResolve('makefile')); if(!mk){SH_EXIT=1;return 'make: '+T('no hay Makefile','no Makefile');}
       const asg=[], pos=[]; for(const x of a0){ const am2=x.match(/^(\w+)=(.*)$/); if(am2)asg.push(am2); else pos.push(x); }   // make VAR=value target
+      MK_SKIPPED=0;
       const targets=parseMake(mk.content); asg.forEach(am2=>{ MK_VARS[am2[1]]=am2[2]; });
       const tgt=pos[0]||Object.keys(targets)[0]; if(!targets[tgt]){SH_EXIT=1;return 'make: *** No rule to make target \''+tgt+'\'.';}
       const out=[], done=new Set(); const runT=async(t)=>{ if(done.has(t))return; done.add(t); const T2=targets[t]; if(!T2)return; for(const d of T2.deps){ if(targets[d]) await runT(d); }
         for(const raw of T2.recipe){ let line=raw.replace(/\$@/g,t).replace(/\$</g,T2.deps[0]||'').replace(/\$\^/g,T2.deps.join(' ')).replace(/\$\?/g,T2.deps.join(' '));   // automatic vars
           line=mkExpand(line,MK_VARS).replace(/\$[\(\{]\w+[\)\}]/g,'');   // re-expand $(VAR) + drop leftovers (so the shell never runs them as $(cmd))
-          let g2=0; while(/\$[\(\{]/.test(line)&&g2++<10) line=line.replace(/\$[\(\{][^(){}]*[\)\}]/g,'');   // strip unsupported GNU functions ($(if ...), $(wildcard ...)) instead of running the garbage
-          line=line.trim(); if(!line) continue;
+          let g2=0; const had=line; while(/\$[\(\{]/.test(line)&&g2++<10) line=line.replace(/\$[\(\{][^(){}]*[\)\}]/g,'');   // strip unsupported GNU functions ($(if ...), $(wildcard ...)) instead of running the garbage
+          line=line.trim(); if(!line){ if(had.trim()) MK_SKIPPED++; continue; }
           out.push(line); const o=await shRun(line); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
-      await runT(tgt); return out.join('\n'); }
+      await runT(tgt);
+      if(MK_SKIPPED) out.push('make: ('+T('simulado','simulated')+') '+MK_SKIPPED+' '+T('recetas saltadas: usan funciones GNU no soportadas ($(if), $(wildcard), $(shell)...). Este make NO puede construir proyectos complejos; compila directo con cc.','recipes skipped: they use unsupported GNU functions ($(if), $(wildcard), $(shell)...). This make can NOT build complex projects; compile directly with cc.'));
+      return out.join('\n'); }
     case 'git': { const sub=(a0[0]||'').replace(/^--/,''); if(sub==='version'){ return 'git version 1.27.1 (isomorphic-git, WASM-free, en navegador)'; }
       if(a0[0]==='clone'){ const tgt=a0.slice(1).find(x=>/[\/.]/.test(x))||GIT_REPO||'FiveTechSoft/Agents';   // skip numeric args like the value of --depth
         const okc=await gitClone(tgt); if(!okc){ SH_EXIT=1; return 'git clone: '+T('falló (ver card de error)','failed (see error card)'); } return ''; } await gitCmd(rest); return ''; }
