@@ -13,7 +13,7 @@ const ko = (name, detail = '') => results.push({ pass: false, name, detail });
 const browser = await ENGINE.launch({ headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 const page = await ctx.newPage();
-page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text() + ' @ ' + (m.location().url || '')); });
 page.on('pageerror', e => pageErrors.push(String(e)));
 page.on('dialog', d => d.dismiss().catch(() => {}));
 
@@ -156,6 +156,27 @@ try {
   const v = await page.inputValue('#prompt');
   v === 'echo HIST_MARKER_42' ? ok('Historial: ↑ tras recargar', v) : ko('Historial: ↑ tras recargar', `valor="${v}"`);
 } catch (e) { ko('Historial (excepción)', String(e)); }
+
+// ---------- 5b. shared session link (#s=) ----------
+try {
+  const enc = await page.evaluate(() => deflateB64(JSON.stringify({
+    v: 1, convo: [
+      { role: 'user', content: 'hola SHARE_MARKER' },
+      { role: 'assistant', content: '**respuesta** compartida <img src=x onerror="window.__xss=1">' }
+    ]
+  })));
+  await page.goto('about:blank');   // hash-only navigation is same-document; force a real load
+  await page.goto(URL.replace(/[#?].*$/, '') + '#s=' + enc, { waitUntil: 'domcontentloaded' });
+  await waitStable();
+  const chatTxt = await page.innerText('#chat');
+  chatTxt.includes('hola SHARE_MARKER') && chatTxt.includes('respuesta')
+    ? ok('Share: #s= renderiza la sesión', 'mensajes visibles')
+    : ko('Share: #s= renderiza la sesión', chatTxt.slice(0, 150));
+  /solo lectura|read-only/i.test(chatTxt) ? ok('Share: banner solo-lectura') : ko('Share: banner solo-lectura');
+  const xss = await page.evaluate(() => window.__xss);
+  !xss ? ok('Share: HTML malicioso sanitizado (DOMPurify)') : ko('Share: HTML malicioso EJECUTADO', '__xss=1');
+  await page.evaluate(() => { location.hash = ''; });
+} catch (e) { ko('Share (excepción)', String(e).slice(0, 200)); }
 
 // ---------- 6. markdown preview ----------
 try {
