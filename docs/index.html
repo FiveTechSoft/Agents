@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u19';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u20';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1526,6 +1526,19 @@ function toggleDisk(){ const d=document.getElementById('disk'), b=document.getEl
   d.classList.toggle('-translate-x-full',!open); d.classList.toggle('translate-x-0',open);
   b.classList.toggle('hidden',!open); }
 
+// multi-line paste of COMMANDS -> run line by line (a single-line input would
+// otherwise collapse newlines into spaces and feed the shell one giant line).
+// Only when every non-empty line looks like a command; prose/code pastes stay intact.
+document.getElementById('prompt').addEventListener('paste',(e)=>{
+  const txt=(e.clipboardData||window.clipboardData).getData('text')||'';
+  const lines=txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  if(lines.length<2) return;
+  const isCmd=s=>s.startsWith('/')||s.startsWith('./')||SHELL_CMDS.has(s.split(/\s+/)[0]);
+  if(!lines.every(isCmd)) return;
+  e.preventDefault();
+  (async()=>{ const i=document.getElementById('prompt');
+    for(const ln of lines){ i.value=ln; await run(); } })();
+});
 document.getElementById('fileinp').addEventListener('change', async (e)=>{
   for(const f of e.target.files){ const txt=await f.text(); await fsPut(f.name,txt); tool('📎 Adjuntado al disco: '+f.name+' ('+txt.length+' B)'); }
   refreshDisk(); e.target.value=''; });

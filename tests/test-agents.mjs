@@ -141,6 +141,25 @@ if (process.env.AGENTS_CC === '1') {
   } catch (e) { ko('cc/run wasm (excepción)', String(e).slice(0, 200)); }
 }
 
+// ---------- 3c. multi-line paste of commands runs line by line ----------
+try {
+  const before = await page.locator('#chat .font-mono').count();
+  await page.focus('#prompt');
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'echo A > pegado.txt\necho B >> pegado.txt\ncat pegado.txt');
+    document.getElementById('prompt').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await page.waitForFunction(
+    n => document.querySelectorAll('#chat .font-mono').length >= n + 3,
+    before, { timeout: 15000 }
+  );
+  const pasted = await page.locator('#chat .font-mono').last().innerText();
+  pasted.includes('A') && pasted.includes('B')
+    ? ok('Paste multilínea → ejecuta línea a línea', 'cat = A|B')
+    : ko('Paste multilínea', JSON.stringify(pasted.slice(0, 100)));
+} catch (e) { ko('Paste multilínea (excepción)', String(e).slice(0, 150)); }
+
 // ---------- 4. cards ----------
 await card('/help', 'Comandos Disponibles');
 await card('/cost', 'Métricas de Sesión');
