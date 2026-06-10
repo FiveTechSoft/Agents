@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u14';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q='?u='+Date.now();try{var ss=new URLSearchParams(location.search).get('session');if(ss)q+='&session='+encodeURIComponent(ss);}catch(e){}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u15';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q='?u='+Date.now();try{var ss=new URLSearchParams(location.search).get('session');if(ss)q+='&session='+encodeURIComponent(ss);}catch(e){}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -393,7 +393,7 @@ async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>
   let stdin=null, out='';
   const stages=shSplitTop(line,['|']).filter((_,i)=>i%2===0).map(s=>s.trim()).filter(Boolean);
   for(const st of stages){ out=await shOne(st, stdin); stdin=out; }
-  if(redir){ const k=shResolve(redir); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev&&!prev.endsWith('\n')?'\n':'')+out):out); refreshDisk(); return ''; }
+  if(redir){ const k=shResolve(shVarSub(redir)); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev&&!prev.endsWith('\n')?'\n':'')+out):out); refreshDisk(); return ''; }
   return out;
 }
 async function shGlob(item){ if(item.indexOf('*')<0 && item.indexOf('?')<0) return [item];
@@ -1129,7 +1129,11 @@ async function shareSession(){
   try{ const items=await fsList(); const disk={}; let sz=0, fits=true;
     for(const f of items){ sz+=(f.content||'').length; if(sz>300000){ fits=false; break; } disk[f.path]=f.content||''; }
     if(fits) data.disk=disk; }catch(e){}
-  const json=JSON.stringify(data), base=location.origin+location.pathname; let url=null;
+  let json=JSON.stringify(data); const base=location.origin+location.pathname; let url=null;
+  // safety net: if the DeepSeek key or GitHub token ever leaked into the conversation
+  // or a disk file, redact it before the session leaves this browser
+  try{ const secrets=[localStorage.getItem('ds_key')||'', ghTok()||''].filter(s=>s.length>8);
+    for(const s of secrets){ if(json.indexOf(s)>=0){ json=json.split(s).join('[REDACTED]'); tool(T('⚠️ Una clave aparecía en la sesión y se ha ocultado en el enlace.','⚠️ A key appeared in the session and was redacted from the link.')); } } }catch(e){}
   if(ghTok()){
     try{ const r=await fetch('https://api.github.com/gists',{method:'POST',headers:ghHeaders(),
         body:JSON.stringify({description:'Agents Web — shared session',public:false,files:{'agents-session.json':{content:json}}})});

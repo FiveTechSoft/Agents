@@ -103,6 +103,10 @@ try {
     : ko('diff f1 f2', JSON.stringify(t.diff));
   t.diffSame = await sh('diff src/f1.txt src/f1.txt && echo IGUALES');
   t.diffSame.includes('IGUALES') ? ok('diff iguales → exit 0', t.diffSame) : ko('diff iguales → exit 0', JSON.stringify(t.diffSame));
+  // redirect target with a loop variable must expand ($i)
+  await sh('for i in $(seq 1 3); do echo "v$i" > src/var$i.txt; done');
+  t.loop = await sh('cat src/var1.txt src/var2.txt src/var3.txt');
+  t.loop === 'v1\nv2\nv3' ? ok('bucle for + redirect con $i', t.loop.replace(/\n/g, '|')) : ko('bucle for + redirect con $i', JSON.stringify(t.loop));
 } catch (e) { ko('Shell (excepción)', String(e)); }
 
 // ---------- 3. disk panel via real UI ----------
