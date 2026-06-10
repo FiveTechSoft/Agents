@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u23';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u24';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -318,10 +318,14 @@ async function shOne(cmd, stdin){
       if(outf){ await fsPut(shResolve(outf),' B64 '+b64); refreshDisk(); return 'saved '+outf+' ('+got.buf.length+' B '+T('binario, base64','binary, base64')+')'; }
       return '['+T('binario','binary')+' '+got.buf.length+' B, '+ct+'] '+T('usa -o fichero','use -o file'); }
     case 'make': { if(a0[0]==='--version'||flags.includes('v')) return 'GNU Make (Agents Web, simulado)'; const mk=await fsGet(shResolve('Makefile'))||await fsGet(shResolve('makefile')); if(!mk){SH_EXIT=1;return 'make: '+T('no hay Makefile','no Makefile');}
-      const targets=parseMake(mk.content); const tgt=a0[0]||Object.keys(targets)[0]; if(!targets[tgt]){SH_EXIT=1;return 'make: *** No rule to make target \''+tgt+'\'.';}
+      const asg=[], pos=[]; for(const x of a0){ const am2=x.match(/^(\w+)=(.*)$/); if(am2)asg.push(am2); else pos.push(x); }   // make VAR=value target
+      const targets=parseMake(mk.content); asg.forEach(am2=>{ MK_VARS[am2[1]]=am2[2]; });
+      const tgt=pos[0]||Object.keys(targets)[0]; if(!targets[tgt]){SH_EXIT=1;return 'make: *** No rule to make target \''+tgt+'\'.';}
       const out=[], done=new Set(); const runT=async(t)=>{ if(done.has(t))return; done.add(t); const T2=targets[t]; if(!T2)return; for(const d of T2.deps){ if(targets[d]) await runT(d); }
         for(const raw of T2.recipe){ let line=raw.replace(/\$@/g,t).replace(/\$</g,T2.deps[0]||'').replace(/\$\^/g,T2.deps.join(' ')).replace(/\$\?/g,T2.deps.join(' '));   // automatic vars
           line=mkExpand(line,MK_VARS).replace(/\$[\(\{]\w+[\)\}]/g,'');   // re-expand $(VAR) + drop leftovers (so the shell never runs them as $(cmd))
+          let g2=0; while(/\$[\(\{]/.test(line)&&g2++<10) line=line.replace(/\$[\(\{][^(){}]*[\)\}]/g,'');   // strip unsupported GNU functions ($(if ...), $(wildcard ...)) instead of running the garbage
+          line=line.trim(); if(!line) continue;
           out.push(line); const o=await shRun(line); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
       await runT(tgt); return out.join('\n'); }
     case 'git': { const sub=(a0[0]||'').replace(/^--/,''); if(sub==='version'){ return 'git version 1.27.1 (isomorphic-git, WASM-free, en navegador)'; }
@@ -1084,7 +1088,7 @@ async function agent(text){
   convo.push({role:'user',content:text}); curPanel=null;
   const snap=await snapshotDisk();   // for rollback on abort
   const skillsTxt=await activeSkillsPrompt();
-  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
   try{
     let step=0, limit=14;
