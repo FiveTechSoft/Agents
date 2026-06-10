@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u36';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u37';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1025,10 +1025,12 @@ function flowCard(){
   const legend=kinds.map(k=>{ const m=FLOW_META[k]; return m?'<span class="inline-flex items-center gap-1 text-[10px] text-gray-400"><span class="inline-block w-2 h-2 rounded-full '+m.dot+'"></span>'+m.i+'</span>':''; }).join('');
   head.innerHTML='<div><div class="font-semibold text-gray-100 flex items-center gap-2 text-base">🔀 Flow</div><div class="text-[11px] text-gray-400 mt-0.5">'+T('Qué hizo el agente, paso a paso','What the agent did, step by step')+' · <span class="text-gray-300">'+FLOW.length+' '+T('pasos','steps')+'</span></div><div class="flex gap-2 mt-1.5 flex-wrap">'+legend+'</div></div>';
   const btns=el('<div class="flex gap-2 shrink-0"></div>');
+  const mm=el('<button class="bg-pink-800/60 hover:bg-pink-700 px-3 py-1.5 rounded text-xs">📊 Mermaid</button>');
   const cp=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">📋 '+T('Copiar','Copy')+'</button>');
   const cl=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">🗑</button>');
   const cls=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">✕</button>');
-  btns.appendChild(cp); btns.appendChild(cl); btns.appendChild(cls); head.appendChild(btns); box.appendChild(head);
+  btns.appendChild(mm); btns.appendChild(cp); btns.appendChild(cl); btns.appendChild(cls); head.appendChild(btns); box.appendChild(head);
+  mm.onclick=()=>flowMermaid();
   const body=el('<div class="flex-1 overflow-y-auto scroll p-4"></div>');
   if(!FLOW.length){ body.innerHTML='<div class="text-gray-500 text-center mt-10 text-sm">'+T('Aún no hay actividad.<br>Pídele algo al agente y vuelve aquí.','No activity yet.<br>Ask the agent to do something and come back.')+'</div>'; }
   else {
@@ -1069,6 +1071,46 @@ function flowCard(){
   cl.onclick=()=>{ flowClear(); close(); };
 }
 function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+// build a Mermaid flowchart from the Flow timeline
+function flowToMermaid(){
+  const MC={user:'#3b82f6',think:'#a855f7',tool:'#f59e0b',permit:'#f97316',reply:'#10b981',cmd:'#14b8a6',slash:'#d946ef',error:'#ef4444'};
+  const clean=s=>(''+s).replace(/["\\]/g,' ').replace(/[\r\n]+/g,' ').replace(/[<>]/g,'').trim();
+  const lbl=(e)=>{ const m=FLOW_META[e.k]||FLOW_META.tool; const ic=e.k==='tool'?(TOOL_ICON[e.l]||'🔧'):m.i;
+    let t=clean(e.k==='tool'?((TOOL_VERB[e.l]||e.l)):(m.v));
+    let sub='';
+    if(e.k==='tool'&&e.d){ const a=e.d.args||{}; const k=Object.keys(a)[0]; if(k) sub=(''+a[k]).slice(0,30); }
+    else if(typeof e.d==='string'&&e.d) sub=e.d.slice(0,40);
+    else if(e.l&&e.k!=='tool') sub=e.l.slice(0,40);
+    sub=clean(sub);
+    return ic+' '+t+(sub?('<br/>'+sub):''); };
+  let out='flowchart TD\n';
+  FLOW.forEach((e,i)=>{ out+='  n'+i+'["'+lbl(e)+'"]\n'; });
+  for(let i=0;i<FLOW.length-1;i++) out+='  n'+i+' --> n'+(i+1)+'\n';
+  FLOW.forEach((e,i)=>{ const c=MC[e.k]||'#6b7280'; out+='  style n'+i+' fill:'+c+'22,stroke:'+c+',color:#e5e7eb\n'; });
+  return out;
+}
+function flowMermaid(){
+  const code=flowToMermaid();
+  const ov=el('<div class="fixed inset-0 bg-black/80 flex items-center justify-center p-3 md:p-6 z-[60]"></div>');
+  const box=el('<div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-5xl flex flex-col shadow-2xl" style="height:92vh"></div>');
+  const head=el('<div class="p-3 border-b border-gray-700 flex items-center justify-between shrink-0"></div>');
+  head.innerHTML='<span class="font-semibold text-gray-100 flex items-center gap-2">📊 Mermaid — '+T('diagrama de flujo','flow diagram')+'</span>';
+  const hb=el('<div class="flex gap-2"></div>');
+  const cp=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">📋 '+T('Copiar código','Copy code')+'</button>');
+  const lk=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">🔗 mermaid.live</button>');
+  const cls=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">✕</button>');
+  hb.appendChild(cp); hb.appendChild(lk); hb.appendChild(cls); head.appendChild(hb); box.appendChild(head);
+  // rendered diagram in a sandboxed iframe (mermaid loaded inside it, isolated from this page)
+  const fr=el('<iframe class="flex-1 bg-white rounded-b-xl" sandbox="allow-scripts"></iframe>');
+  const srcdoc='<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#0b1020;display:flex;justify-content:center}#d{padding:16px}</style></head><body><pre class="mermaid" id="d"></pre>'+
+    '<scr'+'ipt type="module">import m from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";document.getElementById("d").textContent='+JSON.stringify(code)+';m.initialize({startOnLoad:false,theme:"dark"});m.run();</scr'+'ipt></body></html>';
+  fr.setAttribute('srcdoc', srcdoc);
+  const ta=el('<textarea readonly class="shrink-0 bg-gray-950 text-gray-300 font-mono text-[10px] p-2 h-28 border-t border-gray-700 resize-none"></textarea>'); ta.value=code;
+  box.appendChild(fr); box.appendChild(ta); ov.appendChild(box); document.body.appendChild(ov);
+  const close=()=>ov.remove(); cls.onclick=close; ov.onclick=(e)=>{ if(e.target===ov) close(); };
+  cp.onclick=async()=>{ try{ await navigator.clipboard.writeText(code); cp.textContent='✓'; }catch(e){ ta.select(); } };
+  lk.onclick=()=>{ try{ const data=btoa(unescape(encodeURIComponent(JSON.stringify({code,mermaid:{theme:'dark'}})))); window.open('https://mermaid.live/edit#base64:'+data,'_blank'); }catch(e){} };
+}
 
 /* ===== collapsible "N acciones" panel with per-tool icons + check (mockup 1) ===== */
 const SVG=(cls,b)=>'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'+cls+'">'+b+'</svg>';
