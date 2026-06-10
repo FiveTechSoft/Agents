@@ -189,7 +189,8 @@ async function shExpandSubst(line){ let g=0; let m;
   return line; }
 const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
-function parseMake(text){ const vars={}, targets={}; let cur=null;
+let MK_VARS={};
+function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
   (text||'').replace(/\r/g,'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
     if(/^[ \t]+/.test(raw) && cur){ targets[cur].recipe.push(mkExpand(raw.replace(/^[ \t]+@?/,''),vars)); return; }   // any indent = recipe (tabs optional)
     const am=raw.match(/^(\w+)\s*:?=\s*(.*)$/) && raw.match(/^(\w+)\s*(?::=|\?=|=)\s*(.*)$/);
@@ -308,7 +309,8 @@ async function shOne(cmd, stdin){
     case 'make': { if(a0[0]==='--version'||flags.includes('v')) return 'GNU Make (Agents Web, simulado)'; const mk=await fsGet(shResolve('Makefile'))||await fsGet(shResolve('makefile')); if(!mk){SH_EXIT=1;return 'make: '+T('no hay Makefile','no Makefile');}
       const targets=parseMake(mk.content); const tgt=a0[0]||Object.keys(targets)[0]; if(!targets[tgt]){SH_EXIT=1;return 'make: *** No rule to make target \''+tgt+'\'.';}
       const out=[], done=new Set(); const runT=async(t)=>{ if(done.has(t))return; done.add(t); const T2=targets[t]; if(!T2)return; for(const d of T2.deps){ if(targets[d]) await runT(d); }
-        for(const raw of T2.recipe){ const line=raw.replace(/\$@/g,t).replace(/\$</g,T2.deps[0]||'').replace(/\$\^/g,T2.deps.join(' ')).replace(/\$\?/g,T2.deps.join(' '));   // automatic vars
+        for(const raw of T2.recipe){ let line=raw.replace(/\$@/g,t).replace(/\$</g,T2.deps[0]||'').replace(/\$\^/g,T2.deps.join(' ')).replace(/\$\?/g,T2.deps.join(' '));   // automatic vars
+          line=mkExpand(line,MK_VARS).replace(/\$[\(\{]\w+[\)\}]/g,'');   // re-expand $(VAR) + drop leftovers (so the shell never runs them as $(cmd))
           out.push(line); const o=await shRun(line); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
       await runT(tgt); return out.join('\n'); }
     case 'git': { const sub=(a0[0]||'').replace(/^--/,''); if(sub==='version'){ return 'git version 1.27.1 (isomorphic-git, WASM-free, en navegador)'; }
@@ -449,25 +451,27 @@ async function ccExec(argv, inlineCode){
   let clang; try{ clang=await ensureClang(); }catch(e){ return 'clang no disponible: '+e; }
   try{
     const project=new wasmerMod.Directory();
-    const all=await fsList(); for(const f of all){ if(/\.(c|h|hpp|hxx|cpp|cc|cxx)$/i.test(f.path)) await project.writeFile(f.path.split('/').pop(), f.content); }
+    // mount the disk under /project preserving full paths (no basename collisions)
+    const all=await fsList(); for(const f of all){ if(/\.(c|h|hpp|hxx|cpp|cc|cxx)$/i.test(f.path)){ try{ await project.writeFile(f.path, f.content); }catch(e){} } }
     if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); argv=['__main.c']; }
     let outName=null, compileOnly=false; const cargs=[]; let nSrc=0;
     for(let i=0;i<argv.length;i++){ const a=argv[i];
       if(a==='-o'){ outName=argv[++i]; }
       else if(a==='-c'){ compileOnly=true; cargs.push('-c'); }
-      else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ cargs.push('/project/'+a.split('/').pop()); nSrc++; }
+      else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ const p=inlineCode!=null?a:shResolve(a); cargs.push('/project/'+p); nSrc++; }
       else cargs.push(a); }
     if(!nSrc) return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');
-    const outBase=(outName||(compileOnly?'a.o':'a.out.wasm')).split('/').pop();   // compile inside /project (flat); subdirs not mounted
-    cargs.push('-o','/project/'+outBase);
+    const outRel = outName? (inlineCode!=null?outName:shResolve(outName)) : (compileOnly?'a.o':'a.out.wasm');
+    const odir = outRel.indexOf('/')>=0? outRel.slice(0,outRel.lastIndexOf('/')) : '';
+    if(odir){ try{ await project.writeFile(odir+'/.keep',''); }catch(e){} }   // ensure output dir exists
+    cargs.push('-o','/project/'+outRel);
     const ins=await clang.entrypoint.run({args:cargs, mount:{'/project':project}}); const o=await ins.wait();
     if(!o.ok) return T('compilación falló','compilation failed')+' (exit '+o.code+'):\n'+(o.stderr||'');
-    // persist the output to the virtual disk at the requested path (wasm binary -> base64)
-    try{ const w=await project.readFile(outBase); if(outName){ let bin=''; for(let k=0;k<w.length;k++)bin+=String.fromCharCode(w[k]); await fsPut(shResolve(outName),' B64 '+btoa(bin)); refreshDisk(); } }catch(e){}
-    if(compileOnly) return '✓ '+T('compilado','compiled')+' '+(outName||outBase)+(o.stderr?'\n'+o.stderr:'');
-    try{ const wasm=await project.readFile(outBase); const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
-      return ('✓ '+(outName||outBase)+'\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim(); }
-    catch(e){ return '✓ '+T('compilado','compiled')+' '+outName+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
+    try{ const w=await project.readFile(outRel); if(outName){ let bin=''; for(let k=0;k<w.length;k++)bin+=String.fromCharCode(w[k]); await fsPut(outRel,' B64 '+btoa(bin)); refreshDisk(); } }catch(e){}
+    if(compileOnly) return '✓ '+T('compilado','compiled')+' '+(outName||outRel)+(o.stderr?'\n'+o.stderr:'');
+    try{ const wasm=await project.readFile(outRel); const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
+      return ('✓ '+(outName||outRel)+'\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim(); }
+    catch(e){ return '✓ '+T('compilado','compiled')+' '+(outName||outRel)+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
   }catch(e){ return 'cc error: '+e; } }
 async function ccRun(code){ return await ccExec([], code); }   // inline code path (/cc <code>, cc tool)
 
