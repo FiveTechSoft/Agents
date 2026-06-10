@@ -163,8 +163,16 @@ try {
 
 // ---------- 5b. shared session link (#s=) ----------
 try {
+  // integrity: big payload roundtrip must be lossless
+  const round = await page.evaluate(async () => {
+    const s = JSON.stringify({ d: Array.from({ length: 4000 }, (_, i) => 'línea ' + i + ' áéíóú ' + (i * 7919 % 1000)) });
+    return (await inflateB64(await deflateB64(s))) === s ? 'OK' : 'MISMATCH';
+  });
+  round === 'OK' ? ok('Share: roundtrip deflate 150KB sin pérdida') : ko('Share: roundtrip deflate', round);
   const enc = await page.evaluate(() => deflateB64(JSON.stringify({
-    v: 1, convo: [
+    v: 1,
+    chat: '<div class="font-mono">TERMLINE_MARKER salida de terminal</div><script>window.__xss2=1</scr' + 'ipt>',
+    convo: [
       { role: 'user', content: 'hola SHARE_MARKER' },
       { role: 'assistant', content: '**respuesta** compartida <img src=x onerror="window.__xss=1">' }
     ]
@@ -173,12 +181,20 @@ try {
   await page.goto(URL.replace(/[#?].*$/, '') + '#s=' + enc, { waitUntil: 'domcontentloaded' });
   await waitStable();
   const chatTxt = await page.innerText('#chat');
-  chatTxt.includes('hola SHARE_MARKER') && chatTxt.includes('respuesta')
-    ? ok('Share: #s= renderiza la sesión', 'mensajes visibles')
-    : ko('Share: #s= renderiza la sesión', chatTxt.slice(0, 150));
+  chatTxt.includes('TERMLINE_MARKER')
+    ? ok('Share: transcript completo (líneas de terminal/cards)', 'TERMLINE_MARKER visible')
+    : ko('Share: transcript completo', chatTxt.slice(0, 150));
   /solo lectura|read-only/i.test(chatTxt) ? ok('Share: banner solo-lectura') : ko('Share: banner solo-lectura');
-  const xss = await page.evaluate(() => window.__xss);
-  !xss ? ok('Share: HTML malicioso sanitizado (DOMPurify)') : ko('Share: HTML malicioso EJECUTADO', '__xss=1');
+  const xss = await page.evaluate(() => window.__xss || window.__xss2);
+  !xss ? ok('Share: HTML malicioso sanitizado (DOMPurify)') : ko('Share: HTML malicioso EJECUTADO');
+  // corrupted link must fail loudly, not render garbage
+  await page.goto('about:blank');
+  await page.goto(URL.replace(/[#?].*$/, '') + '#s=' + enc.slice(0, Math.floor(enc.length * 0.7)), { waitUntil: 'domcontentloaded' });
+  await waitStable();
+  const corrupt = await page.innerText('#chat');
+  /dañado|corrupted|No se pudo cargar|Could not load/i.test(corrupt)
+    ? ok('Share: enlace truncado → error claro')
+    : ko('Share: enlace truncado', corrupt.slice(0, 120));
   await page.evaluate(() => { location.hash = ''; });
 } catch (e) { ko('Share (excepción)', String(e).slice(0, 200)); }
 

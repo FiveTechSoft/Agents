@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u15';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q='?u='+Date.now();try{var ss=new URLSearchParams(location.search).get('session');if(ss)q+='&session='+encodeURIComponent(ss);}catch(e){}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u16';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q='?u='+Date.now();try{var ss=new URLSearchParams(location.search).get('session');if(ss)q+='&session='+encodeURIComponent(ss);}catch(e){}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1114,18 +1114,23 @@ async function agent(text){
 function b64urlEnc(bin){ return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function b64urlDec(t){ return atob(t.replace(/-/g,'+').replace(/_/g,'/')); }
 async function deflateB64(s){ try{
-    const cs=new CompressionStream('deflate-raw'); const w=cs.writable.getWriter(); w.write(new TextEncoder().encode(s)); w.close();
+    // 'deflate' (zlib wrapper) carries an adler32 checksum: a truncated/mangled link
+    // fails loudly on load instead of silently decompressing into garbage
+    const cs=new CompressionStream('deflate'); const w=cs.writable.getWriter(); w.write(new TextEncoder().encode(s)); w.close();
     const buf=new Uint8Array(await new Response(cs.readable).arrayBuffer()); let b=''; for(const x of buf)b+=String.fromCharCode(x);
-    return 'd'+b64urlEnc(b);
+    return 'z'+b64urlEnc(b);
   }catch(e){ return 'p'+b64urlEnc(unescape(encodeURIComponent(s))); } }   // old browser: plain b64
 async function inflateB64(t){ const bin=b64urlDec(t.slice(1));
   if(t[0]==='p') return decodeURIComponent(escape(bin));
   const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
-  const ds=new DecompressionStream('deflate-raw'); const w=ds.writable.getWriter(); w.write(bytes); w.close();
+  const ds=new DecompressionStream(t[0]==='d'?'deflate-raw':'deflate'); const w=ds.writable.getWriter(); w.write(bytes); w.close();   // 'd' = legacy raw links
   return await new Response(ds.readable).text(); }
 async function shareSession(){
-  if(!convo.length){ tool(T('Nada que compartir (sesión vacía).','Nothing to share (empty session).')); return; }
+  if(!convo.length && !chat().children.length){ tool(T('Nada que compartir (sesión vacía).','Nothing to share (empty session).')); return; }
   const data={v:1,lang:curLang,usage,convo};
+  // full visual transcript (terminal lines, action/diff/cost cards...) — convo alone
+  // only holds the user/assistant text messages
+  try{ const h=chat().innerHTML; if(h.length<=600000) data.chat=h; }catch(e){}
   try{ const items=await fsList(); const disk={}; let sz=0, fits=true;
     for(const f of items){ sz+=(f.content||'').length; if(sz>300000){ fits=false; break; } disk[f.path]=f.content||''; }
     if(fits) data.disk=disk; }catch(e){}
@@ -1156,7 +1161,7 @@ async function loadShared(){
     if(sid){ const r=await fetch('https://api.github.com/gists/'+encodeURIComponent(sid)); if(!r.ok) throw new Error('gist HTTP '+r.status);
       const j=await r.json(); const f=j.files&&(j.files['agents-session.json']||Object.values(j.files)[0]); json=f&&f.content; }
     else if(location.hash.startsWith('#s=')){ json=await inflateB64(location.hash.slice(3)); }
-  }catch(e){ tool(T('No se pudo cargar la sesión compartida: ','Could not load the shared session: ')+e); return false; }
+  }catch(e){ tool(T('No se pudo cargar la sesión compartida (enlace incompleto o dañado — ¿se cortó al copiarlo?): ','Could not load the shared session (incomplete or corrupted link — was it cut when copying?): ')+e); return false; }
   if(!json) return false;
   let data; try{ data=JSON.parse(json); }catch(e){ tool(T('Enlace de sesión inválido.','Invalid session link.')); return false; }
   const nf=data.disk?Object.keys(data.disk).length:0;
@@ -1168,8 +1173,12 @@ async function loadShared(){
     if(data.disk){ for(const p in data.disk) await fsPut(p,data.disk[p]); refreshDisk(); }
     tool(T('Sesión importada; ya puedes continuarla.','Session imported; you can continue it now.')); };
   banner.appendChild(txt); banner.appendChild(btn); chat().appendChild(banner);
-  (data.convo||[]).forEach(m=>{ if(m.role==='user') user(m.content); else if(m.role==='assistant') bot(md(m.content)); });
-  tool(T('Fin de la sesión compartida (','End of shared session (')+(data.convo||[]).length+T(' mensajes).',' messages).'));
+  if(data.chat && window.DOMPurify){   // full transcript (sanitized: scripts/handlers stripped, cards stay visible)
+    const box=document.createElement('div'); box.className='space-y-4'; box.innerHTML=DOMPurify.sanitize(data.chat); chat().appendChild(box);
+  } else {
+    (data.convo||[]).forEach(m=>{ if(m.role==='user') user(m.content); else if(m.role==='assistant') bot(md(m.content)); });
+  }
+  tool(T('Fin de la sesión compartida.','End of shared session.'));
   down(); return true;
 }
 
