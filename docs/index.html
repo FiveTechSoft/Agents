@@ -24,7 +24,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u2';fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&location.search.indexOf('u=')<0){location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u3';fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&location.search.indexOf('u=')<0){location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -943,7 +943,7 @@ const LORD=['es','en','fr','de','pt','it'];
 function T(){ const a=arguments, i=Math.max(0,LORD.indexOf(curLang)); return a[i]||a[1]||a[0]; }   // pick by lang; fallback en, then es
 const LANGCC={es:'es',en:'gb',fr:'fr',de:'de',pt:'pt',it:'it'};   // flag country code
 let curLang=(()=>{ try{ return localStorage.getItem('lang')||'es'; }catch(e){ return 'es'; } })();
-function flagUrl(code){ return 'https://flagcdn.com/24x18/'+(LANGCC[code]||'es')+'.png'; }
+function flagUrl(code){ return 'flags/'+(LANGCC[code]||'es')+'.png'; }   // same-origin (COEP-safe)
 function renderLangBtn(){ const f=document.getElementById('langflag'), c=document.getElementById('langcode');
   if(f) f.src=flagUrl(curLang); if(c) c.textContent=curLang.toUpperCase(); }
 function buildLangMenu(){ const m=document.getElementById('langmenu'); if(!m) return; m.innerHTML='';
