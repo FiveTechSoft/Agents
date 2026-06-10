@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u11';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u12';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -358,7 +358,15 @@ async function shOne(cmd, stdin){
       SH_EXIT=chg?1:0; return chg?out.join('\n'):''; }
     case 'basename': { let p=(a0[0]||'').replace(/\/+$/,''); let b=p.split('/').pop()||p; if(a0[1]&&b.endsWith(a0[1]))b=b.slice(0,-a0[1].length); return b; }
     case 'dirname': { let p=(a0[0]||'').replace(/\/+$/,''); const i=p.lastIndexOf('/'); return i<0?'.':(i===0?'/':p.slice(0,i)); }
-    default: if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } } SH_EXIT=1; return name+': '+T('orden no encontrada','command not found');
+    default: { if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } }
+      // run a wasm binary from the disk (compiled with cc -o): ./prog or prog
+      const exe=await fsGet(shResolve(name.replace(/^\.\//,'')));
+      if(exe && (exe.content||'').startsWith(' B64 ')){
+        try{ await ensureWasmer(); const bin=atob(exe.content.slice(5)); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+          const pkg=await wasmerMod.Wasmer.fromFile(bytes); const ins=await pkg.entrypoint.run({args:toks}); const o=await ins.wait();
+          SH_EXIT=o.code||0; return ((o.stdout||'')+(o.stderr?('\n'+o.stderr):'')).replace(/\n$/,'');
+        }catch(e){ SH_EXIT=126; return name+': '+T('no se pudo ejecutar el wasm: ','could not run the wasm: ')+e; } }
+      SH_EXIT=1; return name+': '+T('orden no encontrada','command not found'); }
   }
 }
 function shSplitTop(line, seps){   // split on operators that are OUTSIDE quotes
@@ -779,7 +787,7 @@ async function run(){
   hist.push(v); histI=hist.length; saveHist();
   if(v[0]==='/'){ await slashCmd(v); nextHint(); return; }
   const cmd0=v.split(/\s+/)[0];
-  if(SHELL_CMDS.has(cmd0)){ const cwd=SHCWD; const out=await shRun(v); termLine(v, out, cwd); nextHint(); return; }
+  if(SHELL_CMDS.has(cmd0) || cmd0.startsWith('./')){ const cwd=SHCWD; const out=await shRun(v); termLine(v, out, cwd); nextHint(); return; }
   // otherwise: send to the LLM agent
   await agent(v); nextHint();
 }

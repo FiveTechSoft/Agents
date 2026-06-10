@@ -28,12 +28,12 @@ async function send(text) {
   await page.fill('#prompt', text);
   await page.press('#prompt', 'Enter');
 }
-async function sh(cmd) {
+async function sh(cmd, timeout = 10000) {
   const before = await page.locator('#chat .font-mono').count();
   await send(cmd);
   await page.waitForFunction(
     n => document.querySelectorAll('#chat .font-mono').length > n,
-    before, { timeout: 10000 }
+    before, { timeout }
   );
   const block = page.locator('#chat .font-mono').last();
   const out = block.locator('div.whitespace-pre-wrap');
@@ -125,6 +125,17 @@ try {
   const after = await sh('cat ruta/archivo.txt');
   after.includes('no existe') || after.includes('No such file') ? ok('Panel: borrar con ✕', after) : ko('Panel: borrar con ✕', JSON.stringify(after));
 } catch (e) { ko('Panel disco (excepción)', String(e)); }
+
+// ---------- 3b. cc + run wasm binary (heavy: downloads Wasmer/clang) ----------
+if (process.env.AGENTS_CC === '1') {
+  try {
+    await page.evaluate(() => fsPut('hello.c', '#include <stdio.h>\nint main(){ printf("hola wasm 7x10=70\\n"); return 0; }'));
+    const c = await sh('cc hello.c -o hola', 180000);
+    c.includes('hola wasm') || c.includes('✓') ? ok('cc hello.c -o hola', c.split('\n')[0]) : ko('cc hello.c -o hola', c.slice(0, 150));
+    const r = await sh('./hola > out.txt && grep 7x10 out.txt', 60000);
+    r.trim() === 'hola wasm 7x10=70' ? ok('./hola > out.txt && grep', r.trim()) : ko('./hola > out.txt && grep', JSON.stringify(r));
+  } catch (e) { ko('cc/run wasm (excepción)', String(e).slice(0, 200)); }
+}
 
 // ---------- 4. cards ----------
 await card('/help', 'Comandos Disponibles');
