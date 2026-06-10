@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u34';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u35';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -110,8 +110,8 @@
 </div>
 
 <!-- editor modal -->
-<div id="ed" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center p-6 z-50">
-  <div class="bg-gray-800 border border-gray-700 rounded-xl w-full max-w-2xl flex flex-col" style="height:70vh">
+<div id="ed" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center p-3 md:p-6 z-50">
+  <div class="bg-gray-800 border border-gray-700 rounded-xl w-full max-w-6xl flex flex-col" style="height:92vh">
     <div class="p-3 border-b border-gray-700 flex items-center justify-between">
       <span id="edpath" class="font-mono text-xs text-pink-400"></span>
       <div class="flex gap-2">
@@ -167,8 +167,10 @@ function renderNode(node, box, depth){
   node.files.sort((a,b)=>a.path.localeCompare(b.path)).forEach(f=>{ const name=f.path.split('/').pop();
     const row=document.createElement('div'); row.className='flex items-center justify-between gap-1 py-1 rounded hover:bg-gray-800 cursor-pointer group'; row.style.paddingLeft=(depth*12+6)+'px';
     const nm=document.createElement('span'); nm.className='truncate text-gray-300'; nm.textContent='📄 '+name; nm.onclick=()=>openEd(f.path);
+    const actions=document.createElement('span'); actions.className='flex items-center gap-1 shrink-0';
+    if(/\.(html?|svg)$/i.test(name)){ const view=document.createElement('button'); view.className='opacity-0 group-hover:opacity-100 text-blue-400 text-xs'; view.textContent='🌐'; view.title='Ver renderizado'; view.onclick=(e)=>{ e.stopPropagation(); openEd(f.path).then(()=>toggleHtmlView()); }; actions.appendChild(view); }
     const del=document.createElement('button'); del.className='opacity-0 group-hover:opacity-100 text-red-400 text-xs pr-1'; del.textContent='✕'; del.onclick=async(e)=>{ e.stopPropagation(); await fsDel(f.path); refreshDisk(); };
-    row.appendChild(nm); row.appendChild(del); box.appendChild(row); });
+    actions.appendChild(del); row.appendChild(nm); row.appendChild(actions); box.appendChild(row); });
 }
 async function refreshDisk(){
   const items=await fsList(); const box=document.getElementById('files'); box.innerHTML='';
