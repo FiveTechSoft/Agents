@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u37';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u38';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -1016,61 +1016,36 @@ const FLOW_META={
   error: {i:'❌',dot:'bg-red-500',    ring:'ring-red-500/30',    v:'Error'} };
 const TOOL_ICON={ list_files:'📂',read_file:'📄',write_file:'✏️',delete_file:'🗑',ask_user:'❓',dispatch_agents:'👥',git:'🔀',web_search:'🔎',web_fetch:'🌐',shell:'⌨️',python:'🐍',cc:'⚙️' };
 const TOOL_VERB={ list_files:'Lista los ficheros',read_file:'Lee un fichero',write_file:'Escribe un fichero',delete_file:'Borra un fichero',ask_user:'Te pregunta',dispatch_agents:'Lanza sub-agentes',git:'Operación git',web_search:'Busca en la web',web_fetch:'Abre una URL',shell:'Ejecuta shell',python:'Ejecuta Python',cc:'Compila C' };
+// Flow = Mermaid flow diagram of what the agent did (rendered in a sandboxed iframe)
 function flowCard(){
-  const ov=el('<div class="fixed inset-0 bg-black/70 flex items-center justify-center p-3 md:p-6 z-50"></div>');
-  const box=el('<div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-3xl flex flex-col shadow-2xl" style="height:90vh"></div>');
-  const head=el('<div class="p-4 border-b border-gray-700 flex items-center justify-between shrink-0 bg-gradient-to-r from-gray-800 to-gray-900 rounded-t-xl"></div>');
-  // legend chips
-  const kinds=[...new Set(FLOW.map(e=>e.k))];
-  const legend=kinds.map(k=>{ const m=FLOW_META[k]; return m?'<span class="inline-flex items-center gap-1 text-[10px] text-gray-400"><span class="inline-block w-2 h-2 rounded-full '+m.dot+'"></span>'+m.i+'</span>':''; }).join('');
-  head.innerHTML='<div><div class="font-semibold text-gray-100 flex items-center gap-2 text-base">🔀 Flow</div><div class="text-[11px] text-gray-400 mt-0.5">'+T('Qué hizo el agente, paso a paso','What the agent did, step by step')+' · <span class="text-gray-300">'+FLOW.length+' '+T('pasos','steps')+'</span></div><div class="flex gap-2 mt-1.5 flex-wrap">'+legend+'</div></div>';
-  const btns=el('<div class="flex gap-2 shrink-0"></div>');
-  const mm=el('<button class="bg-pink-800/60 hover:bg-pink-700 px-3 py-1.5 rounded text-xs">📊 Mermaid</button>');
-  const cp=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">📋 '+T('Copiar','Copy')+'</button>');
+  const ov=el('<div class="fixed inset-0 bg-black/80 flex items-center justify-center p-3 md:p-6 z-50"></div>');
+  const box=el('<div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-5xl flex flex-col shadow-2xl" style="height:92vh"></div>');
+  const head=el('<div class="p-3 border-b border-gray-700 flex items-center justify-between shrink-0"></div>');
+  head.innerHTML='<span class="font-semibold text-gray-100 flex items-center gap-2">🔀 Flow <span class="text-[11px] text-gray-400 font-normal">'+T('— qué hizo el agente','— what the agent did')+' ('+FLOW.length+')</span></span>';
+  const hb=el('<div class="flex gap-2 shrink-0"></div>');
+  const cp=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">📋 '+T('Copiar código','Copy code')+'</button>');
+  const lk=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">🔗 mermaid.live</button>');
   const cl=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">🗑</button>');
   const cls=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">✕</button>');
-  btns.appendChild(mm); btns.appendChild(cp); btns.appendChild(cl); btns.appendChild(cls); head.appendChild(btns); box.appendChild(head);
-  mm.onclick=()=>flowMermaid();
-  const body=el('<div class="flex-1 overflow-y-auto scroll p-4"></div>');
-  if(!FLOW.length){ body.innerHTML='<div class="text-gray-500 text-center mt-10 text-sm">'+T('Aún no hay actividad.<br>Pídele algo al agente y vuelve aquí.','No activity yet.<br>Ask the agent to do something and come back.')+'</div>'; }
-  else {
-    const t0=FLOW[0].ts; const tl=el('<div class="relative"></div>');
-    FLOW.forEach((e,i)=>{ const m=FLOW_META[e.k]||FLOW_META.tool;
-      const sec=((e.ts-t0)/1000).toFixed(1);
-      const dt=i>0?((e.ts-FLOW[i-1].ts)/1000):0;
-      const icon=e.k==='tool'?(TOOL_ICON[e.l]||'🔧'):m.i;
-      const title=e.k==='tool'?(TOOL_VERB[e.l]||e.l):m.v;
-      const node=el('<div class="relative pl-12 pb-4"></div>');
-      // vertical connector (except last)
-      if(i<FLOW.length-1) node.appendChild(el('<div class="absolute left-[18px] top-9 bottom-0 w-px bg-gray-700"></div>'));
-      // dot with emoji
-      const dot=el('<div class="absolute left-0 top-1 w-9 h-9 rounded-full '+m.dot+'/20 ring-2 '+m.ring+' flex items-center justify-center text-base"></div>'); dot.textContent=icon; node.appendChild(dot);
-      // header line
-      const h=el('<div class="flex items-baseline gap-2"></div>');
-      h.innerHTML='<span class="text-[10px] font-mono text-gray-600">#'+(i+1)+'</span><span class="font-semibold text-gray-100 text-sm">'+title+'</span>'+(e.k==='tool'?'<code class="text-[10px] text-amber-300/80 bg-amber-900/20 px-1 rounded">'+e.l+'</code>':'')+'<span class="ml-auto text-[10px] text-gray-500 font-mono">+'+sec+'s'+(dt>=0.1?(' · Δ'+dt.toFixed(1)+'s'):'')+'</span>';
-      node.appendChild(h);
-      // detail
-      const card=el('<div class="mt-1 bg-gray-800/60 border border-gray-700/50 rounded-lg p-2.5 text-[11px]"></div>');
-      let shown=false;
-      if(e.k==='tool' && e.d){ const a=e.d.args||{}; const ak=Object.keys(a);
-        if(ak.length){ const ag=document.createElement('div'); ag.className='space-y-0.5'; ak.forEach(k=>{ const r=document.createElement('div'); r.innerHTML='<span class="text-gray-500">'+k+':</span> <span class="text-gray-200 font-mono break-all">'+esc((''+a[k]).slice(0,120))+'</span>'; ag.appendChild(r); }); card.appendChild(ag); shown=true; }
-        const res=(e.d.result||'').trim(); if(res){ const rr=document.createElement('div'); rr.className='mt-1.5 pt-1.5 border-t border-gray-700/50 text-gray-400 whitespace-pre-wrap break-words font-mono max-h-24 overflow-y-auto'; rr.textContent='→ '+res.slice(0,300); card.appendChild(rr); shown=true; } }
-      else if(typeof e.d==='string' && e.d){ const d=document.createElement('div'); d.className='text-gray-300 whitespace-pre-wrap break-words'+(e.k==='think'?' italic':''); d.textContent=e.d.slice(0,400); card.appendChild(d); shown=true; }
-      else if(e.l && e.k!=='tool'){ const d=document.createElement('div'); d.className='text-gray-200 whitespace-pre-wrap break-words'; d.textContent=e.l.slice(0,300); card.appendChild(d); shown=true; }
-      if(shown) node.appendChild(card);
-      tl.appendChild(node); });
-    body.appendChild(tl);
+  hb.appendChild(cp); hb.appendChild(lk); hb.appendChild(cl); hb.appendChild(cls); head.appendChild(hb); box.appendChild(head);
+  const close=()=>ov.remove();
+  if(!FLOW.length){
+    const empty=el('<div class="flex-1 flex items-center justify-center text-gray-500 text-sm text-center"></div>');
+    empty.innerHTML=T('Aún no hay actividad.<br>Pídele algo al agente y vuelve aquí.','No activity yet.<br>Ask the agent to do something and come back.');
+    box.appendChild(empty); ov.appendChild(box); document.body.appendChild(ov);
+    cls.onclick=close; ov.onclick=(e)=>{ if(e.target===ov) close(); }; cl.onclick=()=>{ flowClear(); close(); }; return;
   }
-  box.appendChild(body); ov.appendChild(box); document.body.appendChild(ov);
-  const close=()=>ov.remove(); cls.onclick=close; ov.onclick=(e)=>{ if(e.target===ov) close(); };
-  const t0c=FLOW.length?FLOW[0].ts:0;
-  cp.onclick=async()=>{ const txt=FLOW.map((e,i)=>{ const sec=((e.ts-t0c)/1000).toFixed(1); let s=(i+1)+'. ['+sec+'s] '+(e.k==='tool'?('tool '+e.l):(FLOW_META[e.k]||{}).v||e.k);
-      if(e.k==='tool'&&e.d){ const a=e.d.args||{}; s+=' '+JSON.stringify(a); if(e.d.result) s+=' => '+e.d.result.slice(0,150); }
-      else if(typeof e.d==='string'&&e.d) s+=': '+e.d; else if(e.l) s+=': '+e.l; return s; }).join('\n');
-    try{ await navigator.clipboard.writeText(txt); cp.textContent='✓'; }catch(e){} };
+  const code=flowToMermaid();
+  const fr=el('<iframe class="flex-1 bg-white rounded-b-xl" sandbox="allow-scripts"></iframe>');
+  const srcdoc='<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#0b1020;display:flex;justify-content:center}#d{padding:16px}</style></head><body><pre class="mermaid" id="d"></pre>'+
+    '<scr'+'ipt type="module">import m from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";document.getElementById("d").textContent='+JSON.stringify(code)+';m.initialize({startOnLoad:false,theme:"dark"});m.run();</scr'+'ipt></body></html>';
+  fr.setAttribute('srcdoc', srcdoc);
+  box.appendChild(fr); ov.appendChild(box); document.body.appendChild(ov);
+  cls.onclick=close; ov.onclick=(e)=>{ if(e.target===ov) close(); };
+  cp.onclick=async()=>{ try{ await navigator.clipboard.writeText(code); cp.textContent='✓'; }catch(e){} };
+  lk.onclick=()=>{ try{ const data=btoa(unescape(encodeURIComponent(JSON.stringify({code,mermaid:{theme:'dark'}})))); window.open('https://mermaid.live/edit#base64:'+data,'_blank'); }catch(e){} };
   cl.onclick=()=>{ flowClear(); close(); };
 }
-function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 // build a Mermaid flowchart from the Flow timeline
 function flowToMermaid(){
   const MC={user:'#3b82f6',think:'#a855f7',tool:'#f59e0b',permit:'#f97316',reply:'#10b981',cmd:'#14b8a6',slash:'#d946ef',error:'#ef4444'};
@@ -1089,29 +1064,6 @@ function flowToMermaid(){
   FLOW.forEach((e,i)=>{ const c=MC[e.k]||'#6b7280'; out+='  style n'+i+' fill:'+c+'22,stroke:'+c+',color:#e5e7eb\n'; });
   return out;
 }
-function flowMermaid(){
-  const code=flowToMermaid();
-  const ov=el('<div class="fixed inset-0 bg-black/80 flex items-center justify-center p-3 md:p-6 z-[60]"></div>');
-  const box=el('<div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-5xl flex flex-col shadow-2xl" style="height:92vh"></div>');
-  const head=el('<div class="p-3 border-b border-gray-700 flex items-center justify-between shrink-0"></div>');
-  head.innerHTML='<span class="font-semibold text-gray-100 flex items-center gap-2">📊 Mermaid — '+T('diagrama de flujo','flow diagram')+'</span>';
-  const hb=el('<div class="flex gap-2"></div>');
-  const cp=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">📋 '+T('Copiar código','Copy code')+'</button>');
-  const lk=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">🔗 mermaid.live</button>');
-  const cls=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">✕</button>');
-  hb.appendChild(cp); hb.appendChild(lk); hb.appendChild(cls); head.appendChild(hb); box.appendChild(head);
-  // rendered diagram in a sandboxed iframe (mermaid loaded inside it, isolated from this page)
-  const fr=el('<iframe class="flex-1 bg-white rounded-b-xl" sandbox="allow-scripts"></iframe>');
-  const srcdoc='<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#0b1020;display:flex;justify-content:center}#d{padding:16px}</style></head><body><pre class="mermaid" id="d"></pre>'+
-    '<scr'+'ipt type="module">import m from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";document.getElementById("d").textContent='+JSON.stringify(code)+';m.initialize({startOnLoad:false,theme:"dark"});m.run();</scr'+'ipt></body></html>';
-  fr.setAttribute('srcdoc', srcdoc);
-  const ta=el('<textarea readonly class="shrink-0 bg-gray-950 text-gray-300 font-mono text-[10px] p-2 h-28 border-t border-gray-700 resize-none"></textarea>'); ta.value=code;
-  box.appendChild(fr); box.appendChild(ta); ov.appendChild(box); document.body.appendChild(ov);
-  const close=()=>ov.remove(); cls.onclick=close; ov.onclick=(e)=>{ if(e.target===ov) close(); };
-  cp.onclick=async()=>{ try{ await navigator.clipboard.writeText(code); cp.textContent='✓'; }catch(e){ ta.select(); } };
-  lk.onclick=()=>{ try{ const data=btoa(unescape(encodeURIComponent(JSON.stringify({code,mermaid:{theme:'dark'}})))); window.open('https://mermaid.live/edit#base64:'+data,'_blank'); }catch(e){} };
-}
-
 /* ===== collapsible "N acciones" panel with per-tool icons + check (mockup 1) ===== */
 const SVG=(cls,b)=>'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'+cls+'">'+b+'</svg>';
 const IC_FILE=SVG('text-blue-400 shrink-0','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
