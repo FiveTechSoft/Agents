@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u27';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u28';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -797,7 +797,7 @@ async function runDemoSim(){
   user(T('Reparte el trabajo en varios agentes','Split the work across several agents')); { const dc=delegationCard([T('Listar ficheros del disco','List disk files'),T('Resumir su contenido','Summarize their content'),T('Proponer mejoras','Propose improvements')]); await sleep(700); dc.setStatus(0,'list_files…'); await sleep(500); dc.done(0); dc.setStatus(1,'read_file…'); await sleep(500); dc.done(1); await sleep(400); dc.done(2); } await sleep(500);
   user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
   user('/compact'); compactCard(84500,12100); await sleep(700);
-  user('/init'); await fsPut('CLAUDE.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('CLAUDE.md'); await sleep(600);
+  user('/init'); await fsPut('AGENTS.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('AGENTS.md'); await sleep(600);
   user(T('terminal: crea y lee un fichero','terminal: create and read a file'));
   for(const sc of ['mkdir src','echo "hola mundo" > src/readme.txt','cat src/readme.txt','grep hola src/readme.txt | wc','ls -l src']){ const cwd=SHCWD; termLine(sc, await shRun(sc), cwd); await sleep(350); }
   user(T('Busca en la web qué es Harbour','Search the web for what Harbour is')); curPanel=null; { const rw=addActionRow('web_search',{query:'Harbour language'}); await sleep(700); markDone(rw); } bot(T('🔎 Harbour es un compilador open-source del lenguaje xBase (Clipper), multiplataforma.','🔎 Harbour is an open-source, cross-platform compiler for the xBase (Clipper) language.')); await sleep(500);
@@ -1108,7 +1108,8 @@ async function agent(text){
   convo.push({role:'user',content:text}); curPanel=null;
   const snap=await snapshotDisk();   // for rollback on abort
   const skillsTxt=await activeSkillsPrompt();
-  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  let rulesTxt=''; try{ const rf=(await fsGet('AGENTS.md'))||(await fsGet('CLAUDE.md')); if(rf&&rf.content&&rf.content.trim()) rulesTxt='\n\nProject rules (AGENTS.md — follow them):\n'+rf.content.slice(0,4000); }catch(e){}
+  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+rulesTxt+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
   try{
     let step=0, limit=14;
@@ -1236,7 +1237,7 @@ async function slashCmd(v){
     case '/clear': clearChat(); clearDivider(); break;
     case '/cost': costCard(usage); break;
     case '/compact': await compactNow(); break;
-    case '/init': { const p='CLAUDE.md'; const ex=await fsGet(p); if(!ex) await fsPut(p,'# Reglas del proyecto\n\n- Estilo de codigo: ...\n- No tocar: ...\n- Tests: ...\n'); refreshDisk(); initCard(p); break; }
+    case '/init': { const p='AGENTS.md'; const ex=await fsGet(p); if(!ex) await fsPut(p,'# Reglas del proyecto\n\n- Estilo de codigo: ...\n- No tocar: ...\n- Tests: ...\n'); refreshDisk(); initCard(p); break; }
     case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool(T('API key guardada en este navegador.','API key saved in this browser.')); } else tool(T('Uso: /key <api-key>','Usage: /key <api-key>')); break;
     case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool(T('Token de GitHub puesto (push/pull).','GitHub token set (push/pull).')); } else tool(T('Uso: /ghtoken <token>','Usage: /ghtoken <token>')); break;
     case '/goal': { const g=arg||localStorage.getItem('goal')||'Explorar y organizar los ficheros del disco virtual con ayuda de la IA, y sincronizarlos con GitHub.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
@@ -1426,7 +1427,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear CLAUDE.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
