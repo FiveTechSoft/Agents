@@ -6,6 +6,7 @@
 <title>Agents — Web (virtual disk)</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <!-- cross-origin isolation (SharedArrayBuffer) for the Wasmer clang toolchain on static hosting.
      credentialless COEP so cross-origin CDN scripts/images keep loading without CORP headers. -->
 <script>window.coi={ coepCredentialless:()=>true, shouldRegister:()=>true, doReload:()=>window.location.reload() };</script>
@@ -24,7 +25,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u8';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u9';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}location.replace(location.pathname+'?u='+Date.now());}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -359,7 +360,15 @@ function shSplitTop(line, seps){   // split on operators that are OUTSIDE quotes
   out.push(buf); return out; }
 async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>)
   line=(line||'').trim(); if(!line) return '';
-  let redir=null, app=false; const rm=line.match(/\s(>>?)\s*(\S+)\s*$/); if(rm){ app=rm[1]==='>>'; redir=rm[2]; line=line.slice(0,rm.index); }
+  let redir=null, app=false;
+  { // find the redirect OUTSIDE quotes (so `echo "a > b"` is not a redirect)
+    let q=null, ri=-1;
+    for(let i=0;i<line.length;i++){ const c=line[i];
+      if(q){ if(c===q)q=null; continue; }
+      if(c==='"'||c==="'"){ q=c; continue; }
+      if(c==='>'){ if(i>0 && /\d/.test(line[i-1]) && (i<2||/\s/.test(line[i-2]))) continue;   // fd redirect (2>) — not ours
+        ri=i; break; } }
+    if(ri>=0){ app=line[ri+1]==='>'; redir=line.slice(ri+(app?2:1)).trim().split(/\s+/)[0]||null; line=line.slice(0,ri); } }
   let stdin=null, out='';
   const stages=shSplitTop(line,['|']).filter((_,i)=>i%2===0).map(s=>s.trim()).filter(Boolean);
   for(const st of stages){ out=await shOne(st, stdin); stdin=out; }
@@ -482,17 +491,21 @@ async function ccRun(code){ return await ccExec([], code); }   // inline code pa
 /* ---- editor ---- */
 let edCur=null;
 async function openEd(path){ const f=await fsGet(path); edCur=path;
+  if(window.innerWidth<768){ const d=document.getElementById('disk'); if(d && !d.classList.contains('-translate-x-full')) toggleDisk(); }   // close the drawer on mobile so the editor is visible
   document.getElementById('edpath').textContent=path; document.getElementById('edtext').value=f?f.content:'';
   document.getElementById('edtext').classList.remove('hidden'); document.getElementById('edpreview').classList.add('hidden');
   document.getElementById('edprev').classList.toggle('hidden', !/\.md$/i.test(path));   // preview only for .md
   document.getElementById('ed').classList.remove('hidden'); }
 function closeEd(){ document.getElementById('ed').classList.add('hidden'); }
 function togglePreview(){ const ta=document.getElementById('edtext'), pv=document.getElementById('edpreview'), b=document.getElementById('edprev');
-  if(pv.classList.contains('hidden')){ pv.innerHTML=window.marked?marked.parse(ta.value||''):ta.value; pv.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
+  if(pv.classList.contains('hidden')){ pv.innerHTML=md(ta.value); pv.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
   else { pv.classList.add('hidden'); ta.classList.remove('hidden'); b.textContent='👁 Preview'; } }
 async function saveEd(){ if(edCur!=null){ await fsPut(edCur,document.getElementById('edtext').value); refreshDisk(); closeEd(); } }
 
 /* ---- chat helpers ---- */
+// markdown -> sanitized HTML (LLM output and disk files are untrusted; without
+// DOMPurify a crafted <img onerror=...> in a reply would run in this page)
+function md(s){ s=s||''; const h=window.marked?marked.parse(s):s; return window.DOMPurify?DOMPurify.sanitize(h):h; }
 function el(h){ const t=document.createElement('template'); t.innerHTML=h.trim(); return t.content.firstChild; }
 const chat=()=>document.getElementById('chat');
 function down(){ const c=chat(); c.scrollTop=c.scrollHeight; }
@@ -526,20 +539,26 @@ function doneLine(text){ const d=el('<div class="flex items-center text-xs text-
 function ghHeaders(){ const h={'Accept':'application/vnd.github+json'}; const t=document.getElementById('ghtok').value.trim(); if(t)h['Authorization']='Bearer '+t; return h; }
 async function ghPull(){ const repo=document.getElementById('ghrepo').value.trim(), base=document.getElementById('ghpath').value.trim();
   tool('Pull '+repo+'/'+base+' ...');
-  try{ const r=await fetch('https://api.github.com/repos/'+repo+'/contents/'+base,{headers:ghHeaders()});
-    if(!r.ok){ tool('Pull error '+r.status); return; }
-    const list=await r.json(); let n=0;
-    for(const it of list){ if(it.type==='file'){ const fr=await fetch(it.download_url); await fsPut(base+'/'+it.name,await fr.text()); n++; } }
+  try{ let n=0;
+    const pull=async(path)=>{ const r=await fetch('https://api.github.com/repos/'+repo+'/contents/'+path,{headers:ghHeaders()});
+      if(!r.ok){ tool('Pull error '+r.status+' ('+path+')'); return; }
+      const list=await r.json();
+      for(const it of (Array.isArray(list)?list:[list])){
+        if(it.type==='file'){ const fr=await fetch(it.download_url); await fsPut(it.path,await fr.text()); n++; }
+        else if(it.type==='dir'){ await pull(it.path); } } };
+    await pull(base);
     refreshDisk(); tool('Pulled '+n+' files.');
   }catch(e){ tool('Pull failed: '+e); } }
 async function ghPush(){ const repo=document.getElementById('ghrepo').value.trim(), base=document.getElementById('ghpath').value.trim();
   if(!document.getElementById('ghtok').value.trim()){ tool('Push necesita un token.'); return; }
-  const items=await fsList(); let n=0; tool('Push '+items.length+' files to '+repo+'/'+base+' ...');
-  for(const f of items){ const url='https://api.github.com/repos/'+repo+'/contents/'+base+'/'+f.path;
-    let sha=''; const g=await fetch(url,{headers:ghHeaders()}); if(g.ok){ sha=(await g.json()).sha; }
+  const items=await fsList(); let n=0,skip=0; tool('Push '+items.length+' files to '+repo+'/'+base+' ...');
+  for(const f of items){ const url='https://api.github.com/repos/'+repo+'/contents/'+base+'/'+f.path.split('/').map(encodeURIComponent).join('/');
+    let sha='', remote=null; const g=await fetch(url,{headers:ghHeaders()});
+    if(g.ok){ const gj=await g.json(); sha=gj.sha; try{ remote=decodeURIComponent(escape(atob((gj.content||'').replace(/\n/g,'')))); }catch(e){ remote=null; } }
+    if(remote===(f.content||'')){ skip++; continue; }
     const body={message:'agents-web: save '+f.path,content:btoa(unescape(encodeURIComponent(f.content||'')))}; if(sha)body.sha=sha;
-    const p=await fetch(url,{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body)}); if(p.ok)n++; }
-  tool('Pushed '+n+' files.'); }
+    const p=await fetch(url,{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body)}); if(p.ok)n++; else tool('push '+f.path+': '+p.status); }
+  tool('Pushed '+n+' files'+(skip?(' ('+skip+' sin cambios)'):'')+'.'); }
 
 /* =====================================================================
    Real git in the browser (isomorphic-git + LightningFS).
@@ -666,8 +685,10 @@ const HINTS=['ls -la','/plan crea un README del proyecto','/cost','write notas.t
 let hintIdx=0;
 function nextHint(){ hintIdx=(hintIdx+1)%HINTS.length; const p=document.getElementById('prompt'); if(p) p.placeholder=HINTS[hintIdx]; }
 
-/* prompt history: Up/Down navigate previous/next used prompts */
-const hist=[]; let histI=0;
+/* prompt history: Up/Down navigate previous/next used prompts (persisted) */
+const hist=(()=>{ try{ return JSON.parse(localStorage.getItem('hist')||'[]'); }catch(e){ return []; } })();
+let histI=hist.length;
+function saveHist(){ try{ localStorage.setItem('hist',JSON.stringify(hist.filter(c=>!/^\/(key|ghtoken)\s/i.test(c)).slice(-100))); }catch(e){} }
 function runCmd(cmd){ const p=document.getElementById('prompt'); p.value=cmd; run(); }
 function promptKey(e){ const i=e.target;
   if(e.key==='Enter'){ run(); return; }
@@ -743,7 +764,7 @@ async function runDemoSim(){
 
 async function run(){
   const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
-  hist.push(v); histI=hist.length;
+  hist.push(v); histI=hist.length; saveHist();
   if(v[0]==='/'){ await slashCmd(v); nextHint(); return; }
   const cmd0=v.split(/\s+/)[0];
   if(SHELL_CMDS.has(cmd0)){ const cwd=SHCWD; const out=await shRun(v); termLine(v, out, cwd); nextHint(); return; }
@@ -966,7 +987,7 @@ function saveSession(){ try{ localStorage.setItem('convo',JSON.stringify(convo))
 function restoreSession(){ try{
   const su=JSON.parse(localStorage.getItem('usage')||'null'); if(su) usage=su;
   const sc=JSON.parse(localStorage.getItem('convo')||'[]');
-  if(sc.length){ sc.forEach(m=>{ convo.push(m); if(m.role==='user') user(m.content); else if(m.role==='assistant') bot(window.marked?marked.parse(m.content||''):(m.content||'')); });
+  if(sc.length){ sc.forEach(m=>{ convo.push(m); if(m.role==='user') user(m.content); else if(m.role==='assistant') bot(md(m.content)); });
     tool('↻ Sesión restaurada ('+sc.length+' mensajes). Ctrl+K para limpiar.'); return true; }
 }catch(e){} return false; }
 let lastPlan=null;            // last generated plan (steps[]) -> /plan with no arg shows it
@@ -1021,7 +1042,7 @@ async function streamChat(msgs, wait){
       if(j.usage)usg=j.usage;
       const d=j.choices&&j.choices[0]&&j.choices[0].delta; if(!d)continue;
       if(d.reasoning_content){ reasoning+=d.reasoning_content; tOutTok+=d.reasoning_content.length/4; if(!reasonBox){ if(wait){wait.remove(); wait=null;} reasonBox=thinkingLive(); } reasonBox.textContent='🧠 '+reasoning; down(); }
-      if(d.content){ if(!wait) wait=bot('<span class="text-gray-400">…</span>'); content+=d.content; tOutTok+=d.content.length/4; wait.innerHTML=window.marked?marked.parse(content):content; down(); }
+      if(d.content){ if(!wait) wait=bot('<span class="text-gray-400">…</span>'); content+=d.content; tOutTok+=d.content.length/4; wait.innerHTML=md(content); down(); }
       if(d.tool_calls)for(const t of d.tool_calls){ const i=t.index||0; tcs[i]=tcs[i]||{id:'',type:'function',function:{name:'',arguments:''}};
         if(t.id)tcs[i].id=t.id; if(t.function){ if(t.function.name)tcs[i].function.name+=t.function.name; if(t.function.arguments)tcs[i].function.arguments+=t.function.arguments; } }
     }
@@ -1049,7 +1070,7 @@ async function agent(text){
       let wait=bot('<span class="text-gray-400">pensando…</span>'); let res;
       try{ res=await streamChat(msgs, wait); }
       catch(e){ if(e.name==='AbortError'){ wait.remove(); convo.pop(); await restoreDisk(snap); abortCard(true); return; }
-        wait.remove(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS de DeepSeek).',String(e),()=>agent(text)); return; }
+        wait.remove(); convo.pop(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS de DeepSeek).',String(e),()=>agent(text)); return; }   // pop: agent(text) re-pushes it on retry
       if(res.usage){ usage.pin+=res.usage.prompt_tokens||0; usage.pout+=res.usage.completion_tokens||0; }
       const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
       if(res.tool_calls.length){
@@ -1098,7 +1119,7 @@ async function slashCmd(v){
       if(workN>0){ btwPending=note; user('💬 '+(arg||T('¿Qué estás haciendo?','What are you doing?'))); tool(T('Enviado al agente; responderá entre acciones, sin interrumpir.','Sent to the agent; it will answer between actions, without interrupting.')); }
       else { await agent(note); } break; }
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
-    case '/cc': { setWorking(true); const out = /\.c(\s|$)/.test(arg)? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(/\.c/.test(arg)?arg:'‹code›'), out, SHCWD); break; }
+    case '/cc': { setWorking(true); const isFiles=/\.(c|cpp|cc|cxx)(\s|$)/i.test(arg); const out = isFiles? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(isFiles?arg:'‹code›'), out, SHCWD); break; }
     default: tool(T('Comando desconocido: ','Unknown command: ')+cmd+'. '+T('Prueba /help.','Try /help.'));
   }
 }
@@ -1271,11 +1292,11 @@ function helpCard(){
   chat().appendChild(c); down();
 }
 async function compactNow(){
-  const before=usage.pin+usage.pout;
-  if(convo.length>2){ const summary=convo.slice(0,-2).map(m=>m.role+': '+m.content).join(' | ').slice(0,1200);
-    convo.length=0; convo.push({role:'system',content:'Resumen previo: '+summary}); }
-  const after=Math.round((before||14000)*0.2);
-  compactCard(before||84500, after);
+  const before=ctxTokens();
+  if(convo.length>2){ const keep=convo.slice(-2); const summary=convo.slice(0,-2).map(m=>m.role+': '+m.content).join(' | ').slice(0,1200);
+    convo.length=0; convo.push({role:'system',content:'Resumen previo: '+summary}); convo.push(...keep); }
+  saveSession(); lastCtxWarn=0;
+  compactCard(before, ctxTokens());
 }
 
 /* ===== skills: named instruction sets (disk skills/*.md + built-ins) ===== */
@@ -1392,14 +1413,10 @@ async function planReal(task){
   finally{ setWorking(false); }
 }
 
-function toggleHelp(){ bot('<b>Comandos slash:</b> <code>/help</code> <code>/clear</code> <code>/key &lt;k&gt;</code> <code>/ghtoken &lt;t&gt;</code> <code>/goal [texto]</code> <code>/plan [tarea]</code> <code>/run</code> (ejecuta el plan) <code>/loop</code><br><b>Disco</b> (IndexedDB, izq): <code>ls</code> <code>read &lt;f&gt;</code> <code>write &lt;f&gt; &lt;txt&gt;</code> <code>del &lt;f&gt;</code>.<br>Cualquier otra cosa va al <b>LLM</b> (DeepSeek, tools sobre el disco). ⬇/⬆ sincroniza con el repo.'); }
-
 function toggleDisk(){ const d=document.getElementById('disk'), b=document.getElementById('backdrop');
   const open=d.classList.contains('-translate-x-full');
   d.classList.toggle('-translate-x-full',!open); d.classList.toggle('translate-x-0',open);
   b.classList.toggle('hidden',!open); }
-// auto-close the drawer after picking a file on mobile
-document.getElementById('files').addEventListener('click',()=>{ if(window.innerWidth<768) setTimeout(()=>{ const d=document.getElementById('disk'); if(!d.classList.contains('-translate-x-full')){} },0); });
 
 document.getElementById('fileinp').addEventListener('change', async (e)=>{
   for(const f of e.target.files){ const txt=await f.text(); await fsPut(f.name,txt); tool('📎 Adjuntado al disco: '+f.name+' ('+txt.length+' B)'); }
