@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u29';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u30';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -514,6 +514,8 @@ async function ccExec(argv, inlineCode){
     const project=new wasmerMod.Directory();   // Wasmer Directory has no nested mkdir -> mount FLAT (basename) at /project root
     // mount all headers (so #include "x.h" resolves) by basename
     const all=await fsList(); for(const f of all){ if(/\.(h|hpp|hxx|ch|api)$/i.test(f.path)){ try{ await project.writeFile(f.path.split('/').pop(), f.content); }catch(e){} } }   // .ch/.api: xBase-style headers (Harbour etc.)
+    { const cBase={}; for(const f of all){ if(/\.c$/i.test(f.path)){ const bn=f.path.split('/').pop(); (cBase[bn]=cBase[bn]||[]).push(f); } }   // sources with a unique basename too: some projects #include "x.c" (Harbour's hbpp)
+      for(const bn in cBase){ if(cBase[bn].length===1){ try{ await project.writeFile(bn, cBase[bn][0].content||''); }catch(e){} } } }
     let outName=null, compileOnly=false, missing=null; const cargs=[]; let nSrc=0;
     if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); cargs.push('/project/__main.c'); nSrc=1; }
     for(let i=0;i<argv.length;i++){ const a=argv[i];
