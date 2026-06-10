@@ -178,6 +178,18 @@ try {
   await page.evaluate(() => { location.hash = ''; });
 } catch (e) { ko('Share (excepción)', String(e).slice(0, 200)); }
 
+// ---------- 5c. share button in the header ----------
+try {
+  const btn = page.locator('button:text-is("🔗 Share")');
+  await btn.isVisible() ? ok('Share: botón en cabecera') : ko('Share: botón en cabecera');
+  await btn.click();
+  await page.waitForFunction(
+    () => /Sesión compartida|Nada que compartir|Shared session|Nothing to share/i.test(document.getElementById('chat').innerText),
+    null, { timeout: 8000 }
+  );
+  ok('Share: click genera enlace o aviso');
+} catch (e) { ko('Share: botón cabecera (excepción)', String(e).slice(0, 150)); }
+
 // ---------- 6. markdown preview ----------
 try {
   await page.fill('#newpath', 'notas.md');
