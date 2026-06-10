@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u24';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u25';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -85,7 +85,7 @@
         <button onclick="shareSession()" title="Compartir sesión (URL de solo lectura)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🔗 Share</button>
         <button onclick="copyChat()" title="Copiar conversación" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">📋 Copy</button>
         <button onclick="runCmd('/clear')" title="Limpiar (/clear)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🗑 Clear</button>
-        <button onclick="runCmd('/help')" class="text-gray-400 hover:text-gray-200 px-1">/help</button>
+        <button onclick="runCmd('/help')" title="Comandos disponibles" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">❔ /help</button>
       </div>
     </div>
     <div id="chat" class="flex-1 overflow-y-auto scroll p-4 space-y-4"></div>
