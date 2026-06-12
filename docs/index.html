@@ -1008,6 +1008,46 @@ async function runPhpCode(code){
     const out=await r.stdoutText, err=await r.stderrText; await phpMirrorOut();
     return ((out||'')+(err?('\n'+err):'')).trim()||'(sin salida)'; }
   catch(e){ await phpMirrorOut(); return 'php error: '+(e.message||e); } }
+// ---- PHP web preview: serve .php into the editor iframe with working links/forms ----
+// Injected into every rendered page: turns local link clicks and form submits into
+// postMessage({type:'phpnav'}) so the parent re-runs PHP. NOTE the split '</scr'+'ipt>':
+// this string lives inside index.html's own <script>.
+const PHP_BRIDGE='<scr'+'ipt>(function(){function send(u,m,b){parent.postMessage({type:"phpnav",url:u,method:m,body:b},"*");}'+
+ 'document.addEventListener("click",function(e){var a=e.target.closest("a");if(!a)return;var h=a.getAttribute("href")||"";'+
+ 'if(/^(https?:|mailto:|#|javascript:)/i.test(h))return;e.preventDefault();send(h,"GET");},true);'+
+ 'document.addEventListener("submit",function(e){var f=e.target;e.preventDefault();'+
+ 'var u=f.getAttribute("action")||"";var m=(f.getAttribute("method")||"GET").toUpperCase();'+
+ 'var d={};new FormData(f).forEach(function(v,k){d[k]=String(v);});'+
+ 'if(m==="GET"){var q=new URLSearchParams(d).toString();send(u+(q?(u.indexOf("?")>=0?"&":"?")+q:""),"GET");}'+
+ 'else send(u,"POST",d);},true);})();</scr'+'ipt>';
+// Rewrite local src/href asset refs to data: URIs (srcdoc has no server to fetch from).
+async function phpInlineAssets(html, curDir){
+  const items=await fsList(); const map={}; for(const f of items) map[f.path]=f;
+  const mime=p=>/\.css$/i.test(p)?'text/css':/\.js$/i.test(p)?'text/javascript':/\.png$/i.test(p)?'image/png':/\.jpe?g$/i.test(p)?'image/jpeg':/\.gif$/i.test(p)?'image/gif':/\.svg$/i.test(p)?'image/svg+xml':/\.ico$/i.test(p)?'image/x-icon':'application/octet-stream';
+  return html.replace(/(src|href)=["']([^"']+)["']/gi,(m0,attr,val)=>{
+    if(/^(https?:|data:|mailto:|#|javascript:|\/\/)/i.test(val)) return m0;
+    if(/\.php([?#]|$)/i.test(val)) return m0;   // navigation -> bridge handles it
+    const clean=val.replace(/[?#].*$/,'').replace(/^\.?\//,''); const f=map[curDir?curDir+'/'+clean:clean]||map[clean]; if(!f) return m0;
+    const c=f.content||''; const b64=c.startsWith(' B64 ')?c.slice(5):btoa(unescape(encodeURIComponent(c)));
+    return attr+'="data:'+mime(clean)+';base64,'+b64+'"'; });
+}
+let phpPrevUrl=null;
+async function phpPreview(url, method, body){
+  const fr=document.getElementById('edhtmlframe');
+  let resp; try{ resp=await phpRequest(url, method, body); }
+  catch(e){ fr.srcdoc='<pre style="color:#c00;padding:1em">PHP no disponible: '+escHtml(String(e))+'</pre>'; return; }
+  phpPrevUrl=url;
+  let html=resp.text||'';
+  const ct=[].concat((resp.headers&&resp.headers['content-type'])||[])[0]||'';
+  if(ct&&!/text\/html/i.test(ct)) html='<pre style="padding:1em">'+escHtml(html)+'</pre>';
+  const curDir=url.replace(/^\//,'').split('/').slice(0,-1).join('/');
+  html=await phpInlineAssets(html,curDir);
+  fr.srcdoc=html+PHP_BRIDGE;
+}
+window.addEventListener('message', async ev=>{ const d=ev.data; if(!d||d.type!=='phpnav') return;
+  let u=String(d.url||''); if(!u){ u=phpPrevUrl||'/'; }
+  if(!u.startsWith('/')){ const base=(phpPrevUrl||'/').split('/').slice(0,-1).join('/'); u=base+'/'+u; }
+  setWorking(true); try{ await phpPreview(u, d.method||'GET', d.body); } finally{ setWorking(false); } });
 // Fallback diagnosis: when the in-browser clang dies with a mute crash (the wasm cc1 hits its
 // stack limit on a big file -> "exit 45" with no error), send the same source to Compiler
 // Explorer (godbolt.org) — a NATIVE clang with no such limit — to get the real verdict.
@@ -1040,7 +1080,7 @@ async function openEd(path){
   document.getElementById('edtext').classList.remove('hidden'); document.getElementById('edpreview').classList.add('hidden');
   document.getElementById('edhtmlframe').classList.add('hidden');
   document.getElementById('edprev').classList.toggle('hidden', !/\.md$/i.test(path));   // markdown preview only for .md
-  document.getElementById('edhtml').classList.toggle('hidden', !/\.(html?|svg)$/i.test(path));   // rendered view for .html/.svg
+  document.getElementById('edhtml').classList.toggle('hidden', !/\.(html?|svg|php)$/i.test(path));   // rendered view for .html/.svg/.php
   document.getElementById('ed').classList.remove('hidden'); }
 function closeEd(){
   document.getElementById('ed').classList.add('hidden');
@@ -1053,7 +1093,11 @@ function togglePreview(){ const ta=document.getElementById('edtext'), pv=documen
 // render the .html/.svg being edited in a sandboxed iframe (scripts allowed, but no same-origin
 // access -> can't touch the disk, localStorage or the parent page)
 function toggleHtmlView(){ const ta=document.getElementById('edtext'), fr=document.getElementById('edhtmlframe'), b=document.getElementById('edhtml');
-  if(fr.classList.contains('hidden')){ fr.srcdoc=ta.value; fr.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
+  if(fr.classList.contains('hidden')){
+    if(/\.php$/i.test(edCur||'')){ fsPut(edCur, ta.value).then(()=>{ refreshDisk(); phpCookies={}; return phpPreview('/'+edCur); });   // save buffer first; fresh cookie jar per preview session
+      fr.srcdoc='<p style="font-family:sans-serif;color:#888;padding:1em">🐘 PHP…</p>'; }
+    else fr.srcdoc=ta.value;
+    fr.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
   else { fr.classList.add('hidden'); fr.srcdoc=''; ta.classList.remove('hidden'); b.textContent='🌐 Ver'; } }
 async function saveEd(){ if(edCur!=null){ await fsPut(edCur,document.getElementById('edtext').value); refreshDisk(); closeEd(); } }
 
