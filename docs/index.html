@@ -205,11 +205,22 @@ function renderNode(node, box, depth){
     actions.appendChild(del); row.appendChild(nm); row.appendChild(actions); box.appendChild(row); });
 }
 const MIME={pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',svg:'image/svg+xml',zip:'application/zip',wasm:'application/wasm',json:'application/json',csv:'text/csv',db:'application/sql',html:'text/html',htm:'text/html',txt:'text/plain',md:'text/markdown'};
-async function downloadFile(path){ const f=await fsGet(path); if(!f) return; const c=f.content||''; const ext=(path.split('.').pop()||'').toLowerCase(); const mime=MIME[ext]||'application/octet-stream';
+async function downloadFile(path){ const f=await fsGet(path); if(!f) return; const ext=(path.split('.').pop()||'').toLowerCase(); const mime=MIME[ext]||'application/octet-stream';
+  let c=f.content||'';
+  // .db binary files: convert to SQL dump for export
+  if(ext==='db' && c.startsWith(' B64 ')){ c=await dbExportSql(path)||c; }
   let blob;
   if(c.startsWith(' B64 ')){ const bin=atob(c.slice(5)); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); blob=new Blob([u],{type:mime}); }
   else blob=new Blob([c],{type:mime});
-  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=path.split('/').pop(); document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),2000); }
+  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=path.split('/').pop().replace(/\.db$/,'.sql'); document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),2000); }
+async function dbExportSql(path){ try{ await ensurePy(); const f=await fsGet(path); if(!f) return '';
+  const c=f.content||''; if(!c.startsWith(' B64 ')) return c;  // already text
+  const b64=c.slice(5); const raw=atob(b64); const bin=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++)bin[i]=raw.charCodeAt(i);
+  const py=pyodide; try{py.FS.mkdir('/tmp');}catch(e){}
+  py.FS.writeFile('/tmp/_export.db',bin);
+  const dump=py.runPython("import sqlite3\nconn=sqlite3.connect('/tmp/_export.db')\nd='\\n'.join(list(conn.iterdump()))\nconn.close()\nd");
+  return dump||''; }catch(e){ console.error('dbExportSql:',e); return ''; } }
 async function refreshDisk(){
   const items=await fsList(); const box=document.getElementById('files'); box.innerHTML='';
   let bytes=0; items.forEach(f=>bytes+=(f.content||'').length);
