@@ -267,7 +267,7 @@ async function shExpandSubst(line){ let g=0; let m;
     if(m=line.match(/`([^`]*)`/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
     break; }
   return line; }
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','sql','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','php','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','sql','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 let MK_VARS={}, MK_SKIPPED=0;
 function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
@@ -376,6 +376,9 @@ async function shOne(cmd, stdin){
     case 'write': { const fn=toks[0]||'untitled'; const c=toks.slice(1).join(' '); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
     case 'cc': case 'clang': case 'gcc': { if(!toks.length){SH_EXIT=1;return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');} return await ccExec(toks); }
     case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
+    case 'php': { if(!a0[0]){SH_EXIT=1;return T('uso: php <fichero.php> | php -r <código>','usage: php <file.php> | php -r <code>');}
+      if(a0[0]==='-r'){ return await runPhpCode(a0.slice(1).join(' ')); }
+      const p=shResolve(a0[0]); const f=await fsGet(p); if(!f){SH_EXIT=1;return 'php: '+T('no existe ','no such file ')+a0[0];} return await runPhp(p); }
     case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?(url.split('/').pop()||'index.html'):null);
       if(!url){SH_EXIT=1;return name+': '+T('falta URL','missing URL');}
       const cands=[]; if(PROXY)cands.push(PROXY+'/?url='+encodeURIComponent(url)); cands.push(url,'https://corsproxy.io/?url='+encodeURIComponent(url),'https://api.allorigins.win/raw?url='+encodeURIComponent(url),'https://r.jina.ai/'+url);
@@ -1395,7 +1398,8 @@ const TOOLS=[
  {type:'function',function:{name:'shell',description:'Run a POSIX-like shell command on the virtual disk: ls cat echo pwd cd mkdir touch rm mv cp grep head tail wc find, with pipes (|) and redirect (> >>).',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']}}},
  {type:'function',function:{name:'sql',description:'Execute a SQL query on a .db virtual database file (SQLite via sqlite3). Use for SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP, ALTER. If the .db file does not exist, it is created automatically on CREATE TABLE. Returns rows as JSON with columns, rows, and changes count.',parameters:{type:'object',properties:{db:{type:'string',description:'Path to the .db file, e.g. "clientes.db" or "data/clientes.db"'},query:{type:'string',description:'SQL query to execute'}},required:['db','query']}}},
  {type:'function',function:{name:'python',description:'Run real Python (Pyodide/CPython in WASM). cwd is /disk so it can read/write the virtual disk files. Returns stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
- {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}}
+ {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
+ {type:'function',function:{name:'php',description:'Run real PHP 8 (@php-wasm/WASM). Pass path to a .php file on the virtual disk (document root /disk, includes work) OR inline code. Returns stdout (HTML/text).',parameters:{type:'object',properties:{path:{type:'string',description:'.php file to run'},code:{type:'string',description:'inline PHP code (alternative to path)'}}}}}
 ];
 // sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
 const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
@@ -1464,6 +1468,7 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
+  if(name==='php'){ const out=args.path? await runPhp(shResolve(args.path)) : await runPhpCode(args.code||''); termLine('php '+(args.path||'‹code›'), out, SHCWD); return out; }
   if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
     if(a==='clone'){ const okc=await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return okc?'clonado':'ERROR: el clone falló (repo inexistente, demasiado grande, rate limit o proxy caído). NO busques los ficheros: no están.'; }
@@ -1532,7 +1537,7 @@ const FLOW_META={
   slash: {i:'⚡',dot:'bg-fuchsia-500',ring:'ring-fuchsia-500/30',v:'Slash command'},
   error: {i:'❌',dot:'bg-red-500',    ring:'ring-red-500/30',    v:'Error'} };
 const TOOL_ICON={ list_files:'📂',read_file:'📄',write_file:'✏️',delete_file:'🗑',ask_user:'❓',dispatch_agents:'👥',git:'🔀',web_search:'🔎',web_fetch:'🌐',shell:'⌨️',python:'🐍',cc:'⚙️' };
-const TOOL_VERB={ list_files:'Lista los ficheros',read_file:'Lee un fichero',write_file:'Escribe un fichero',delete_file:'Borra un fichero',ask_user:'Te pregunta',dispatch_agents:'Lanza sub-agentes',git:'Operación git',web_search:'Busca en la web',web_fetch:'Abre una URL',shell:'Ejecuta shell',python:'Ejecuta Python',cc:'Compila C' };
+const TOOL_VERB={ list_files:'Lista los ficheros',read_file:'Lee un fichero',write_file:'Escribe un fichero',delete_file:'Borra un fichero',ask_user:'Te pregunta',dispatch_agents:'Lanza sub-agentes',git:'Operación git',web_search:'Busca en la web',web_fetch:'Abre una URL',shell:'Ejecuta shell',python:'Ejecuta Python',cc:'Compila C',php:'Ejecuta PHP' };
 // Flow = Mermaid flow diagram of what the agent did (rendered in a sandboxed iframe)
 function flowCard(){
   const ov=el('<div class="fixed inset-0 bg-black/80 flex items-center justify-center p-3 md:p-6 z-50"></div>');
@@ -1596,7 +1601,7 @@ function toolMeta(n){ return ({
   write_file:{v:'Escribiendo',i:IC_FILE,a:'path'}, delete_file:{v:'Borrando',i:IC_TRASH,a:'path'},
   ask_user:{v:'Preguntando',i:IC_ASK,a:'question'},
   web_search:{v:'Buscando',i:IC_SEARCH,a:'query'}, web_fetch:{v:'Abriendo',i:IC_SEARCH,a:'url'},
-  git:{v:'git',i:IC_FILE,a:'action'}, dispatch_agents:{v:'Delegando',i:IC_FILE,a:''}, shell:{v:'Shell',i:IC_TERM,a:'command'}, python:{v:'Python',i:IC_TERM,a:''}, cc:{v:'clang',i:IC_TERM,a:''} }[n]||{v:n,i:IC_FILE,a:''}); }
+  git:{v:'git',i:IC_FILE,a:'action'}, dispatch_agents:{v:'Delegando',i:IC_FILE,a:''}, shell:{v:'Shell',i:IC_TERM,a:'command'}, python:{v:'Python',i:IC_TERM,a:''}, cc:{v:'clang',i:IC_TERM,a:''}, php:{v:'PHP',i:IC_TERM,a:'path'} }[n]||{v:n,i:IC_FILE,a:''}); }
 let curPanel=null;
 function actionPanel(){ const p=el('<div class="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden max-w-[90%]"></div>');
   const btn=el('<button class="w-full flex items-center p-2.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-700"></button>');
@@ -1895,6 +1900,9 @@ async function slashCmd(v){
       if(workN>0){ btwPending=note; user('💬 '+(arg||T('¿Qué estás haciendo?','What are you doing?'))); tool(T('Enviado al agente; responderá entre acciones, sin interrumpir.','Sent to the agent; it will answer between actions, without interrupting.')); }
       else { await agent(note); } break; }
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
+    case '/php': { setWorking(true); let out; const a=arg.trim();
+      if(/^[\w./-]+\.php$/.test(a)) out=await runPhp(shResolve(a)); else out=await runPhpCode(arg);
+      setWorking(false); termLine('php '+(/\.php$/.test(a)?a:'‹code›'), out, SHCWD); break; }
     case '/cc': { setWorking(true); const isFiles=/\.(c|cpp|cc|cxx)(\s|$)/i.test(arg); const out = isFiles? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(isFiles?arg:'‹code›'), out, SHCWD); break; }
     default: tool(T('Comando desconocido: ','Unknown command: ')+cmd+'. '+T('Prueba /help.','Try /help.'));
   }
@@ -2067,7 +2075,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/php','PHP 8 (@php-wasm/WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
@@ -2129,7 +2137,7 @@ async function runSkill(name,task){
   await agent('Sigue esta SKILL "'+name+'":\n'+p+'\n\nTarea: '+(task||'aplícala al contexto actual del disco.'));
 }
 /* ===== /tool: list the agent tools, or run one directly for testing ===== */
-function toolSafety(name){ return ['write_file','delete_file','git','dispatch_agents','shell','python','cc'].includes(name)?'warn':'safe'; }
+function toolSafety(name){ return ['write_file','delete_file','git','dispatch_agents','shell','python','cc','php'].includes(name)?'warn':'safe'; }
 function toolsCard(){
   const c=el('<div class="bg-[#1a1d24] border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   const head=el('<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700/50"></div>');
