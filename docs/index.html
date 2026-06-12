@@ -612,7 +612,7 @@ try:
     _cur = _conn.execute(${sqlJson})
     _rows = _cur.fetchall()
     _cols = [d[0] for d in _cur.description] if _cur.description else []
-    _changes = _conn.changes()
+    _changes = getattr(_conn, 'changes', 0)
     _new_dump = '\\n'.join(list(_conn.iterdump())) if ${isWrite ? 'True' : 'False'} else None
 except Exception as _e:
     _err = str(_e)
@@ -639,7 +639,7 @@ try:
     _cur = _conn.execute(_q)
     _rows = _cur.fetchall()
     _cols = [d[0] for d in _cur.description] if _cur.description else []
-    _changes = _conn.changes()
+    _changes = getattr(_conn, 'changes', 0)
     _new_dump = '\\n'.join(list(_conn.iterdump())) if ${isWrite ? 'True' : 'False'} else None
 except Exception as _e:
     if not _err: _err = str(_e)
