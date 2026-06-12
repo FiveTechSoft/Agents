@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u40';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u41';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -70,7 +70,7 @@
     <div class="p-3 border-b border-gray-800 bg-gray-850 flex items-center justify-between gap-2">
       <span class="font-semibold flex items-center gap-2">
         <button onclick="toggleDisk()" class="md:hidden bg-gray-800 border border-gray-700 rounded px-2 py-1" title="Disco">💾</button>
-        <span id="agi" class="inline-block">😎</span> Agents — Web <!-- v03f646a -->
+        <span id="agi" class="inline-block">😎</span> <a href="https://github.com/fivetechsoft/agents" target="_blank" rel="noopener" title="Código fuente en GitHub" class="hover:text-blue-400">Agents — Web</a> <!-- v03f646a -->
         <span id="status" class="hidden text-[10px] font-mono text-gray-400 ml-1 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5"></span>
       </span>
       <div class="flex items-center gap-1.5 text-xs">

@@ -11,6 +11,9 @@ Un agente IA en el navegador con disco virtual, runtimes WASM y herramientas rea
   El disco se espeja a `/disk`, así Python lee/escribe los mismos ficheros.
 - **C real con clang** (Wasmer SDK en WASM): `cc/clang/gcc file.c` · `/cc` · tool `cc`.
   Compila C → módulo wasm → lo ejecuta. Cross-origin isolation vía `coi-serviceworker`.
+- **PHP 8 real** (@php-wasm / WordPress Playground en WASM): `php file.php` · `php -r <código>` · `/php` · tool `php`.
+  **Preview web** de `.php` en el editor (botón 🌐 Ver): formularios (`$_POST`), navegación entre páginas (`$_GET`),
+  sesiones (`$_SESSION`) y cookies simuladas; el disco se espeja a `/disk` (document root).
 
 ## Disco virtual (unidad de almacenamiento simulada)
 - Filesystem sobre **IndexedDB**, persistente por navegador.
@@ -27,7 +30,7 @@ Un agente IA en el navegador con disco virtual, runtimes WASM y herramientas rea
 - **Límite de pasos** que **pregunta** antes de continuar (+14) en vez de bloquear.
 
 ## Comandos slash
-`/help · /clear · /key · /ghtoken · /goal · /plan · /run · /loop · /clone · /git · /skill · /tool · /sh · /py · /cc · /cost · /compact · /init`
+`/help · /clear · /key · /ghtoken · /goal · /plan · /run · /loop · /clone · /git · /skill · /tool · /sh · /py · /cc · /php · /cost · /compact · /init`
 
 ## Cards (replican los mockups de Claude Code)
 Objetivo, Plan de Acción (editable: editar/borrar/+paso/estado), Telemetría del Bucle,

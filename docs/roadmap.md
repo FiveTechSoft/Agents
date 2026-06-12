@@ -10,6 +10,7 @@ Próximos pasos para la app web (https://fivetechsoft.github.io/Agents/).
 
 ## Runtimes
 - [ ] **Más lenguajes WASM**: TypeScript/JS (QuickJS), Ruby (ruby.wasm), Lua, SQLite (sql.js).
+- [x] **PHP** (@php-wasm): CLI + preview web con forms/sesiones. ✅ 2026-06-12
 - [ ] **C++** y stdlib pesada con clang (sysroot completo) además del C básico.
 - [ ] `pip install` de wheels puros en Python (micropip) expuesto en el shell.
 - [ ] Caché persistente de los runtimes (clang/Pyodide) en Cache Storage para arranque rápido.
