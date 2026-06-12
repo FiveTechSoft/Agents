@@ -650,20 +650,20 @@ _json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_new_d
 
   let raw;
   try {
-    raw = await py.runPythonAsync(script);
+    raw = py.runPython(script);
   } catch(e) {
-    console.error('pyDbExec: runPythonAsync failed', e);
+    console.error('pyDbExec: runPython failed', e);
     return 'SQL Error: ' + (e.message || e);
   }
   if (!raw || typeof raw !== 'string') {
-    console.error('pyDbExec: empty or non-string output from Python', raw);
+    console.error('pyDbExec: non-string output from Python, type:', typeof raw, 'val:', raw);
     return 'SQL Error: Python returned no output';
   }
   let result;
   try {
     result = JSON.parse(raw);
   } catch(e) {
-    console.error('pyDbExec: JSON.parse failed, raw:', raw);
+    console.error('pyDbExec: JSON.parse failed, raw:', raw.slice(0,200));
     return 'SQL Error: failed to parse result from Python';
   }
 
