@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u41';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u42';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -954,11 +954,18 @@ async function ccRun(code){ return await ccExec([], code); }   // inline code pa
    ===================================================================== */
 let phpInst=null, phpHandler=null, phpLoading=null, phpCookies={};
 async function ensurePhp(){ if(phpHandler) return phpHandler; if(phpLoading) return phpLoading;
-  tool('🐘 '+T('Cargando PHP (~10MB, primera vez)…','Loading PHP (~10MB, first time)…'));
+  tool('🐘 '+T('Cargando PHP (~20MB, primera vez)…','Loading PHP (~20MB, first time)…'));
   phpLoading=(async()=>{
-    const web=await import('https://cdn.jsdelivr.net/npm/@php-wasm/web@3.1.38/+esm');
-    const uni=await import('https://cdn.jsdelivr.net/npm/@php-wasm/universal@3.1.38/+esm');
-    phpInst=new uni.PHP(await web.loadWebRuntime('8.3'));
+    // jsdelivr /+esm cannot bundle @php-wasm (vite-style .wasm import in the Emscripten loader)
+    // and esm.sh inlines the 20MB wasm as a CSV string. So: universal via esm.sh (clean ESM),
+    // and the raw loader from jsdelivr with its .wasm import patched to an absolute URL.
+    const uni=await import('https://esm.sh/@php-wasm/universal@3.1.38');
+    const mode=(typeof WebAssembly!=='undefined'&&typeof WebAssembly.Suspending==='function')?'jspi':'asyncify';
+    const base='https://cdn.jsdelivr.net/npm/@php-wasm/web-8-3@3.1.38/'+mode+'/';
+    const src=await (await fetch(base+'php_8_3.js')).text();
+    const patched=src.replace(/import dependencyFilename from '[^']*';/, "const dependencyFilename='"+base+"8_3_31/php_8_3.wasm';");
+    const loader=await import(URL.createObjectURL(new Blob([patched],{type:'text/javascript'})));
+    phpInst=new uni.PHP(await uni.loadPHPRuntime(loader,{phpWasmAsyncMode:mode}));
     try{ phpInst.mkdir('/disk'); }catch(e){} try{ phpInst.mkdir('/tmp'); }catch(e){}
     phpHandler=new uni.PHPRequestHandler({ phpFactory: async()=>phpInst, documentRoot:'/disk' });
     return phpHandler; })();
