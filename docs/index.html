@@ -668,8 +668,9 @@ async function openDbViewer(path){
     tb.innerHTML = '<div class="text-[10px] text-gray-600 px-2">(sin tablas)</div>';
   } else {
     tb.innerHTML = result.rows.map(r => {
-      const t = escHtml(r[0]);
-      const escapedName = t.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      const raw = r[0];
+      const t = escHtml(raw);
+      const escapedName = raw.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
       return '<button onclick="dbvOpenTable(\'' + escapedName + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
     }).join('');
   }
@@ -770,8 +771,9 @@ async function dbvRunSql(){
   if (typeof tableResult !== 'string') {
     tb.innerHTML = tableResult.rows.length
       ? tableResult.rows.map(r => {
-          const t = escHtml(r[0]);
-          const escapedName = t.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+          const raw = r[0];
+          const t = escHtml(raw);
+          const escapedName = raw.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
           return '<button onclick="dbvOpenTable(\'' + escapedName + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
         }).join('')
       : '<div class="text-[10px] text-gray-600 px-2">(sin tablas)</div>';
