@@ -286,9 +286,11 @@ git commit -m "feat(web): PHP web preview — forms, navigation, sessions via po
 
 ```js
     case 'php': { if(!a0[0]){SH_EXIT=1;return T('uso: php <fichero.php> | php -r <código>','usage: php <file.php> | php -r <code>');}
-      if(a0[0]==='-r'){ return await runPhpCode(a0.slice(1).join(' ')); }
+      if(toks[0]==='-r'){ return await runPhpCode(toks.slice(1).join(' ')); }
       const p=shResolve(a0[0]); const f=await fsGet(p); if(!f){SH_EXIT=1;return 'php: '+T('no existe ','no such file ')+a0[0];} return await runPhp(p); }
 ```
+
+> Note: `a0` filters out `-`-prefixed tokens, so the `-r` flag must be read from `toks`.
 
 - [ ] **Step 3: `TOOLS` entry** — insert after the `cc` tool entry (~line 1288):
 

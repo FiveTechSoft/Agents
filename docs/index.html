@@ -377,7 +377,7 @@ async function shOne(cmd, stdin){
     case 'cc': case 'clang': case 'gcc': { if(!toks.length){SH_EXIT=1;return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');} return await ccExec(toks); }
     case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
     case 'php': { if(!a0[0]){SH_EXIT=1;return T('uso: php <fichero.php> | php -r <código>','usage: php <file.php> | php -r <code>');}
-      if(a0[0]==='-r'){ return await runPhpCode(a0.slice(1).join(' ')); }
+      if(toks[0]==='-r'){ return await runPhpCode(toks.slice(1).join(' ')); }
       const p=shResolve(a0[0]); const f=await fsGet(p); if(!f){SH_EXIT=1;return 'php: '+T('no existe ','no such file ')+a0[0];} return await runPhp(p); }
     case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?(url.split('/').pop()||'index.html'):null);
       if(!url){SH_EXIT=1;return name+': '+T('falta URL','missing URL');}
@@ -1468,7 +1468,7 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
-  if(name==='php'){ const out=args.path? await runPhp(shResolve(args.path)) : await runPhpCode(args.code||''); termLine('php '+(args.path||'‹code›'), out, SHCWD); return out; }
+  if(name==='php'){ if(!args.path&&!args.code) return 'php: pass path or code'; const out=args.path? await runPhp(shResolve(args.path)) : await runPhpCode(args.code||''); termLine('php '+(args.path||'‹code›'), out, SHCWD); return out; }
   if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
     if(a==='clone'){ const okc=await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return okc?'clonado':'ERROR: el clone falló (repo inexistente, demasiado grande, rate limit o proxy caído). NO busques los ficheros: no están.'; }
@@ -1536,7 +1536,7 @@ const FLOW_META={
   cmd:   {i:'⌨️',dot:'bg-teal-500',   ring:'ring-teal-500/30',   v:'Comando shell'},
   slash: {i:'⚡',dot:'bg-fuchsia-500',ring:'ring-fuchsia-500/30',v:'Slash command'},
   error: {i:'❌',dot:'bg-red-500',    ring:'ring-red-500/30',    v:'Error'} };
-const TOOL_ICON={ list_files:'📂',read_file:'📄',write_file:'✏️',delete_file:'🗑',ask_user:'❓',dispatch_agents:'👥',git:'🔀',web_search:'🔎',web_fetch:'🌐',shell:'⌨️',python:'🐍',cc:'⚙️' };
+const TOOL_ICON={ list_files:'📂',read_file:'📄',write_file:'✏️',delete_file:'🗑',ask_user:'❓',dispatch_agents:'👥',git:'🔀',web_search:'🔎',web_fetch:'🌐',shell:'⌨️',python:'🐍',cc:'⚙️',php:'🐘' };
 const TOOL_VERB={ list_files:'Lista los ficheros',read_file:'Lee un fichero',write_file:'Escribe un fichero',delete_file:'Borra un fichero',ask_user:'Te pregunta',dispatch_agents:'Lanza sub-agentes',git:'Operación git',web_search:'Busca en la web',web_fetch:'Abre una URL',shell:'Ejecuta shell',python:'Ejecuta Python',cc:'Compila C',php:'Ejecuta PHP' };
 // Flow = Mermaid flow diagram of what the agent did (rendered in a sandboxed iframe)
 function flowCard(){
