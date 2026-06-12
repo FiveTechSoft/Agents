@@ -4,5 +4,6 @@ build/
 *.keystore
 *.mp4
 deepseek.key
+.worktrees/
 _*.html
 _*.png
