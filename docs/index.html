@@ -953,8 +953,8 @@ let phpInst=null, phpHandler=null, phpLoading=null, phpCookies={};
 async function ensurePhp(){ if(phpHandler) return phpHandler; if(phpLoading) return phpLoading;
   tool('🐘 '+T('Cargando PHP (~10MB, primera vez)…','Loading PHP (~10MB, first time)…'));
   phpLoading=(async()=>{
-    const web=await import('https://cdn.jsdelivr.net/npm/@php-wasm/web/+esm');
-    const uni=await import('https://cdn.jsdelivr.net/npm/@php-wasm/universal/+esm');
+    const web=await import('https://cdn.jsdelivr.net/npm/@php-wasm/web@3.1.38/+esm');
+    const uni=await import('https://cdn.jsdelivr.net/npm/@php-wasm/universal@3.1.38/+esm');
     phpInst=new uni.PHP(await web.loadWebRuntime('8.3'));
     try{ phpInst.mkdir('/disk'); }catch(e){} try{ phpInst.mkdir('/tmp'); }catch(e){}
     phpHandler=new uni.PHPRequestHandler({ phpFactory: async()=>phpInst, documentRoot:'/disk' });
@@ -981,15 +981,19 @@ async function phpMirrorOut(){ const php=phpInst; const walk=(d,base)=>{ let out
 async function phpRequest(url, method, body){
   const handler=await ensurePhp(); await phpMirrorIn();
   let resp=null, hops=0, m=(method||'GET').toUpperCase(), b=body;
-  while(hops<5){
+  try{ while(hops<5){
     const headers={}; const jar=Object.entries(phpCookies).map(([k,v])=>k+'='+v).join('; '); if(jar) headers['cookie']=jar;
     resp=await handler.request({url, method:m, headers, body:b});
     const sc=resp.headers&&resp.headers['set-cookie'];
     if(sc) for(const c of [].concat(sc)){ const mm=/^([^=;]+)=([^;]*)/.exec(c); if(mm) phpCookies[mm[1]]=mm[2]; }
-    const loc=resp.headers&&resp.headers['location'];
-    if(resp.httpStatusCode>=300&&resp.httpStatusCode<400&&loc&&!/^https?:/i.test([].concat(loc)[0])){ url=[].concat(loc)[0]; m='GET'; b=undefined; hops++; continue; }
-    break; }
-  await phpMirrorOut(); return resp; }
+    let loc=resp.headers&&resp.headers['location'];
+    if(resp.httpStatusCode>=300&&resp.httpStatusCode<400&&loc&&!/^https?:/i.test([].concat(loc)[0])){
+      loc=[].concat(loc)[0];
+      if(!loc.startsWith('/')) loc=url.split('/').slice(0,-1).join('/')+'/'+loc;   // resolve relative Location against current dir
+      url=loc; m='GET'; b=undefined; hops++; continue; }
+    break; } }
+  finally{ await phpMirrorOut(); }
+  return resp; }
 // CLI-style execution (shell `php f.php`, /php, agent tool). path is disk-relative.
 async function runPhp(path){
   try{ await ensurePhp(); }catch(e){ return 'PHP no disponible: '+e; }
