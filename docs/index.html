@@ -170,7 +170,7 @@ function renderNode(node, box, depth){
     const nm=document.createElement('span'); nm.className='truncate text-gray-300'; nm.textContent='📄 '+name; nm.onclick=()=>openEd(f.path);
     const actions=document.createElement('span'); actions.className='flex items-center gap-1 shrink-0';
     if(/\.(html?|svg)$/i.test(name)){ const view=document.createElement('button'); view.className='opacity-0 group-hover:opacity-100 text-blue-400 text-xs'; view.textContent='🌐'; view.title='Ver renderizado'; view.onclick=(e)=>{ e.stopPropagation(); openEd(f.path).then(()=>toggleHtmlView()); }; actions.appendChild(view); }
-    { const dl=document.createElement('button'); dl.className='opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-200 text-xs'; dl.textContent='⬇'; dl.title='Descargar'; dl.onclick=(e)=>{ e.stopPropagation(); downloadFile(f.path); }; actions.appendChild(dl); }
+    { const dl=document.createElement('button'); dl.className='opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-200 text-xs'; dl.textContent='↓'; dl.title='Descargar'; dl.onclick=(e)=>{ e.stopPropagation(); downloadFile(f.path); }; actions.appendChild(dl); }
     const del=document.createElement('button'); del.className='opacity-0 group-hover:opacity-100 text-red-400 text-xs pr-1'; del.textContent='✕'; del.onclick=async(e)=>{ e.stopPropagation(); await fsDel(f.path); refreshDisk(); };
     actions.appendChild(del); row.appendChild(nm); row.appendChild(actions); box.appendChild(row); });
 }
