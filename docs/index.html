@@ -591,10 +591,10 @@ async function pyDbExec(path, sql){
   const dump = (f && f.content) ? (f.content.startsWith(' B64 ') ? atob(f.content.slice(5)) : f.content) : '';
   // Simpler: check if the SQL contains write keywords (case-insensitive, whole-word)
   const sqlUpper = sql.trim().toUpperCase();
-  const isWrite = /\b(INSERT|UPDATE|DELETE|CREATE\s+(TABLE|INDEX|VIEW|TRIGGER)|DROP|ALTER|PRAGMA|REPLACE)\b/i.test(sqlUpper);
+  const isWrite = /\b(INSERT|UPDATE|DELETE|CREATE(?:\s+(?:UNIQUE|TEMP(?:ORARY)?|VIRTUAL))?(?:\s+IF\s+NOT\s+EXISTS)?\s+(TABLE|INDEX|VIEW|TRIGGER)|DROP|ALTER|PRAGMA|REPLACE)\b/i.test(sqlUpper);
 
-  const dumpJson = JSON.stringify(dump);
-  const sqlJson = JSON.stringify(sql);
+  const dumpJson = JSON.stringify(dump).replace(/`/g,'\\`').replace(/\$\{/g,'\\${');
+  const sqlJson = JSON.stringify(sql).replace(/`/g,'\\`').replace(/\$\{/g,'\\${');
 
   const script = `import sqlite3, json as _json
 _conn = sqlite3.connect(':memory:')
@@ -625,7 +625,12 @@ _json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_dump,
   } catch(e) {
     return 'SQL Error: ' + (e.message || e);
   }
-  const result = JSON.parse(raw);
+  let result;
+  try {
+    result = JSON.parse(raw);
+  } catch(e) {
+    return 'SQL Error: failed to parse result from Python';
+  }
 
   if (!result.ok) {
     return 'SQL Error: ' + (result.error || 'unknown error');
