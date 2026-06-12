@@ -587,34 +587,37 @@ async function pyDbExec(path, sql){
   const f = await fsGet(path);
   const py = pyodide;
 
-  // Pass data safely via pyodide globals (no string escaping issues)
+  // Pass data safely as JSON-encoded Python literals (no shared globals, no race)
   const dump = (f && f.content) ? (f.content.startsWith(' B64 ') ? atob(f.content.slice(5)) : f.content) : '';
-  py.globals.set('_db_dump', dump);
-  py.globals.set('_db_sql', sql);
   // Simpler: check if the SQL contains write keywords (case-insensitive, whole-word)
   const sqlUpper = sql.trim().toUpperCase();
   const isWrite = /\b(INSERT|UPDATE|DELETE|CREATE\s+(TABLE|INDEX|VIEW|TRIGGER)|DROP|ALTER|PRAGMA|REPLACE)\b/i.test(sqlUpper);
-  py.globals.set('_db_is_write', isWrite);
 
-  const script = `import sqlite3, json
+  const dumpJson = JSON.stringify(dump);
+  const sqlJson = JSON.stringify(sql);
+
+  const script = `import sqlite3, json as _json
 _conn = sqlite3.connect(':memory:')
 _error = None
-if _db_dump:
+_dump = _json.loads(${dumpJson})
+_sql = _json.loads(${sqlJson})
+if _dump:
     try:
-        _conn.executescript(_db_dump)
+        _conn.executescript(_dump)
     except Exception as e:
         _error = str(e)
 try:
-    _cur = _conn.execute(_db_sql)
+    _cur = _conn.execute(_sql)
     _rows = _cur.fetchall()
     _cols = [d[0] for d in _cur.description] if _cur.description else []
     _changes = _conn.changes()
-    _dump = '\\n'.join([l for l in _conn.iterdump()]) if _db_is_write else None
+    _is_write = ${isWrite ? 'True' : 'False'}
+    _dump = '\\n'.join([l for l in _conn.iterdump()]) if _is_write else None
 except Exception as e:
     _error = str(e)
     _rows = []; _cols = []; _changes = 0; _dump = None
 _ok = _error is None
-json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_dump,'error':_error})`;
+_json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_dump,'error':_error})`;
 
   let raw;
   try {
@@ -629,7 +632,7 @@ json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_dump,'
   }
 
   // Save dump back to disk on write
-  if (py.globals.get('_db_is_write') && result.dump !== null && result.dump !== undefined) {
+  if (isWrite && result.dump !== null && result.dump !== undefined) {
     await fsPut(path, result.dump);
     refreshDisk();
   }
@@ -765,20 +768,44 @@ async function dbvRunSql(){
   resultEl.textContent = result.changes > 0 ? result.changes + ' rows affected' : (result.rows ? result.rows.length + ' rows' : 'OK');
   resultEl.className = 'text-[10px] text-green-400';
 
-  // Refresh table list and current data
-  const tableResult = await pyDbExec(dbvPath, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
-  const tb = document.getElementById('dbv-tables');
-  if (typeof tableResult !== 'string') {
-    tb.innerHTML = tableResult.rows.length
-      ? tableResult.rows.map(r => {
-          const raw = r[0];
-          const t = escHtml(raw);
-          const escapedName = raw.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-          return '<button onclick="dbvOpenTable(\'' + escapedName + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
-        }).join('')
-      : '<div class="text-[10px] text-gray-600 px-2">(sin tablas)</div>';
+  // If query returned columns (SELECT), show results directly
+  if (result.columns && result.columns.length) {
+    dbvTable = '';  // not a pre-selected table
+    document.getElementById('dbv-info').textContent = 'Query · ' + result.rows.length + ' rows';
+    const rowsDiv = document.getElementById('dbv-rows');
+    let html = '<table class="w-full text-xs text-gray-300 border-collapse"><thead><tr class="sticky top-0 bg-gray-800">';
+    result.columns.forEach(c => { html += '<th class="px-2 py-1.5 text-left border-b border-gray-700 text-blue-300 font-medium whitespace-nowrap">' + escHtml(c) + '</th>'; });
+    html += '</tr></thead><tbody>';
+    result.rows.forEach(r => {
+      html += '<tr class="hover:bg-gray-800/50">';
+      r.forEach(v => {
+        const cls = v === null ? 'text-gray-600' : typeof v === 'number' ? 'text-green-400' : 'text-gray-200';
+        const txt = v === null ? 'NULL' : escHtml(String(v).length > 200 ? String(v).slice(0,200)+'…' : String(v));
+        html += '<td class="px-2 py-0.5 border-b border-gray-800/50 max-w-[300px] truncate ' + cls + '">' + txt + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    rowsDiv.innerHTML = html;
+    document.getElementById('dbv-pageinfo').classList.add('hidden');
+    document.getElementById('dbv-prev').classList.add('hidden');
+    document.getElementById('dbv-next').classList.add('hidden');
+  } else {
+    // Write query: refresh table list and current table
+    const tableResult = await pyDbExec(dbvPath, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
+    const tb = document.getElementById('dbv-tables');
+    if (typeof tableResult !== 'string') {
+      tb.innerHTML = tableResult.rows.length
+        ? tableResult.rows.map(r => {
+            const raw = r[0];
+            const t = escHtml(raw);
+            const escapedName = raw.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+            return '<button onclick="dbvOpenTable(\'' + escapedName + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
+          }).join('')
+        : '<div class="text-[10px] text-gray-600 px-2">(sin tablas)</div>';
+    }
+    if (dbvTable) await dbvLoadPage();
   }
-  if (dbvTable) await dbvLoadPage();
 }
 
 /* =====================================================================
@@ -864,6 +891,7 @@ async function openEd(path){
   const f = await fsGet(path); edCur = path;
   if(window.innerWidth<768){ const d=document.getElementById('disk'); if(d && !d.classList.contains('-translate-x-full')) toggleDisk(); }   // close the drawer on mobile so the editor is visible
   document.getElementById('edpath').textContent=path; document.getElementById('edtext').value=f?f.content:'';
+  document.getElementById('eddbviewer').classList.add('hidden');
   document.getElementById('edtext').classList.remove('hidden'); document.getElementById('edpreview').classList.add('hidden');
   document.getElementById('edhtmlframe').classList.add('hidden');
   document.getElementById('edprev').classList.toggle('hidden', !/\.md$/i.test(path));   // markdown preview only for .md
