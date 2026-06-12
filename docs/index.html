@@ -1064,7 +1064,7 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
-  if(name==='sql'){ const result = await pyDbExec(shResolve(args.db), args.query); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
+  if(name==='sql'){ const result = await pyDbExec(shResolve(args.db), args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
     if(a==='clone'){ const okc=await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return okc?'clonado':'ERROR: el clone falló (repo inexistente, demasiado grande, rate limit o proxy caído). NO busques los ficheros: no están.'; }
     if(a==='commit'){ await gitCommit(args.message||'agents-web: update'); return 'commit hecho'; }
