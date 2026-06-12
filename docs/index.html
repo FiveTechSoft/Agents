@@ -639,11 +639,11 @@ json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_dump,'
 /* ---- DB Viewer state ---- */
 let dbvPath = '';
 let dbvTable = '';
-let dbvPage = 0;
+let dbvCurPage = 0;
 const DBV_PAGE = 100;
 
 async function openDbViewer(path){
-  dbvPath = path; dbvTable = ''; dbvPage = 0;
+  dbvPath = path; dbvTable = ''; dbvCurPage = 0;
   document.getElementById('edpath').textContent = '🗄 ' + path;
   document.getElementById('edtext').classList.add('hidden');
   document.getElementById('edpreview').classList.add('hidden');
@@ -674,12 +674,12 @@ async function openDbViewer(path){
 }
 
 async function dbvOpenTable(name){
-  dbvTable = name; dbvPage = 0;
+  dbvTable = name; dbvCurPage = 0;
   await dbvLoadPage();
 }
 
 async function dbvLoadPage(){
-  const off = dbvPage * DBV_PAGE;
+  const off = dbvCurPage * DBV_PAGE;
   const cnt = await pyDbExec(dbvPath, 'SELECT COUNT(*) FROM "' + dbvTable.replace(/"/g,'""') + '"');
   const total = typeof cnt === 'string' ? 0 : cnt.rows[0][0];
   const data = await pyDbExec(dbvPath,
@@ -713,12 +713,12 @@ async function dbvLoadPage(){
   const prev = document.getElementById('dbv-prev');
   const next = document.getElementById('dbv-next');
   if (total > DBV_PAGE) {
-    const end = Math.min((dbvPage+1)*DBV_PAGE, total);
-    info.textContent = (dbvPage*DBV_PAGE+1) + '-' + end + ' de ' + total;
+    const end = Math.min((dbvCurPage+1)*DBV_PAGE, total);
+    info.textContent = (dbvCurPage*DBV_PAGE+1) + '-' + end + ' de ' + total;
     info.classList.remove('hidden');
     prev.classList.remove('hidden');
     next.classList.remove('hidden');
-    prev.disabled = dbvPage === 0;
+    prev.disabled = dbvCurPage === 0;
     next.disabled = end >= total;
   } else {
     info.classList.add('hidden');
@@ -728,8 +728,8 @@ async function dbvLoadPage(){
 }
 
 function dbvPage(dir){
-  dbvPage += dir;
-  if (dbvPage < 0) dbvPage = 0;
+  dbvCurPage += dir;
+  if (dbvCurPage < 0) dbvCurPage = 0;
   dbvLoadPage();
 }
 
