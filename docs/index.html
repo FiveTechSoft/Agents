@@ -620,7 +620,7 @@ finally:
     if _conn:
         _conn.close()
 _ok = _err is None
-print(_json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_new_dump,'error':_err}))`;
+with open('/tmp/_result.json','w') as _f: _f.write(_json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_new_dump,'error':_err}))`;
   } else {
     // Text SQL dump (created by pyDbExec) — load into :memory:
     const dump = (f && f.content) ? f.content : '';
@@ -644,23 +644,25 @@ try:
 except Exception as _e:
     if not _err: _err = str(_e)
     _rows = []; _cols = []; _changes = 0; _new_dump = None
-_ok = _err is None
-print(_json.dumps({'ok':_err is None,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_new_dump,'error':_err}))`;
+with open('/tmp/_result.json','w') as _f: _f.write(_json.dumps({'ok':_err is None,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_new_dump,'error':_err}))`;
   }
 
-  // Capture stdout (same pattern as runPython, proven reliable)
-  let out = '';
-  try { py.setStdout({batched: s => { out += s + '\n'; }}); } catch(e) {}
-  try { py.setStderr({batched: s => { out += s + '\n'; }}); } catch(e) {}
+  // File-based IPC — Python writes result to /tmp/_result.json, JS reads it
   try {
     await py.runPythonAsync(script);
   } catch(e) {
     console.error('pyDbExec: runPythonAsync failed', e);
     return 'SQL Error: ' + (e.message || e);
   }
-  const raw = out.trim();
-  if (!raw) {
-    console.error('pyDbExec: empty stdout from Python');
+  let raw;
+  try {
+    raw = py.FS.readFile('/tmp/_result.json', {encoding: 'utf8'});
+  } catch(e) {
+    console.error('pyDbExec: failed to read /tmp/_result.json', e);
+    return 'SQL Error: failed to read result file';
+  }
+  if (!raw || typeof raw !== 'string') {
+    console.error('pyDbExec: non-string result file', raw);
     return 'SQL Error: Python returned no output';
   }
   let result;
