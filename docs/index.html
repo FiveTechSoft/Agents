@@ -943,6 +943,67 @@ async function ccExec(argv, inlineCode){
     catch(e){ return '✓ '+T('compilado','compiled')+' '+(outName||outBase)+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
   }catch(e){ return 'cc error: '+e; } }
 async function ccRun(code){ return await ccExec([], code); }   // inline code path (/cc <code>, cc tool)
+/* =====================================================================
+   Real PHP via @php-wasm (WordPress Playground build). Lazy-loaded
+   (~10MB). The virtual disk is mirrored into PHP's FS at /disk
+   (document root), so PHP can read/write the same files. One PHP
+   instance lives for the whole session -> $_SESSION persists.
+   ===================================================================== */
+let phpInst=null, phpHandler=null, phpLoading=null, phpCookies={};
+async function ensurePhp(){ if(phpHandler) return phpHandler; if(phpLoading) return phpLoading;
+  tool('🐘 '+T('Cargando PHP (~10MB, primera vez)…','Loading PHP (~10MB, first time)…'));
+  phpLoading=(async()=>{
+    const web=await import('https://cdn.jsdelivr.net/npm/@php-wasm/web/+esm');
+    const uni=await import('https://cdn.jsdelivr.net/npm/@php-wasm/universal/+esm');
+    phpInst=new uni.PHP(await web.loadWebRuntime('8.3'));
+    try{ phpInst.mkdir('/disk'); }catch(e){} try{ phpInst.mkdir('/tmp'); }catch(e){}
+    phpHandler=new uni.PHPRequestHandler({ phpFactory: async()=>phpInst, documentRoot:'/disk' });
+    return phpHandler; })();
+  try{ return await phpLoading; }catch(e){ phpLoading=null; throw e; } }
+async function phpMirrorIn(){ const php=phpInst; try{php.mkdir('/disk');}catch(e){} const items=await fsList();
+  for(const f of items){ const full='/disk/'+f.path; const dir=full.slice(0,full.lastIndexOf('/'));
+    try{ php.mkdir(dir); }catch(e){}   // @php-wasm mkdir is recursive (mkdirTree)
+    try{ const c=f.content||'';
+      if(c.startsWith(' B64 ')){ const bin=atob(c.slice(5)); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); php.writeFile(full,u); }
+      else php.writeFile(full,c);
+    }catch(e){} } }
+async function phpMirrorOut(){ const php=phpInst; const walk=(d,base)=>{ let out=[]; let names; try{names=php.listFiles(d);}catch(e){return out;}
+    for(const n of names){ const full=d+'/'+n, rel=base?base+'/'+n:n;
+      let isdir=false; try{ isdir=php.isDir(full); }catch(e){}
+      if(isdir) out=out.concat(walk(full,rel));
+      else { let content; try{ const u=php.readFileAsBuffer(full);
+          if(isUtf8Text(u)){ content=new TextDecoder('utf-8').decode(u); }
+          else { let bin=''; for(let i=0;i<u.length;i++)bin+=String.fromCharCode(u[i]); content=' B64 '+btoa(bin); }
+        }catch(e){ content=''; }
+        out.push({path:rel,content}); } } return out; };
+  for(const f of walk('/disk','')) await fsPut(f.path, f.content); refreshDisk(); }
+// One simulated HTTP request: cookie jar + follow local 3xx redirects (max 5 hops).
+async function phpRequest(url, method, body){
+  const handler=await ensurePhp(); await phpMirrorIn();
+  let resp=null, hops=0, m=(method||'GET').toUpperCase(), b=body;
+  while(hops<5){
+    const headers={}; const jar=Object.entries(phpCookies).map(([k,v])=>k+'='+v).join('; '); if(jar) headers['cookie']=jar;
+    resp=await handler.request({url, method:m, headers, body:b});
+    const sc=resp.headers&&resp.headers['set-cookie'];
+    if(sc) for(const c of [].concat(sc)){ const mm=/^([^=;]+)=([^;]*)/.exec(c); if(mm) phpCookies[mm[1]]=mm[2]; }
+    const loc=resp.headers&&resp.headers['location'];
+    if(resp.httpStatusCode>=300&&resp.httpStatusCode<400&&loc&&!/^https?:/i.test([].concat(loc)[0])){ url=[].concat(loc)[0]; m='GET'; b=undefined; hops++; continue; }
+    break; }
+  await phpMirrorOut(); return resp; }
+// CLI-style execution (shell `php f.php`, /php, agent tool). path is disk-relative.
+async function runPhp(path){
+  try{ await ensurePhp(); }catch(e){ return 'PHP no disponible: '+e; }
+  await phpMirrorIn();
+  try{ const r=await phpInst.runStream({scriptPath:'/disk/'+path}); const out=await r.stdoutText, err=await r.stderrText;
+    await phpMirrorOut(); return ((out||'')+(err?('\n'+err):'')).trim()||'(sin salida)'; }
+  catch(e){ await phpMirrorOut(); return 'php error: '+(e.message||e); } }
+async function runPhpCode(code){
+  try{ await ensurePhp(); }catch(e){ return 'PHP no disponible: '+e; }
+  await phpMirrorIn(); if(!/^\s*<\?/.test(code)) code='<?php '+code;
+  try{ phpInst.writeFile('/tmp/__inline.php', code); const r=await phpInst.runStream({scriptPath:'/tmp/__inline.php'});
+    const out=await r.stdoutText, err=await r.stderrText; await phpMirrorOut();
+    return ((out||'')+(err?('\n'+err):'')).trim()||'(sin salida)'; }
+  catch(e){ await phpMirrorOut(); return 'php error: '+(e.message||e); } }
 // Fallback diagnosis: when the in-browser clang dies with a mute crash (the wasm cc1 hits its
 // stack limit on a big file -> "exit 45" with no error), send the same source to Compiler
 // Explorer (godbolt.org) — a NATIVE clang with no such limit — to get the real verdict.
