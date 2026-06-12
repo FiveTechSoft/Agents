@@ -484,6 +484,7 @@ async function shGlob(item){ if(item.indexOf('*')<0 && item.indexOf('?')<0) retu
   const {dirs,files}=await shList(shResolve('')); const all=dirs.map(d=>d+'/').concat(files);
   const re=mkRe(item);
   const m=all.filter(x=>re.test(x)||re.test(x.replace(/\/$/,''))); return m.length?m.map(x=>x.replace(/\/$/,'')):[item]; }
+function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function shFormatTable(cols, rows){
   if (!rows.length) return '(empty)\n0 rows';
   const widths = cols.map((c, i) => {
@@ -667,8 +668,9 @@ async function openDbViewer(path){
     tb.innerHTML = '<div class="text-[10px] text-gray-600 px-2">(sin tablas)</div>';
   } else {
     tb.innerHTML = result.rows.map(r => {
-      const t = r[0];
-      return '<button onclick="dbvOpenTable(\'' + t.replace(/'/g,"\\'") + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
+      const t = escHtml(r[0]);
+      const escapedName = t.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      return '<button onclick="dbvOpenTable(\'' + escapedName + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
     }).join('');
   }
 }
@@ -687,20 +689,20 @@ async function dbvLoadPage(){
 
   const rowsDiv = document.getElementById('dbv-rows');
   if (typeof data === 'string') {
-    rowsDiv.innerHTML = '<div class="text-xs text-red-400 p-4">' + data + '</div>';
+    rowsDiv.innerHTML = '<div class="text-xs text-red-400 p-4">' + escHtml(data) + '</div>';
     return;
   }
   if (!data.rows.length) {
     rowsDiv.innerHTML = '<div class="text-xs text-gray-500 p-4 text-center">(tabla vacía)</div>';
   } else {
     let html = '<table class="w-full text-xs text-gray-300 border-collapse"><thead><tr class="sticky top-0 bg-gray-800">';
-    data.columns.forEach(c => { html += '<th class="px-2 py-1.5 text-left border-b border-gray-700 text-blue-300 font-medium whitespace-nowrap">' + c + '</th>'; });
+    data.columns.forEach(c => { html += '<th class="px-2 py-1.5 text-left border-b border-gray-700 text-blue-300 font-medium whitespace-nowrap">' + escHtml(c) + '</th>'; });
     html += '</tr></thead><tbody>';
     data.rows.forEach(r => {
       html += '<tr class="hover:bg-gray-800/50">';
       r.forEach(v => {
         const cls = v === null ? 'text-gray-600' : typeof v === 'number' ? 'text-green-400' : 'text-gray-200';
-        const txt = v === null ? 'NULL' : String(v).length > 200 ? String(v).slice(0,200)+'…' : String(v);
+        const txt = v === null ? 'NULL' : escHtml(String(v).length > 200 ? String(v).slice(0,200)+'…' : String(v));
         html += '<td class="px-2 py-0.5 border-b border-gray-800/50 max-w-[300px] truncate ' + cls + '">' + txt + '</td>';
       });
       html += '</tr>';
@@ -727,10 +729,10 @@ async function dbvLoadPage(){
   }
 }
 
-function dbvPage(dir){
+async function dbvPage(dir){
   dbvCurPage += dir;
   if (dbvCurPage < 0) dbvCurPage = 0;
-  dbvLoadPage();
+  await dbvLoadPage();
 }
 
 function toggleDbvSql(){
@@ -767,7 +769,11 @@ async function dbvRunSql(){
   const tb = document.getElementById('dbv-tables');
   if (typeof tableResult !== 'string') {
     tb.innerHTML = tableResult.rows.length
-      ? tableResult.rows.map(r => '<button onclick="dbvOpenTable(\'' + r[0].replace(/'/g,"\\'") + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + r[0] + '</button>').join('')
+      ? tableResult.rows.map(r => {
+          const t = escHtml(r[0]);
+          const escapedName = t.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+          return '<button onclick="dbvOpenTable(\'' + escapedName + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
+        }).join('')
       : '<div class="text-[10px] text-gray-600 px-2">(sin tablas)</div>';
   }
   if (dbvTable) await dbvLoadPage();
