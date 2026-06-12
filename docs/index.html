@@ -546,7 +546,7 @@ let pyodide=null, pyLoading=null;
 function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=()=>rej(new Error('no se pudo cargar '+src)); document.head.appendChild(s); }); }
 async function ensurePy(){ if(pyodide) return pyodide; if(pyLoading) return pyLoading;
   tool('🐍 Cargando Python (Pyodide ~6MB, primera vez)…');
-  pyLoading=(async()=>{ const base='https://cdn.jsdelivr.net/pyodide/v0.26.4/full/'; await loadScript(base+'pyodide.js'); pyodide=await loadPyodide({indexURL:base}); return pyodide; })();
+  pyLoading=(async()=>{ const base='https://cdn.jsdelivr.net/pyodide/v0.26.4/full/'; await loadScript(base+'pyodide.js'); pyodide=await loadPyodide({indexURL:base}); await pyodide.loadPackage('sqlite3'); return pyodide; })();
   try{ return await pyLoading; }catch(e){ pyLoading=null; throw e; } }
 function pyMkdirp(py,dir){ let cur=''; dir.split('/').filter(Boolean).forEach(p=>{ cur+='/'+p; try{py.FS.mkdir(cur);}catch(e){} }); }
 async function pyMirrorIn(py){ try{py.FS.mkdir('/disk');}catch(e){} const items=await fsList();
