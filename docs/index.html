@@ -45,6 +45,7 @@
       <span class="font-semibold flex items-center gap-2 shrink-0">💾 Disco virtual</span>
       <div class="flex items-center gap-2">
         <span id="diskinfo" class="text-[10px] text-gray-300"></span>
+        <button onclick="downloadDiskAsZip()" title="Descargar todo el disco como ZIP" class="text-[10px] text-gray-400 hover:text-gray-200 border border-gray-700 hover:bg-gray-700 rounded px-2 py-0.5">Zip</button>
         <button onclick="eraseDisk()" title="Borrar todo el disco virtual" class="text-[10px] text-red-400 hover:text-red-200 border border-red-900/50 hover:bg-red-900/30 rounded px-2 py-0.5">Erase</button>
       </div>
     </div>
@@ -226,6 +227,21 @@ async function refreshDisk(){
   let bytes=0; items.forEach(f=>bytes+=(f.content||'').length);
   renderNode(buildTree(items), box, 0);
   document.getElementById('diskinfo').textContent=items.length+' files · '+bytes+' B';
+}
+async function downloadDiskAsZip(){
+  const all=await fsList(); if(!all.length){ tool('📦 Disco vacío, nada que comprimir.'); return; }
+  tool('📦 Comprimiendo '+all.length+' ficheros...');
+  const zip=new JSZip();
+  for(const f of all){
+    let c=f.content||'';
+    if(f.path.endsWith('.db') && c.startsWith(' B64 ')) c=await dbExportSql(f.path)||c;
+    zip.file(f.path, c);
+  }
+  const blob=await zip.generateAsync({type:'blob'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download='disco-virtual.zip'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+  tool('📦 '+all.length+' ficheros descargados como disco-virtual.zip');
 }
 async function eraseDisk(){ if(!confirm('¿Borrar TODO el disco virtual? No se puede deshacer.')) return;
   const all=await fsList(); for(const f of all) await fsDel(f.path); refreshDisk(); tool('🗑 Disco virtual borrado ('+all.length+' ficheros).'); }
@@ -2104,5 +2120,6 @@ loadShared().then(shared=>{   // ?session= / #s= -> read-only view; otherwise re
   if(!shared && !restoreSession()) bot(T('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.','Welcome to <b>Agents Web</b>. The left panel is a <b>virtual disk</b> (IndexedDB), persistent in this browser. Syncable with the GitHub repo. Type <code>/help</code>... or <code>ls</code>.'));
 });
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </body>
 </html>
