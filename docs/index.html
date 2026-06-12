@@ -210,7 +210,7 @@ async function shExpandSubst(line){ let g=0; let m;
     if(m=line.match(/`([^`]*)`/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
     break; }
   return line; }
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','sql','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 let MK_VARS={}, MK_SKIPPED=0;
 function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
@@ -379,6 +379,19 @@ async function shOne(cmd, stdin){
       SH_EXIT=chg?1:0; return chg?out.join('\n'):''; }
     case 'basename': { let p=(a0[0]||'').replace(/\/+$/,''); let b=p.split('/').pop()||p; if(a0[1]&&b.endsWith(a0[1]))b=b.slice(0,-a0[1].length); return b; }
     case 'dirname': { let p=(a0[0]||'').replace(/\/+$/,''); const i=p.lastIndexOf('/'); return i<0?'.':(i===0?'/':p.slice(0,i)); }
+    case 'sql': {
+      // sql <archivo.db> <SQL query>
+      const m = rest.match(/^(\S+\.db)\s+(.+)$/i);
+      if (!m) return 'sql archivo.db <SQL>\nEj: sql clientes.db SELECT * FROM customers';
+      const dbPath = shResolve(m[1]);
+      const query = m[2];
+      const result = await pyDbExec(dbPath, query);
+      if (typeof result === 'string') return result;  // error message
+      if (!result.columns || !result.columns.length) {
+        return result.changes > 0 ? result.changes + ' rows affected' : '(ok)';
+      }
+      return shFormatTable(result.columns, result.rows);
+    }
     default: { if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } }
       // run a wasm binary from the disk (compiled with cc -o): ./prog [args].
       // The disk's text files are mounted FLAT at /project (unique basenames only) so the
@@ -440,6 +453,27 @@ async function shGlob(item){ if(item.indexOf('*')<0 && item.indexOf('?')<0) retu
   const {dirs,files}=await shList(shResolve('')); const all=dirs.map(d=>d+'/').concat(files);
   const re=mkRe(item);
   const m=all.filter(x=>re.test(x)||re.test(x.replace(/\/$/,''))); return m.length?m.map(x=>x.replace(/\/$/,'')):[item]; }
+function shFormatTable(cols, rows){
+  if (!rows.length) return '(empty)\n0 rows';
+  const widths = cols.map((c, i) => {
+    let w = String(c).length;
+    rows.forEach(r => { const v = r[i]; const s = v === null ? 'NULL' : String(v); if (s.length > w) w = s.length; });
+    return w;
+  });
+  const sep = '─'.repeat(widths.reduce((a,b)=>a+b+3, 1));
+  let out = '┌' + sep + '┐\n';
+  out += '│ ' + cols.map((c,i) => String(c).padEnd(widths[i])).join(' │ ') + ' │\n';
+  out += '├' + sep + '┤\n';
+  for (const r of rows) {
+    out += '│ ' + r.map((v, i) => {
+      const s = v === null ? 'NULL' : String(v);
+      return s.padEnd(widths[i]);
+    }).join(' │ ') + ' │\n';
+  }
+  out += '└' + sep + '┘\n';
+  out += rows.length + ' rows';
+  return out;
+}
 async function shRun(line){   // for/while/if, ; && ||, $() $(()) vars, exit codes
   line=(line||'').replace(/\s*2>\s*\/dev\/null/g,'').replace(/\s*2>&1/g,'').replace(/\s*1>&2/g,'').trim(); if(!line) return '';
   line=await shExpandSubst(line);   // command substitution + arithmetic
@@ -508,6 +542,64 @@ async function runPython(code){
   try{ py.runPython('import os\ntry:\n os.chdir("/disk")\nexcept Exception:\n pass'); const r=await py.runPythonAsync(code); if(r!==undefined&&r!==null) out+=String(r); }
   catch(e){ out+=String(e.message||e); }
   await pyMirrorOut(py); return out.trim()||'(sin salida)';
+}
+
+/* =====================================================================
+   Virtual Database Engine — Python sqlite3 via Pyodide.
+   Each .db file is stored as SQL text (sqlite3 dump) in IndexedDB.
+   Read: load dump into :memory: DB → execute query → return rows.
+   Write: execute DDL/DML → iter dump → save back to IndexedDB.
+   ===================================================================== */
+async function pyDbExec(path, sql){
+  try { await ensurePy(); } catch(e) { return 'SQL Error: Python (Pyodide) no disponible: '+e; }
+  const f = await fsGet(path);
+  const py = pyodide;
+
+  // Pass data safely via pyodide globals (no string escaping issues)
+  const dump = (f && f.content) ? (f.content.startsWith(' B64 ') ? atob(f.content.slice(5)) : f.content) : '';
+  py.globals.set('_db_dump', dump);
+  py.globals.set('_db_sql', sql);
+  py.globals.set('_db_is_write', /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|PRAGMA)/i.test(sql.trim()));
+
+  const script = `import sqlite3, json
+_conn = sqlite3.connect(':memory:')
+_error = None
+if _db_dump:
+    try:
+        _conn.executescript(_db_dump)
+    except Exception as e:
+        _error = str(e)
+try:
+    _cur = _conn.execute(_db_sql)
+    _rows = _cur.fetchall()
+    _cols = [d[0] for d in _cur.description] if _cur.description else []
+    _changes = _conn.changes()
+    _dump = '\\n'.join([l for l in _conn.iterdump()]) if _db_is_write else None
+except Exception as e:
+    _error = str(e)
+    _rows = []; _cols = []; _changes = 0; _dump = None
+_ok = _error is None
+json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_dump,'error':_error})`;
+
+  let raw;
+  try {
+    raw = await py.runPythonAsync(script);
+  } catch(e) {
+    return 'SQL Error: ' + (e.message || e);
+  }
+  const result = JSON.parse(raw);
+
+  if (!result.ok) {
+    return 'SQL Error: ' + (result.error || 'unknown error');
+  }
+
+  // Save dump back to disk on write
+  if (py.globals.get('_db_is_write') && result.dump !== null && result.dump !== undefined) {
+    await fsPut(path, result.dump);
+    refreshDisk();
+  }
+
+  return { columns: result.cols, rows: result.rows, changes: result.changes };
 }
 
 /* =====================================================================
