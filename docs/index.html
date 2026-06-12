@@ -382,11 +382,12 @@ async function shOne(cmd, stdin){
     case 'sql': {
       // sql <archivo.db> <SQL query>
       const m = rest.match(/^(\S+\.db)\s+(.+)$/i);
-      if (!m) return 'sql archivo.db <SQL>\nEj: sql clientes.db SELECT * FROM customers';
+      if (!m) { SH_EXIT = 1; return 'sql archivo.db <SQL>\nEj: sql clientes.db SELECT * FROM customers'; }
       const dbPath = shResolve(m[1]);
       const query = m[2];
       const result = await pyDbExec(dbPath, query);
-      if (typeof result === 'string') return result;  // error message
+      if (typeof result === 'string') { SH_EXIT = 1; return result; }
+      SH_EXIT = 0;
       if (!result.columns || !result.columns.length) {
         return result.changes > 0 ? result.changes + ' rows affected' : '(ok)';
       }
@@ -460,7 +461,7 @@ function shFormatTable(cols, rows){
     rows.forEach(r => { const v = r[i]; const s = v === null ? 'NULL' : String(v); if (s.length > w) w = s.length; });
     return w;
   });
-  const sep = '─'.repeat(widths.reduce((a,b)=>a+b+3, 1));
+  const sep = '─'.repeat(widths.reduce((a,b)=>a+b+3, -1));
   let out = '┌' + sep + '┐\n';
   out += '│ ' + cols.map((c,i) => String(c).padEnd(widths[i])).join(' │ ') + ' │\n';
   out += '├' + sep + '┤\n';
@@ -559,7 +560,10 @@ async function pyDbExec(path, sql){
   const dump = (f && f.content) ? (f.content.startsWith(' B64 ') ? atob(f.content.slice(5)) : f.content) : '';
   py.globals.set('_db_dump', dump);
   py.globals.set('_db_sql', sql);
-  py.globals.set('_db_is_write', /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|PRAGMA)/i.test(sql.trim()));
+  // Simpler: check if the SQL contains write keywords (case-insensitive, whole-word)
+  const sqlUpper = sql.trim().toUpperCase();
+  const isWrite = /\b(INSERT|UPDATE|DELETE|CREATE\s+(TABLE|INDEX|VIEW|TRIGGER)|DROP|ALTER|PRAGMA|REPLACE)\b/i.test(sqlUpper);
+  py.globals.set('_db_is_write', isWrite);
 
   const script = `import sqlite3, json
 _conn = sqlite3.connect(':memory:')
