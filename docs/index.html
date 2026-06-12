@@ -583,52 +583,54 @@ async function runPython(code){
    Write: execute DDL/DML → iter dump → save back to IndexedDB.
    ===================================================================== */
 async function pyDbExec(path, sql){
+  if (!sql || !sql.trim()) return 'SQL Error: empty query';
   try { await ensurePy(); } catch(e) { return 'SQL Error: Python (Pyodide) no disponible: '+e; }
-  const f = await fsGet(path);
   const py = pyodide;
-
-  // Pass data safely as JSON-encoded Python literals (no shared globals, no race)
+  const f = await fsGet(path);
   const dump = (f && f.content) ? (f.content.startsWith(' B64 ') ? atob(f.content.slice(5)) : f.content) : '';
-  // Simpler: check if the SQL contains write keywords (case-insensitive, whole-word)
-  const sqlUpper = sql.trim().toUpperCase();
+
+  const sqlTrimmed = sql.trim();
+  const sqlUpper = sqlTrimmed.toUpperCase();
   const isWrite = /\b(INSERT|UPDATE|DELETE|CREATE(?:\s+(?:UNIQUE|TEMP(?:ORARY)?|VIRTUAL))?(?:\s+IF\s+NOT\s+EXISTS)?\s+(TABLE|INDEX|VIEW|TRIGGER)|DROP|ALTER|PRAGMA|REPLACE)\b/i.test(sqlUpper);
 
-  const dumpJson = JSON.stringify(dump).replace(/`/g,'\\`').replace(/\$\{/g,'\\${');
-  const sqlJson = JSON.stringify(sql).replace(/`/g,'\\`').replace(/\$\{/g,'\\${');
+  // Embed dump and sql as JSON Python literals (safe: no pyodide globals, no race)
+  const dumpJson = JSON.stringify(dump);
+  const sqlJson = JSON.stringify(sqlTrimmed);
 
   const script = `import sqlite3, json as _json
 _conn = sqlite3.connect(':memory:')
-_error = None
-_dump = _json.loads(${dumpJson})
-_sql = _json.loads(${sqlJson})
-if _dump:
+_err = None
+_old_dump = _json.loads(${dumpJson})
+if _old_dump:
     try:
-        _conn.executescript(_dump)
-    except Exception as e:
-        _error = str(e)
+        _conn.executescript(_old_dump)
+    except Exception as _e:
+        _err = str(_e)
+_q = _json.loads(${sqlJson})
 try:
-    _cur = _conn.execute(_sql)
+    _cur = _conn.execute(_q)
     _rows = _cur.fetchall()
     _cols = [d[0] for d in _cur.description] if _cur.description else []
     _changes = _conn.changes()
-    _is_write = ${isWrite ? 'True' : 'False'}
-    _dump = '\\n'.join([l for l in _conn.iterdump()]) if _is_write else None
-except Exception as e:
-    _error = str(e)
-    _rows = []; _cols = []; _changes = 0; _dump = None
-_ok = _error is None
-_json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_dump,'error':_error})`;
+    _new_dump = '\\n'.join(list(_conn.iterdump())) if ${isWrite ? 'True' : 'False'} else None
+except Exception as _e:
+    if not _err: _err = str(_e)
+    _rows = []; _cols = []; _changes = 0; _new_dump = None
+_ok = _err is None
+_json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_new_dump,'error':_err})`;
 
   let raw;
   try {
     raw = await py.runPythonAsync(script);
   } catch(e) {
+    console.error('pyDbExec: runPythonAsync failed', e);
     return 'SQL Error: ' + (e.message || e);
   }
   let result;
   try {
     result = JSON.parse(raw);
   } catch(e) {
+    console.error('pyDbExec: JSON.parse failed, raw:', raw);
     return 'SQL Error: failed to parse result from Python';
   }
 
@@ -636,8 +638,7 @@ _json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_dump,
     return 'SQL Error: ' + (result.error || 'unknown error');
   }
 
-  // Save dump back to disk on write
-  if (isWrite && result.dump !== null && result.dump !== undefined) {
+  if (isWrite && result.dump) {
     await fsPut(path, result.dump);
     refreshDisk();
   }
@@ -1278,7 +1279,7 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
-  if(name==='sql'){ const result = await pyDbExec(shResolve(args.db), args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
+  if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
     if(a==='clone'){ const okc=await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return okc?'clonado':'ERROR: el clone falló (repo inexistente, demasiado grande, rate limit o proxy caído). NO busques los ficheros: no están.'; }
     if(a==='commit'){ await gitCommit(args.message||'agents-web: update'); return 'commit hecho'; }
