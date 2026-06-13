@@ -25,6 +25,9 @@ Ponderado por criticidad: **~70%** (camino feliz está completo).
 | **Colaboración** | 5% | /share básico | WebRTC/Yjs, pair-programming, disco compartido |
 | **Observabilidad** | 20% | /cost | Panel métricas, log exportable, telemetría |
 
+### Recién completado
+- [x] **User tools dinámicas** — `register_tool` permite al agente crear sus propias herramientas en tiempo de ejecución. Scripts Python/Shell se registran como tools nativas que persisten en localStorage. El agente pasa de 18 herramientas fijas a infinitas. ✅ 2026-06-14
+
 ### Timeline estimado
 
 | Hito | % acumulado | Esfuerzo |

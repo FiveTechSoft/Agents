@@ -28,6 +28,9 @@ Un agente IA en el navegador con disco virtual, runtimes WASM y herramientas rea
 - **Multi-agente**: tool `dispatch_agents` lanza 2–4 sub-agentes concurrentes (Promise.all) + card "Delegando tarea".
 - **web_search / web_fetch** (vía jina, CORS-friendly, sin API key).
 - **Límite de pasos** que **pregunta** antes de continuar (+14) en vez de bloquear.
+- **User tools dinámicas**: tool `register_tool` permite al agente crear nuevas tools desde scripts.
+  El agente escribe un script → lo registra → queda disponible como comando. Sobrevive a recargas.
+  Python recibe `sys.argv`, shell recibe `ARG1..ARGn`. El agente se expande a sí mismo.
 
 ## Comandos slash
 `/help · /clear · /key · /ghtoken · /goal · /plan · /run · /loop · /clone · /git · /skill · /tool · /sh · /py · /cc · /php · /cost · /compact · /init`

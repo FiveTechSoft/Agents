@@ -26,9 +26,11 @@ Editor con preview Markdown/HTML/PHP, visor SQLite, árbol de carpetas.
 **Runtimes reales.** Python (Pyodide), C (clang/Wasmer), PHP (@php-wasm con
 formularios y sesiones), SQLite. Todo en el navegador, sin backend.
 
-**Agente IA.** Conectado a DeepSeek. 15 herramientas: leer, escribir, borrar,
-ejecutar shell, Python, SQL, PHP, C, buscar en internet, git. Razonamiento
-en streaming. Se desdobla en sub-agentes paralelos para tareas grandes.
+**Agente IA.** Conectado a DeepSeek. 18 herramientas: leer, escribir, borrar,
+ejecutar shell, Python, SQL, PHP, C, buscar en internet, git, y `register_tool`
+para crear **nuevas herramientas en tiempo de ejecución**. El agente puede escribir
+un script, registrarlo como tool, y reutilizarlo después. Razonamiento en streaming.
+Se desdobla en sub-agentes paralelos para tareas grandes.
 
 **Terminal SSH.** Embebida en el chat. Túnel WebSocket→TCP vía proxy local
 o Deno Deploy. Conéctate a cualquier servidor sin salir de la aplicación.
