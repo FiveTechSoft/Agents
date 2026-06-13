@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u55';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u56';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -1370,6 +1370,7 @@ const TOOLS=[
  {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
  {type:'function',function:{name:'register_tool',description:'Register a NEW tool from a script on the disk. The tool becomes available immediately for the current and future sessions (persists in localStorage). Use this after writing a script so you can call it by name later. The script receives arguments via command line ($1, $2... in shell or sys.argv in Python).',parameters:{type:'object',properties:{name:{type:'string',description:'Tool name (lowercase, no spaces). Becomes a callable command.'},description:{type:'string',description:'What the tool does, so you remember when to use it later.'},scriptPath:{type:'string',description:'Path to the script file on disk (e.g. contar.py or backup.sh)'}},required:['name','scriptPath']}}},
  {type:'function',function:{name:'user_tools',description:'List all user-registered tools (names and descriptions).',parameters:{type:'object',properties:{}}}},
+ {type:'function',function:{name:'unregister_tool',description:'Remove a user-registered tool from the registry. Does NOT delete the script file — only removes the registration from localStorage. The script stays on disk. Use this instead of deleting the script.',parameters:{type:'object',properties:{name:{type:'string',description:'Tool name to unregister'}},required:['name']}}},
  {type:'function',function:{name:'create_skill',description:'Create or update a skill — a reusable instruction set that gets injected into the system prompt whenever it is active. Skills shape HOW the agent thinks and works (e.g. \"always write tests first\", \"respond in bullet points\"). Write clear, specific instructions in the content parameter. The skill is NOT auto-activated; use toggle_skill to activate it.',parameters:{type:'object',properties:{name:{type:'string',description:'Skill name (lowercase, no spaces). Becomes skills/name.md on disk.'},content:{type:'string',description:'The skill instructions (Markdown). Write what the agent should ALWAYS do when this skill is active. Be specific and actionable.'}},required:['name','content']}}},
  {type:'function',function:{name:'toggle_skill',description:'Activate or deactivate a skill. Active skills are injected into the system prompt. Deactivating does NOT delete the skill file — it stays on disk and can be reactivated later. Use this instead of deleting skill files.',parameters:{type:'object',properties:{name:{type:'string',description:'Skill name to toggle'},active:{type:'boolean',description:'true to activate, false to deactivate'}},required:['name','active']}}}
 ];
@@ -1453,6 +1454,14 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='user_tools'){
     if(!USER_TOOLS.size) return '(sin tools de usuario)';
     return [...USER_TOOLS].map(([n,t])=>n+' — '+t.desc+' ['+t.type+'] ('+t.path+')').join('\n');
+  }
+  if(name==='unregister_tool'){
+    const un=(args.name||'').toLowerCase();
+    if(!un) return 'Error: nombre requerido';
+    if(!USER_TOOLS.has(un)) return 'Error: tool '+un+' no registrada';
+    USER_TOOLS.delete(un);
+    saveUserTools();
+    return 'Tool '+un+' eliminada del registro. El script no se ha borrado del disco.';
   }
   if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
