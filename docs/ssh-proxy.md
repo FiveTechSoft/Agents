@@ -37,21 +37,34 @@ node ssh-proxy.js 8443
 
 ## Cómo usarlo
 
-### Opción A: Cloudflare Worker (sin proxy local — recomendado)
+### Opción A: Deno Deploy (gratis, recomendado)
 
-El mismo Worker que ya sirve de CORS proxy puede tunelizar SSH. Requiere **Workers Paid** ($5/mes, necesario para la API `connect()` TCP).
+[Deno Deploy](https://dash.deno.com) ofrece WebSocket + TCP en su tier gratuito.
+Sin tarjeta de crédito. Despliegue en 30 segundos:
 
-1. Despliega el worker actualizado en Cloudflare
-2. Configura Agents Web:
+1. Ve a https://dash.deno.com → **New Playground** (o crea un proyecto)
+2. Pega el contenido de `ssh-proxy.deno.js`
+3. Haz clic en **Deploy**
+4. Copia la URL (tipo `https://tu-proyecto.deno.dev`)
+5. En Agents Web:
 
 ```bash
-sshproxy wss://tu-worker.tu-usuario.workers.dev/ssh
+sshproxy wss://tu-proyecto.deno.dev/ssh
 /ssh anto@192.168.18.184
 ```
 
-Ventaja: nada que instalar, siempre disponible, TLS incluido.
+Ventajas: siempre disponible, TLS incluido, gratis, sin instalar nada local.
 
-### Opción B: Proxy local (ssh-proxy.js)
+### Opción B: Cloudflare Worker (Workers Paid, $5/mes)
+
+Requiere Workers Paid por la API `connect()`. El worker `cloudflare-worker.js`
+ya incluye el endpoint `/ssh`.
+
+```bash
+sshproxy wss://tu-worker.workers.dev/ssh
+```
+
+### Opción C: Proxy local (ssh-proxy.js)
 
 ```bash
 node ssh-proxy.js 8080
