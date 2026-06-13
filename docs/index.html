@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u48';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u49';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -167,7 +167,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u48';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u49';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -475,6 +475,21 @@ async function shOne(cmd, stdin){
       sshConnect(wsUrl, host+(port!==22?':'+port:''), user, false).catch(e=>tool('SSH: '+e));
       return ''; // terminal card shown in chat
     }
+    case 'toolreg': {
+      if(a0.length<2){ SH_EXIT=1; return 'toolreg: '+T('uso: toolreg <nombre> <script>','usage: toolreg <name> <script>'); }
+      const nm=(a0[0]||'').toLowerCase().replace(/[^a-z0-9_]/g,'_');
+      const pp=shResolve(a0[1]);
+      const ff=await fsGet(pp);
+      if(!ff){ SH_EXIT=1; return 'toolreg: '+T('script no encontrado: ','script not found: ')+a0[1]; }
+      USER_TOOLS.set(nm,{name:nm,desc:a0.slice(2).join(' ')||'(sin descripción)',path:a0[1],type:a0[1].endsWith('.py')?'python':'shell'});
+      saveUserTools();
+      return 'Tool '+nm+' registrada ('+USER_TOOLS.get(nm).type+').';
+    }
+    case 'tools': {
+      if(!USER_TOOLS.size) return T('(sin tools de usuario)','(no user tools)');
+      return [...USER_TOOLS].map(([n,t])=>n+' — '+t.desc+' ['+t.type+']').join('
+');
+    }
     case 'sshproxy': {
       if(a0[0]){ SSH_PROXY=a0[0]; try{ localStorage.setItem('ssh_proxy',SSH_PROXY); }catch(e){} return 'SSH_PROXY='+SSH_PROXY; }
       return 'SSH_PROXY='+SSH_PROXY+'\n/proxy <ws://url> '+T('para cambiar','to change');
@@ -484,6 +499,21 @@ async function shOne(cmd, stdin){
       // The disk's text files are mounted FLAT at /project (unique basenames only) so the
       // program can READ them; files it creates/changes under /project are written back
       // to the disk afterwards (e.g. hbpp generating pptable.c).
+      // check user-registered tools
+      if(USER_TOOLS.has(name)){
+        const ut=USER_TOOLS.get(name);
+        const fp=shResolve(ut.path);
+        const fc=await fsGet(fp);
+        if(!fc){ SH_EXIT=1; return name+': '+T('script de la tool no encontrado','tool script not found'); }
+        if(ut.type==='python'){ return await runPython(fc.content+'
+'+toks.map(x=>'"'+x+'"').join('
+        const pyArgs=toks.length?"import sys;sys.argv=['"+ut.path+"'"+toks.map(x=>",'"+x+"'").join('')+"]\n":'';return await runPython(pyArgs+fc.content);
+        // shell tool: write temp script, run it with args
+        // inject args as ARG1, ARG2... variables + run script
+        const shArgs=toks.map((x,i)=>'ARG'+(i+1)+'='+x.replace(/"/g,'\\"')).join(';');
+        const shCmd=(shArgs?shArgs+';':'')+fc.content;
+        return await shRun(shCmd);
+      }
       const exe=await fsGet(shResolve(name.replace(/^\.\//,'')));
       if(exe && (exe.content||'').startsWith(' B64 ')){
         try{ await ensureWasmer(); const bin=atob(exe.content.slice(5)); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
@@ -600,6 +630,9 @@ function termLine(cmd, out, cwd){
    ===================================================================== */
 let SSH_PROXY = (()=>{ try{ return localStorage.getItem('ssh_proxy')||'ws://localhost:8080'; }catch(e){ return 'ws://localhost:8080'; } })();
 let activeSsh = null; // { ws, term, card, infoEl, target, user } — persistent SSH session
+// User-registered tools. Persist across sessions.
+let USER_TOOLS = (()=>{ try{ return new Map(JSON.parse(localStorage.getItem('user_tools')||'[]')); }catch(e){ return new Map(); } })();
+function saveUserTools(){ try{ localStorage.setItem('user_tools',JSON.stringify([...USER_TOOLS])); }catch(e){} }
 let xtermReady = null;
 async function ensureXterm(){
   if(xtermReady) return xtermReady;
@@ -1500,7 +1533,9 @@ const TOOLS=[
  {type:'function',function:{name:'shell',description:'Run a POSIX-like shell command on the virtual disk: ls cat echo pwd cd mkdir touch rm mv cp grep head tail wc find, with pipes (|) and redirect (> >>).',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']}}},
  {type:'function',function:{name:'sql',description:'Execute a SQL query on a .db virtual database file (SQLite via sqlite3). Use for SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP, ALTER. If the .db file does not exist, it is created automatically on CREATE TABLE. Returns rows as JSON with columns, rows, and changes count.',parameters:{type:'object',properties:{db:{type:'string',description:'Path to the .db file, e.g. "clientes.db" or "data/clientes.db"'},query:{type:'string',description:'SQL query to execute'}},required:['db','query']}}},
  {type:'function',function:{name:'python',description:'Run real Python (Pyodide/CPython in WASM). cwd is /disk so it can read/write the virtual disk files. Returns stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
- {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}}
+ {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
+ {type:'function',function:{name:'register_tool',description:'Register a NEW tool from a script on the disk. The tool becomes available immediately for the current and future sessions (persists in localStorage). Use this after writing a script so you can call it by name later. The script receives arguments via command line ($1, $2... in shell or sys.argv in Python).',parameters:{type:'object',properties:{name:{type:'string',description:'Tool name (lowercase, no spaces). Becomes a callable command.'},description:{type:'string',description:'What the tool does, so you remember when to use it later.'},scriptPath:{type:'string',description:'Path to the script file on disk (e.g. contar.py or backup.sh)'}},required:['name','scriptPath']}}},
+ {type:'function',function:{name:'user_tools',description:'List all user-registered tools (names and descriptions).',parameters:{type:'object',properties:{}}}}
 ];
 // sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
 const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
@@ -1569,6 +1604,21 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
+  if(name==='register_tool'){
+    const n=(args.name||'').toLowerCase().replace(/[^a-z0-9_]/g,'_');
+    if(!n||n.length<2) return 'Error: nombre de tool invalido (min 2 chars, a-z0-9_)';
+    const sp=args.scriptPath||'';
+    const f=await fsGet(shResolve(sp));
+    if(!f) return 'Error: script no encontrado: '+sp;
+    USER_TOOLS.set(n,{name:n,desc:args.description||'',path:sp,type:sp.endsWith('.py')?'python':'shell'});
+    saveUserTools();
+    return 'Tool registrada: '+n+' ('+USER_TOOLS.get(n).type+'). Usala como comando shell o tool del agente.';
+  }
+  if(name==='user_tools'){
+    if(!USER_TOOLS.size) return '(sin tools de usuario)';
+    return [...USER_TOOLS].map(([n,t])=>n+' — '+t.desc+' ['+t.type+'] ('+t.path+')').join('
+');
+  }
   if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
     if(a==='clone'){ const okc=await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return okc?'clonado':'ERROR: el clone falló (repo inexistente, demasiado grande, rate limit o proxy caído). NO busques los ficheros: no están.'; }
