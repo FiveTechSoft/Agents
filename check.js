@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u49';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u50';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -325,8 +325,7 @@ async function shOne(cmd, stdin){
     }
     case 'tools': {
       if(!USER_TOOLS.size) return T('(sin tools de usuario)','(no user tools)');
-      return [...USER_TOOLS].map(([n,t])=>n+' — '+t.desc+' ['+t.type+']').join('
-');
+      return [...USER_TOOLS].map(([n,t])=>n+' — '+t.desc+' ['+t.type+']').join('\n');
     }
     case 'sshproxy': {
       if(a0[0]){ SSH_PROXY=a0[0]; try{ localStorage.setItem('ssh_proxy',SSH_PROXY); }catch(e){} return 'SSH_PROXY='+SSH_PROXY; }
@@ -343,10 +342,7 @@ async function shOne(cmd, stdin){
         const fp=shResolve(ut.path);
         const fc=await fsGet(fp);
         if(!fc){ SH_EXIT=1; return name+': '+T('script de la tool no encontrado','tool script not found'); }
-        if(ut.type==='python'){ return await runPython(fc.content+'
-'+toks.map(x=>'"'+x+'"').join('
         const pyArgs=toks.length?"import sys;sys.argv=['"+ut.path+"'"+toks.map(x=>",'"+x+"'").join('')+"]\n":'';return await runPython(pyArgs+fc.content);
-        // shell tool: write temp script, run it with args
         // inject args as ARG1, ARG2... variables + run script
         const shArgs=toks.map((x,i)=>'ARG'+(i+1)+'='+x.replace(/"/g,'\\"')).join(';');
         const shCmd=(shArgs?shArgs+';':'')+fc.content;
@@ -1454,8 +1450,7 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   }
   if(name==='user_tools'){
     if(!USER_TOOLS.size) return '(sin tools de usuario)';
-    return [...USER_TOOLS].map(([n,t])=>n+' — '+t.desc+' ['+t.type+'] ('+t.path+')').join('
-');
+    return [...USER_TOOLS].map(([n,t])=>n+' — '+t.desc+' ['+t.type+'] ('+t.path+')').join('\n');
   }
   if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
