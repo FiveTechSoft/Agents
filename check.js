@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u43';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u44';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -452,22 +452,31 @@ async function ensureXterm(){
 }
 async function sshTerminal(wsUrl, target, user){
   const {Terminal, FitAddon} = await ensureXterm();
-  const overlay=el('<div class="fixed inset-0 bg-black/95 z-50 flex flex-col"></div>');
+  const card=el('<div class="bg-gray-800 border border-green-900/50 rounded-xl overflow-hidden max-w-full"></div>');
+  // header
   const head=el('<div class="flex items-center justify-between px-3 py-1.5 bg-gray-900 border-b border-gray-700 shrink-0"></div>');
   const info=document.createElement('span'); info.className='text-xs text-gray-300';
   info.innerHTML='<span class="text-green-400">🔒</span> SSH: '+(user?user+'@':'')+target;
   head.appendChild(info);
   const btns=el('<div class="flex gap-2"></div>');
-  const fsBtn=el('<button class="text-gray-400 hover:text-white text-xs px-2 py-1 border border-gray-600 rounded">⛶</button>');
+  const fsBtn=el('<button class="text-gray-400 hover:text-white text-xs px-2 py-1 border border-gray-600 rounded" title="Pantalla completa">⛶</button>');
   const clsBtn=el('<button class="text-gray-400 hover:text-red-400 text-xs px-2 py-1 border border-gray-600 rounded">✕ Cerrar</button>');
   btns.appendChild(fsBtn); btns.appendChild(clsBtn); head.appendChild(btns);
-  const termC=el('<div class="flex-1 p-2 overflow-hidden"></div>');
-  overlay.appendChild(head); overlay.appendChild(termC);
-  document.body.appendChild(overlay);
+  card.appendChild(head);
+  // terminal body — fixed height, resizable via ResizeObserver
+  const body=el('<div class="relative"></div>');
+  const termC=el('<div class="overflow-hidden" style="height:320px"></div>');
+  // resize handle
+  const handle=el('<div class="flex items-center justify-center h-2 bg-gray-700 hover:bg-green-800 cursor-ns-resize group" title="Redimensionar"></div>');
+  const hDot=el('<span class="w-8 h-0.5 bg-gray-500 group-hover:bg-green-400 rounded"></span>'); handle.appendChild(hDot);
+  body.appendChild(termC); body.appendChild(handle); card.appendChild(body);
 
-  const term=new Terminal({cursorBlink:true,fontSize:14,
+  chat().appendChild(card); down();
+
+  const term=new Terminal({cursorBlink:true,fontSize:13,
     fontFamily:'Menlo, Monaco, "Courier New", monospace',
-    theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#667eea'}});
+    theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#667eea'},
+    rows:18, cols:80});
   const fit=new FitAddon(); term.loadAddon(fit);
   term.open(termC); fit.fit();
   term.writeln('\x1b[1;32mConectando a '+target+'...\x1b[0m');
@@ -486,22 +495,40 @@ async function sshTerminal(wsUrl, target, user){
   const ro=new ResizeObserver(()=>{ try{fit.fit();}catch(e){} });
   ro.observe(termC);
 
+  // resize: drag handle vertically
+  let dragging=false, startY=0, startH=0;
+  handle.addEventListener('mousedown',(e)=>{
+    dragging=true; startY=e.clientY; startH=termC.offsetHeight;
+    document.addEventListener('mousemove',onDrag); document.addEventListener('mouseup',onDrop);
+    e.preventDefault();
+  });
+  const onDrag=(e)=>{
+    if(!dragging) return;
+    const nh=Math.max(120, Math.min(800, startH+(e.clientY-startY)));
+    termC.style.height=nh+'px'; fit.fit();
+  };
+  const onDrop=()=>{ dragging=false; document.removeEventListener('mousemove',onDrag); document.removeEventListener('mouseup',onDrop); };
+
+  // fullscreen: expand card to fill viewport
   let fullscreen=false;
   fsBtn.onclick=()=>{
     fullscreen=!fullscreen;
-    if(fullscreen){ overlay.requestFullscreen().catch(()=>{}); fsBtn.textContent='⛶'; }
-    else { document.exitFullscreen().catch(()=>{}); fsBtn.textContent='⛶'; }
+    if(fullscreen){
+      card.style.position='fixed'; card.style.inset='4px'; card.style.zIndex='50';
+      termC.style.height='calc(100vh - 40px)'; fsBtn.textContent='⛶'; fsBtn.title='Salir pantalla completa';
+    } else {
+      card.style.position=''; card.style.inset=''; card.style.zIndex='';
+      termC.style.height='320px'; fsBtn.textContent='⛶'; fsBtn.title='Pantalla completa';
+    }
+    setTimeout(()=>fit.fit(), 100);
   };
 
-  const close=()=>{ ws.close(); overlay.remove(); ro.disconnect(); term.dispose(); };
+  const close=()=>{ ws.close(); ro.disconnect(); term.dispose(); card.remove(); };
   clsBtn.onclick=close;
-  overlay.addEventListener('fullscreenchange',()=>{
-    if(!document.fullscreenElement){ fullscreen=false; fsBtn.textContent='⛶'; }
-  });
-
   term.onKey((e)=>{
     if(e.domEvent.ctrlKey&&e.domEvent.shiftKey&&e.domEvent.key==='W'){ close(); }
   });
+  return card;
 }
 
 /* =====================================================================
