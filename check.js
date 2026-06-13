@@ -115,7 +115,7 @@ async function shExpandSubst(line){ let g=0; let m;
     if(m=line.match(/`([^`]*)`/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
     break; }
   return line; }
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','sql','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','sql','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff','ssh','sshproxy']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 let MK_VARS={}, MK_SKIPPED=0;
 function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
@@ -298,6 +298,25 @@ async function shOne(cmd, stdin){
       }
       return shFormatTable(result.columns, result.rows);
     }
+    case 'ssh': {
+      // ssh [user@]host [-p port]
+      let host='', user='', port=22;
+      for(let i=0;i<a0.length;i++){
+        const a=a0[i];
+        if(a==='-p'){ port=parseInt(a0[++i])||22; continue; }
+        if(a.includes('@')){ const p2=a.split('@'); user=p2[0]; host=p2[1]; continue; }
+        if(!host) host=a;
+      }
+      if(!host){ SH_EXIT=1; return 'ssh: '+T('falta hostname','missing hostname')+'\nUso: ssh [user@]host [-p puerto]'; }
+      const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'');
+      tool('🔒 Conectando SSH a '+(user?user+'@':'')+host+':'+port+' via '+SSH_PROXY);
+      sshTerminal(wsUrl, host+(port!==22?':'+port:''), user).catch(e=>tool('SSH: '+e));
+      return ''; // terminal takes over, no shell output
+    }
+    case 'sshproxy': {
+      if(a0[0]){ SSH_PROXY=a0[0]; try{ localStorage.setItem('ssh_proxy',SSH_PROXY); }catch(e){} return 'SSH_PROXY='+SSH_PROXY; }
+      return 'SSH_PROXY='+SSH_PROXY+'\n/proxy <ws://url> '+T('para cambiar','to change');
+    }
     default: { if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } }
       // run a wasm binary from the disk (compiled with cc -o): ./prog [args].
       // The disk's text files are mounted FLAT at /project (unique basenames only) so the
@@ -410,6 +429,79 @@ function termLine(cmd, out, cwd){
   const cs=document.createElement('span'); cs.className='text-gray-200'; cs.textContent=cmd; pr.appendChild(cs); c.appendChild(pr);
   if(out){ const o=document.createElement('div'); o.className='text-gray-300 whitespace-pre-wrap mt-1'; o.textContent=out; c.appendChild(o); }
   chat().appendChild(c); down();
+}
+
+/* =====================================================================
+   SSH client — WebSocket-to-TCP via a gateway proxy.
+   xterm.js terminal overlay, lazy-loaded on first use.
+   Gateway: Node.js ssh-proxy.js (WebSocket ↔ TCP socket).
+   ===================================================================== */
+let SSH_PROXY = (()=>{ try{ return localStorage.getItem('ssh_proxy')||'ws://localhost:8080'; }catch(e){ return 'ws://localhost:8080'; } })();
+let xtermReady = null;
+async function ensureXterm(){
+  if(xtermReady) return xtermReady;
+  tool('🖥 Cargando terminal SSH (xterm.js ~600KB, primera vez)…');
+  xtermReady = (async()=>{
+    const css=document.createElement('link'); css.rel='stylesheet';
+    css.href='https://cdn.jsdelivr.net/npm/xterm@4.19.0/css/xterm.css'; document.head.appendChild(css);
+    await loadScript('https://cdn.jsdelivr.net/npm/xterm@4.19.0/lib/xterm.js');
+    await loadScript('https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.js');
+    return {Terminal:window.Terminal, FitAddon:window.FitAddon};
+  })();
+  try{ return await xtermReady; }catch(e){ xtermReady=null; throw e; }
+}
+async function sshTerminal(wsUrl, target, user){
+  const {Terminal, FitAddon} = await ensureXterm();
+  const overlay=el('<div class="fixed inset-0 bg-black/95 z-50 flex flex-col"></div>');
+  const head=el('<div class="flex items-center justify-between px-3 py-1.5 bg-gray-900 border-b border-gray-700 shrink-0"></div>');
+  const info=document.createElement('span'); info.className='text-xs text-gray-300';
+  info.innerHTML='<span class="text-green-400">🔒</span> SSH: '+(user?user+'@':'')+target;
+  head.appendChild(info);
+  const btns=el('<div class="flex gap-2"></div>');
+  const fsBtn=el('<button class="text-gray-400 hover:text-white text-xs px-2 py-1 border border-gray-600 rounded">⛶</button>');
+  const clsBtn=el('<button class="text-gray-400 hover:text-red-400 text-xs px-2 py-1 border border-gray-600 rounded">✕ Cerrar</button>');
+  btns.appendChild(fsBtn); btns.appendChild(clsBtn); head.appendChild(btns);
+  const termC=el('<div class="flex-1 p-2 overflow-hidden"></div>');
+  overlay.appendChild(head); overlay.appendChild(termC);
+  document.body.appendChild(overlay);
+
+  const term=new Terminal({cursorBlink:true,fontSize:14,
+    fontFamily:'Menlo, Monaco, "Courier New", monospace',
+    theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#667eea'}});
+  const fit=new FitAddon(); term.loadAddon(fit);
+  term.open(termC); fit.fit();
+  term.writeln('\x1b[1;32mConectando a '+target+'...\x1b[0m');
+
+  const ws=new WebSocket(wsUrl); ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ term.focus(); };
+  ws.onmessage=(ev)=>{
+    if(ev.data instanceof ArrayBuffer){ term.write(new Uint8Array(ev.data)); }
+    else { term.write(ev.data); }
+  };
+  ws.onerror=()=>{ term.writeln('\r\n\x1b[1;31m⚠️ Error de conexión WebSocket\x1b[0m'); };
+  ws.onclose=(ev)=>{ term.writeln('\r\n\x1b[1;33m🔌 Desconectado'+(ev.code>1000?' (código '+ev.code+')':'')+'\x1b[0m'); };
+
+  term.onData((data)=>{ if(ws.readyState===WebSocket.OPEN) ws.send(data); });
+
+  const ro=new ResizeObserver(()=>{ try{fit.fit();}catch(e){} });
+  ro.observe(termC);
+
+  let fullscreen=false;
+  fsBtn.onclick=()=>{
+    fullscreen=!fullscreen;
+    if(fullscreen){ overlay.requestFullscreen().catch(()=>{}); fsBtn.textContent='⛶'; }
+    else { document.exitFullscreen().catch(()=>{}); fsBtn.textContent='⛶'; }
+  };
+
+  const close=()=>{ ws.close(); overlay.remove(); ro.disconnect(); term.dispose(); };
+  clsBtn.onclick=close;
+  overlay.addEventListener('fullscreenchange',()=>{
+    if(!document.fullscreenElement){ fullscreen=false; fsBtn.textContent='⛶'; }
+  });
+
+  term.onKey((e)=>{
+    if(e.domEvent.ctrlKey&&e.domEvent.shiftKey&&e.domEvent.key==='W'){ close(); }
+  });
 }
 
 /* =====================================================================

@@ -212,6 +212,11 @@ or type `/key <your-api-key>` inside the app.
 - Synchronized agent orchestration (dispatch sub-tasks across agents and join).
 - Persistent key storage in the app's private storage + an in-app key screen.
 
+### 🌐 Web Agents
+
+La demo web tiene su propio roadmap con valoración de completitud:
+→ **[docs/roadmap.md](docs/roadmap.md)** (build u42, ~60% global, ~70% ponderado)
+
 ---
 
 ## Credits

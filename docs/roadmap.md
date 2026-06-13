@@ -2,6 +2,39 @@
 
 Próximos pasos para la app web (https://fivetechsoft.github.io/Agents/).
 
+## Valoración de completitud — Junio 2026
+
+**Build:** u42 · **commits:** 40+ · **check.js:** 2031 líneas
+
+```
+████████████░░░░░░░░   ~60%
+```
+
+Ponderado por criticidad: **~70%** (camino feliz está completo).
+
+### Estado por área
+
+| Área | % | Hecho | Pendiente clave |
+|------|---|-------|-----------------|
+| **Núcleo** (disco + shell + runtimes) | 85% | IndexedDB, árbol, POSIX shell 50+ cmds, Python/Pyodide, C/clang/Wasmer, PHP/@php-wasm, SQLite, git/isomorphic-git, DB viewer, download ZIP | OPFS, C++ stdlib, Linux/v86, SSH, más lenguajes WASM |
+| **Agente** (LLM + tools + dispatch) | 75% | Streaming, thinking mode, 15 tools, multi-agente con contract, skills, /plan, /run, /loop, flow diagram | Selector de modelo, vector memory, skills editor, más providers, token budget |
+| **Git y sync** | 45% | Clone/pull/push/log/commit, Contents API | Smart-http push, OAuth, repos grandes |
+| **UI/UX** | 50% | Cards completa (goal/plan/delegation/diff/ask_user/error/flow), demo, 6 idiomas, responsive | PWA, múltiples pestañas, light/dark theme, full i18n, listas virtualizadas |
+| **Seguridad** | 30% | Permisos por tool, confirmación write/delete | Token cifrado, sandbox por dominio, budget limits |
+| **Calidad** | 15% | Ningún test automatizado | Suite shell/diff, CI, lint, grab/replay |
+| **Colaboración** | 5% | /share básico | WebRTC/Yjs, pair-programming, disco compartido |
+| **Observabilidad** | 20% | /cost | Panel métricas, log exportable, telemetría |
+
+### Timeline estimado
+
+| Hito | % acumulado | Esfuerzo |
+|------|-------------|----------|
+| Ahora (MVP+) | 60% | — |
+| + Model selector + token budget + memory | 70% | 2-3 semanas |
+| + PWA + más providers + observabilidad | 80% | +3-4 semanas |
+| + Colaboración + seguridad + testing | 90% | +4-6 semanas |
+| + Conectores + Linux + accesibilidad | 100% | +2-3 meses |
+
 ## Almacenamiento y sincronización
 - [ ] **OPFS** (Origin Private File System) como backend del disco, además de IndexedDB.
 - [ ] **git push real** vía smart-http (CORS proxy propio en Cloudflare Worker) en vez de Contents API.
