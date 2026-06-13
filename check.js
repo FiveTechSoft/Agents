@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u54';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u55';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -1370,7 +1370,8 @@ const TOOLS=[
  {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
  {type:'function',function:{name:'register_tool',description:'Register a NEW tool from a script on the disk. The tool becomes available immediately for the current and future sessions (persists in localStorage). Use this after writing a script so you can call it by name later. The script receives arguments via command line ($1, $2... in shell or sys.argv in Python).',parameters:{type:'object',properties:{name:{type:'string',description:'Tool name (lowercase, no spaces). Becomes a callable command.'},description:{type:'string',description:'What the tool does, so you remember when to use it later.'},scriptPath:{type:'string',description:'Path to the script file on disk (e.g. contar.py or backup.sh)'}},required:['name','scriptPath']}}},
  {type:'function',function:{name:'user_tools',description:'List all user-registered tools (names and descriptions).',parameters:{type:'object',properties:{}}}},
- {type:'function',function:{name:'create_skill',description:'Create or update a skill — a reusable instruction set that gets injected into the system prompt whenever it is active. Skills shape HOW the agent thinks and works (e.g. \"always write tests first\", \"respond in bullet points\"). Write clear, specific instructions in the content parameter.',parameters:{type:'object',properties:{name:{type:'string',description:'Skill name (lowercase, no spaces). Becomes skills/name.md on disk.'},content:{type:'string',description:'The skill instructions (Markdown). Write what the agent should ALWAYS do when this skill is active. Be specific and actionable.'}},required:['name','content']}}}
+ {type:'function',function:{name:'create_skill',description:'Create or update a skill — a reusable instruction set that gets injected into the system prompt whenever it is active. Skills shape HOW the agent thinks and works (e.g. \"always write tests first\", \"respond in bullet points\"). Write clear, specific instructions in the content parameter. The skill is NOT auto-activated; use toggle_skill to activate it.',parameters:{type:'object',properties:{name:{type:'string',description:'Skill name (lowercase, no spaces). Becomes skills/name.md on disk.'},content:{type:'string',description:'The skill instructions (Markdown). Write what the agent should ALWAYS do when this skill is active. Be specific and actionable.'}},required:['name','content']}}},
+ {type:'function',function:{name:'toggle_skill',description:'Activate or deactivate a skill. Active skills are injected into the system prompt. Deactivating does NOT delete the skill file — it stays on disk and can be reactivated later. Use this instead of deleting skill files.',parameters:{type:'object',properties:{name:{type:'string',description:'Skill name to toggle'},active:{type:'boolean',description:'true to activate, false to deactivate'}},required:['name','active']}}}
 ];
 // sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
 const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
@@ -1470,9 +1471,16 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
     const old=await fsGet(sp);
     await fsPut(sp,sc);
     refreshDisk();
-    // auto-activate the new skill
-    if(!skillsOn.has(sn)){ skillsOn.add(sn); try{localStorage.setItem('skillson',JSON.stringify([...skillsOn]));}catch(e){} }
-    return 'Skill '+sn+' '+(old?'actualizado':'creado')+' y activado. Archivo: '+sp;
+    return 'Skill '+sn+' '+(old?'actualizado':'creado')+'. Archivo: '+sp+'. Usa toggle_skill para activarlo.';
+  }
+  if(name==='toggle_skill'){
+    const sn=(args.name||'').toLowerCase();
+    if(!sn) return 'Error: nombre requerido';
+    if(!(await skillPrompt(sn))) return 'Error: skill '+sn+' no existe. Usa create_skill primero.';
+    const activate=args.active!==false;
+    if(activate && !skillsOn.has(sn)){ toggleSkill(sn); return 'Skill '+sn+' activado.'; }
+    if(!activate && skillsOn.has(sn)){ toggleSkill(sn); return 'Skill '+sn+' desactivado (archivo conservado).'; }
+    return 'Skill '+sn+' ya estaba '+(activate?'activado':'desactivado')+'.';
   }
   // user-registered tool
   if(USER_TOOLS.has(name)){
@@ -2231,6 +2239,19 @@ async function skillCmd(arg){
   const sp=arg.indexOf(' '); const sub=sp<0?arg:arg.slice(0,sp); const rest=sp<0?'':arg.slice(sp+1).trim();
   if(sub==='new'){ if(!rest){ tool('Uso: /skill new <nombre>'); return; } const path='skills/'+rest+'.md';
     if(!(await fsGet(path))) await fsPut(path,'# Skill: '+rest+'\n\nInstrucciones para el agente…\n'); refreshDisk(); openEd(path); return; }
+  if(sub==='on'){
+    if(!rest){ tool('Uso: /skill on <nombre> — activa un skill'); return; }
+    if(!(await skillPrompt(rest))){ tool('Skill '+rest+' no existe. Usa /skill new '+rest+' para crearlo.'); return; }
+    if(skillsOn.has(rest)){ tool('Skill '+rest+' ya estaba activo.'); return; }
+    toggleSkill(rest); skillCard(await listSkills());
+    return;
+  }
+  if(sub==='off'){
+    if(!rest){ tool('Uso: /skill off <nombre> — desactiva un skill (no lo borra)'); return; }
+    if(!skillsOn.has(rest)){ tool('Skill '+rest+' ya estaba inactivo.'); return; }
+    toggleSkill(rest); skillCard(await listSkills());
+    return;
+  }
   if(sub==='generate'){
     if(!rest){ tool('Uso: /skill generate <descripción> — el agente creará el skill'); return; }
     await agent('Usa create_skill para crear un skill llamado "'+rest.replace(/[^a-z0-9_ ]/g,'').replace(/\s+/g,'_').toLowerCase()+'" con estas instrucciones: "'+rest+'". El nombre debe ser descriptivo y el contenido debe ser instrucciones claras y accionables para el agente. Actívalo automáticamente.');
