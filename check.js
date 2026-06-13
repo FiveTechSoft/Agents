@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u45';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u46';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -1600,9 +1600,13 @@ function thinkingLive(){ const d=el('<div class="pl-4 border-l-2 border-purple-5
 const LANGS={es:'español',en:'English',fr:'français',de:'Deutsch',pt:'português',it:'italiano'};
 const LORD=['es','en','fr','de','pt','it'];
 function T(){ const a=arguments, i=Math.max(0,LORD.indexOf(curLang)); return a[i]||a[1]||a[0]; }   // pick by lang; fallback en, then es
-const LANGCC={es:'es',en:'gb',fr:'fr',de:'de',pt:'pt',it:'it'};   // flag country code
+const LANGCC={es:'es',en:'gb',fr:'fr',de:'de',pt:'pt',it:'it'};
+// Tiny SVG flags as data URIs — no network requests, COEP/COI immune.
+// svg source: flagcdn.com 24x18, minified, embedded.
+// prettier-ignore
+const FLAGS={es:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 18%22%3E%3Crect fill=%22%23c60b1e%22 width=%2224%22 height=%226%22/%3E%3Crect fill=%22%23ffc400%22 y=%226%22 width=%2224%22 height=%226%22/%3E%3Crect fill=%22%23c60b1e%22 y=%2212%22 width=%2224%22 height=%226%22/%3E%3C/svg%3E',en:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 18%22%3E%3Crect fill=%22%23012169%22 width=%2224%22 height=%2218%22/%3E%3Cpath d=%22M0 0h10L0 6v2l14-8h10L0 12v2l24-8v4L0 20v-2l24-8v4L0 28v-2l24-8v4L0 36v-2l24-8v4z%22 fill=%22%23fff%22/%3E%3Cpath d=%22M0 0h6L0 4v1l9-5h0zm18 0h6L0 16v1l24-17zm0 18h6L0 4v1l24 17z%22 fill=%22%23c8102e%22/%3E%3C/svg%3E',fr:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 18%22%3E%3Crect fill=%22%23002395%22 width=%228%22 height=%2218%22/%3E%3Crect fill=%22%23fff%22 x=%228%22 width=%228%22 height=%2218%22/%3E%3Crect fill=%22%23ed2939%22 x=%2216%22 width=%228%22 height=%2218%22/%3E%3C/svg%3E',de:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 18%22%3E%3Crect fill=%22%23000%22 width=%2224%22 height=%226%22/%3E%3Crect fill=%22%23d00%22 y=%226%22 width=%2224%22 height=%226%22/%3E%3Crect fill=%22%23ffce00%22 y=%2212%22 width=%2224%22 height=%226%22/%3E%3C/svg%3E',pt:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 18%22%3E%3Crect fill=%22%23060%22 width=%2224%22 height=%226%22/%3E%3Crect fill=%22%23f00%22 y=%2212%22 width=%2224%22 height=%226%22/%3E%3Ccircle fill=%22%23ff0%22 r=%223.5%22 cy=%229%22 cx=%2210%22/%3E%3C/svg%3E',it:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 18%22%3E%3Crect fill=%22%23009246%22 width=%228%22 height=%2218%22/%3E%3Crect fill=%22%23fff%22 x=%228%22 width=%228%22 height=%2218%22/%3E%3Crect fill=%22%23ce2b37%22 x=%2216%22 width=%228%22 height=%2218%22/%3E%3C/svg%3E'};
 let curLang=(()=>{ try{ return localStorage.getItem('lang')||'es'; }catch(e){ return 'es'; } })();
-function flagUrl(code){ return 'flags/'+(LANGCC[code]||'es')+'.png'; }   // same-origin (COEP-safe)
+function flagUrl(code){ return FLAGS[code]||FLAGS['es']; }
 function renderLangBtn(){ const f=document.getElementById('langflag'), c=document.getElementById('langcode');
   if(f) f.src=flagUrl(curLang); if(c) c.textContent=curLang.toUpperCase(); }
 function buildLangMenu(){ const m=document.getElementById('langmenu'); if(!m) return; m.innerHTML='';
