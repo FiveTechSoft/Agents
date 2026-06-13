@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u42';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u43';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -160,6 +160,16 @@
 </div>
 
 <script>
+window.coi={
+  // COEP credentialless only where supported (Chromium). Firefox/Safari don't parse it
+  // and end up blocking cross-origin subresources -> use require-corp there (the SW
+  // injects CORP:cross-origin on intercepted responses, and jsdelivr/unpkg send it anyway).
+  coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
+  shouldRegister:()=>true, doReload:()=>window.location.reload() };
+;
+(function(){var BUILD='u40';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+;
+
 /* =====================================================================
    Simulated storage unit: a virtual filesystem on IndexedDB.
    Each file = { path, content, mtime }. This is the "disk" the page
@@ -267,7 +277,7 @@ async function shExpandSubst(line){ let g=0; let m;
     if(m=line.match(/`([^`]*)`/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
     break; }
   return line; }
-const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','php','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','sql','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','sql','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff','ssh','sshproxy']);
 function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
 let MK_VARS={}, MK_SKIPPED=0;
 function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
@@ -376,9 +386,6 @@ async function shOne(cmd, stdin){
     case 'write': { const fn=toks[0]||'untitled'; const c=toks.slice(1).join(' '); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
     case 'cc': case 'clang': case 'gcc': { if(!toks.length){SH_EXIT=1;return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');} return await ccExec(toks); }
     case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
-    case 'php': { if(!a0[0]){SH_EXIT=1;return T('uso: php <fichero.php> | php -r <código>','usage: php <file.php> | php -r <code>');}
-      if(toks[0]==='-r'){ return await runPhpCode(toks.slice(1).join(' ')); }
-      const p=shResolve(a0[0]); const f=await fsGet(p); if(!f){SH_EXIT=1;return 'php: '+T('no existe ','no such file ')+a0[0];} return await runPhp(p); }
     case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?(url.split('/').pop()||'index.html'):null);
       if(!url){SH_EXIT=1;return name+': '+T('falta URL','missing URL');}
       const cands=[]; if(PROXY)cands.push(PROXY+'/?url='+encodeURIComponent(url)); cands.push(url,'https://corsproxy.io/?url='+encodeURIComponent(url),'https://api.allorigins.win/raw?url='+encodeURIComponent(url),'https://r.jina.ai/'+url);
@@ -387,7 +394,7 @@ async function shOne(cmd, stdin){
       if(!got){ SH_EXIT=1; return name+': '+T('descarga falló (CORS/red)','download failed (CORS/network)'); }
       if(got.text!=null){ if(outf){ await fsPut(shResolve(outf),got.text); refreshDisk(); return name==='wget'?('saved '+outf+' ('+got.text.length+' B)'):''; } return got.text.slice(0,6000); }
       let bin=''; for(let i=0;i<got.buf.length;i++)bin+=String.fromCharCode(got.buf[i]); const b64=btoa(bin);
-      if(outf){ await fsPut(shResolve(outf),' B64 '+b64); refreshDisk(); return 'saved '+outf+' ('+got.buf.length+' B '+T('binario, base64','binary, base64')+')'; }
+      if(outf){ await fsPut(shResolve(outf),'B64'+b64); refreshDisk(); return 'saved '+outf+' ('+got.buf.length+' B '+T('binario, base64','binary, base64')+')'; }
       return '['+T('binario','binary')+' '+got.buf.length+' B, '+ct+'] '+T('usa -o fichero','use -o file'); }
     case 'make': { if(a0[0]==='--version'||flags.includes('v')) return 'GNU Make (Agents Web, simulado)'; const mk=await fsGet(shResolve('Makefile'))||await fsGet(shResolve('makefile')); if(!mk){SH_EXIT=1;return 'make: '+T('no hay Makefile','no Makefile');}
       const asg=[], pos=[]; for(const x of a0){ const am2=x.match(/^(\w+)=(.*)$/); if(am2)asg.push(am2); else pos.push(x); }   // make VAR=value target
@@ -452,6 +459,25 @@ async function shOne(cmd, stdin){
         return result.changes > 0 ? result.changes + ' rows affected' : '(ok)';
       }
       return shFormatTable(result.columns, result.rows);
+    }
+    case 'ssh': {
+      // ssh [user@]host [-p port]
+      let host='', user='', port=22;
+      for(let i=0;i<a0.length;i++){
+        const a=a0[i];
+        if(a==='-p'){ port=parseInt(a0[++i])||22; continue; }
+        if(a.includes('@')){ const p2=a.split('@'); user=p2[0]; host=p2[1]; continue; }
+        if(!host) host=a;
+      }
+      if(!host){ SH_EXIT=1; return 'ssh: '+T('falta hostname','missing hostname')+'\nUso: ssh [user@]host [-p puerto]'; }
+      const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'');
+      tool('🔒 Conectando SSH a '+(user?user+'@':'')+host+':'+port+' via '+SSH_PROXY);
+      sshTerminal(wsUrl, host+(port!==22?':'+port:''), user).catch(e=>tool('SSH: '+e));
+      return ''; // terminal takes over, no shell output
+    }
+    case 'sshproxy': {
+      if(a0[0]){ SSH_PROXY=a0[0]; try{ localStorage.setItem('ssh_proxy',SSH_PROXY); }catch(e){} return 'SSH_PROXY='+SSH_PROXY; }
+      return 'SSH_PROXY='+SSH_PROXY+'\n/proxy <ws://url> '+T('para cambiar','to change');
     }
     default: { if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } }
       // run a wasm binary from the disk (compiled with cc -o): ./prog [args].
@@ -565,6 +591,79 @@ function termLine(cmd, out, cwd){
   const cs=document.createElement('span'); cs.className='text-gray-200'; cs.textContent=cmd; pr.appendChild(cs); c.appendChild(pr);
   if(out){ const o=document.createElement('div'); o.className='text-gray-300 whitespace-pre-wrap mt-1'; o.textContent=out; c.appendChild(o); }
   chat().appendChild(c); down();
+}
+
+/* =====================================================================
+   SSH client — WebSocket-to-TCP via a gateway proxy.
+   xterm.js terminal overlay, lazy-loaded on first use.
+   Gateway: Node.js ssh-proxy.js (WebSocket ↔ TCP socket).
+   ===================================================================== */
+let SSH_PROXY = (()=>{ try{ return localStorage.getItem('ssh_proxy')||'ws://localhost:8080'; }catch(e){ return 'ws://localhost:8080'; } })();
+let xtermReady = null;
+async function ensureXterm(){
+  if(xtermReady) return xtermReady;
+  tool('🖥 Cargando terminal SSH (xterm.js ~600KB, primera vez)…');
+  xtermReady = (async()=>{
+    const css=document.createElement('link'); css.rel='stylesheet';
+    css.href='https://cdn.jsdelivr.net/npm/xterm@4.19.0/css/xterm.css'; document.head.appendChild(css);
+    await loadScript('https://cdn.jsdelivr.net/npm/xterm@4.19.0/lib/xterm.js');
+    await loadScript('https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.js');
+    return {Terminal:window.Terminal, FitAddon:window.FitAddon};
+  })();
+  try{ return await xtermReady; }catch(e){ xtermReady=null; throw e; }
+}
+async function sshTerminal(wsUrl, target, user){
+  const {Terminal, FitAddon} = await ensureXterm();
+  const overlay=el('<div class="fixed inset-0 bg-black/95 z-50 flex flex-col"></div>');
+  const head=el('<div class="flex items-center justify-between px-3 py-1.5 bg-gray-900 border-b border-gray-700 shrink-0"></div>');
+  const info=document.createElement('span'); info.className='text-xs text-gray-300';
+  info.innerHTML='<span class="text-green-400">🔒</span> SSH: '+(user?user+'@':'')+target;
+  head.appendChild(info);
+  const btns=el('<div class="flex gap-2"></div>');
+  const fsBtn=el('<button class="text-gray-400 hover:text-white text-xs px-2 py-1 border border-gray-600 rounded">⛶</button>');
+  const clsBtn=el('<button class="text-gray-400 hover:text-red-400 text-xs px-2 py-1 border border-gray-600 rounded">✕ Cerrar</button>');
+  btns.appendChild(fsBtn); btns.appendChild(clsBtn); head.appendChild(btns);
+  const termC=el('<div class="flex-1 p-2 overflow-hidden"></div>');
+  overlay.appendChild(head); overlay.appendChild(termC);
+  document.body.appendChild(overlay);
+
+  const term=new Terminal({cursorBlink:true,fontSize:14,
+    fontFamily:'Menlo, Monaco, "Courier New", monospace',
+    theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#667eea'}});
+  const fit=new FitAddon(); term.loadAddon(fit);
+  term.open(termC); fit.fit();
+  term.writeln('\x1b[1;32mConectando a '+target+'...\x1b[0m');
+
+  const ws=new WebSocket(wsUrl); ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ term.focus(); };
+  ws.onmessage=(ev)=>{
+    if(ev.data instanceof ArrayBuffer){ term.write(new Uint8Array(ev.data)); }
+    else { term.write(ev.data); }
+  };
+  ws.onerror=()=>{ term.writeln('\r\n\x1b[1;31m⚠️ Error de conexión WebSocket\x1b[0m'); };
+  ws.onclose=(ev)=>{ term.writeln('\r\n\x1b[1;33m🔌 Desconectado'+(ev.code>1000?' (código '+ev.code+')':'')+'\x1b[0m'); };
+
+  term.onData((data)=>{ if(ws.readyState===WebSocket.OPEN) ws.send(data); });
+
+  const ro=new ResizeObserver(()=>{ try{fit.fit();}catch(e){} });
+  ro.observe(termC);
+
+  let fullscreen=false;
+  fsBtn.onclick=()=>{
+    fullscreen=!fullscreen;
+    if(fullscreen){ overlay.requestFullscreen().catch(()=>{}); fsBtn.textContent='⛶'; }
+    else { document.exitFullscreen().catch(()=>{}); fsBtn.textContent='⛶'; }
+  };
+
+  const close=()=>{ ws.close(); overlay.remove(); ro.disconnect(); term.dispose(); };
+  clsBtn.onclick=close;
+  overlay.addEventListener('fullscreenchange',()=>{
+    if(!document.fullscreenElement){ fullscreen=false; fsBtn.textContent='⛶'; }
+  });
+
+  term.onKey((e)=>{
+    if(e.domEvent.ctrlKey&&e.domEvent.shiftKey&&e.domEvent.key==='W'){ close(); }
+  });
 }
 
 /* =====================================================================
@@ -954,18 +1053,11 @@ async function ccRun(code){ return await ccExec([], code); }   // inline code pa
    ===================================================================== */
 let phpInst=null, phpHandler=null, phpLoading=null, phpCookies={};
 async function ensurePhp(){ if(phpHandler) return phpHandler; if(phpLoading) return phpLoading;
-  tool('🐘 '+T('Cargando PHP (~20MB, primera vez)…','Loading PHP (~20MB, first time)…'));
+  tool('🐘 '+T('Cargando PHP (~10MB, primera vez)…','Loading PHP (~10MB, first time)…'));
   phpLoading=(async()=>{
-    // jsdelivr /+esm cannot bundle @php-wasm (vite-style .wasm import in the Emscripten loader)
-    // and esm.sh inlines the 20MB wasm as a CSV string. So: universal via esm.sh (clean ESM),
-    // and the raw loader from jsdelivr with its .wasm import patched to an absolute URL.
-    const uni=await import('https://esm.sh/@php-wasm/universal@3.1.38');
-    const mode=(typeof WebAssembly!=='undefined'&&typeof WebAssembly.Suspending==='function')?'jspi':'asyncify';
-    const base='https://cdn.jsdelivr.net/npm/@php-wasm/web-8-3@3.1.38/'+mode+'/';
-    const src=await (await fetch(base+'php_8_3.js')).text();
-    const patched=src.replace(/import dependencyFilename from '[^']*';/, "const dependencyFilename='"+base+"8_3_31/php_8_3.wasm';");
-    const loader=await import(URL.createObjectURL(new Blob([patched],{type:'text/javascript'})));
-    phpInst=new uni.PHP(await uni.loadPHPRuntime(loader,{phpWasmAsyncMode:mode}));
+    const web=await import('https://cdn.jsdelivr.net/npm/@php-wasm/web/+esm');
+    const uni=await import('https://cdn.jsdelivr.net/npm/@php-wasm/universal/+esm');
+    phpInst=new uni.PHP(await web.loadWebRuntime('8.3'));
     try{ phpInst.mkdir('/disk'); }catch(e){} try{ phpInst.mkdir('/tmp'); }catch(e){}
     phpHandler=new uni.PHPRequestHandler({ phpFactory: async()=>phpInst, documentRoot:'/disk' });
     return phpHandler; })();
@@ -991,19 +1083,15 @@ async function phpMirrorOut(){ const php=phpInst; const walk=(d,base)=>{ let out
 async function phpRequest(url, method, body){
   const handler=await ensurePhp(); await phpMirrorIn();
   let resp=null, hops=0, m=(method||'GET').toUpperCase(), b=body;
-  try{ while(hops<5){
+  while(hops<5){
     const headers={}; const jar=Object.entries(phpCookies).map(([k,v])=>k+'='+v).join('; '); if(jar) headers['cookie']=jar;
     resp=await handler.request({url, method:m, headers, body:b});
     const sc=resp.headers&&resp.headers['set-cookie'];
     if(sc) for(const c of [].concat(sc)){ const mm=/^([^=;]+)=([^;]*)/.exec(c); if(mm) phpCookies[mm[1]]=mm[2]; }
-    let loc=resp.headers&&resp.headers['location'];
-    if(resp.httpStatusCode>=300&&resp.httpStatusCode<400&&loc&&!/^https?:/i.test([].concat(loc)[0])){
-      loc=[].concat(loc)[0];
-      if(!loc.startsWith('/')) loc=url.split('/').slice(0,-1).join('/')+'/'+loc;   // resolve relative Location against current dir
-      url=loc; m='GET'; b=undefined; hops++; continue; }
-    break; } }
-  finally{ await phpMirrorOut(); }
-  return resp; }
+    const loc=resp.headers&&resp.headers['location'];
+    if(resp.httpStatusCode>=300&&resp.httpStatusCode<400&&loc&&!/^https?:/i.test([].concat(loc)[0])){ url=[].concat(loc)[0]; m='GET'; b=undefined; hops++; continue; }
+    break; }
+  await phpMirrorOut(); return resp; }
 // CLI-style execution (shell `php f.php`, /php, agent tool). path is disk-relative.
 async function runPhp(path){
   try{ await ensurePhp(); }catch(e){ return 'PHP no disponible: '+e; }
@@ -1018,48 +1106,6 @@ async function runPhpCode(code){
     const out=await r.stdoutText, err=await r.stderrText; await phpMirrorOut();
     return ((out||'')+(err?('\n'+err):'')).trim()||'(sin salida)'; }
   catch(e){ await phpMirrorOut(); return 'php error: '+(e.message||e); } }
-// ---- PHP web preview: serve .php into the editor iframe with working links/forms ----
-// Injected into every rendered page: turns local link clicks and form submits into
-// postMessage({type:'phpnav'}) so the parent re-runs PHP. NOTE the split '</scr'+'ipt>':
-// this string lives inside index.html's own <script>.
-const PHP_BRIDGE='<scr'+'ipt>(function(){function send(u,m,b){parent.postMessage({type:"phpnav",url:u,method:m,body:b},"*");}'+
- 'document.addEventListener("click",function(e){var a=e.target.closest("a");if(!a)return;var h=a.getAttribute("href")||"";'+
- 'if(/^(https?:|data:|mailto:|#|javascript:)/i.test(h))return;e.preventDefault();send(h,"GET");},true);'+
- 'document.addEventListener("submit",function(e){var f=e.target;e.preventDefault();'+
- 'var u=f.getAttribute("action")||"";var m=(f.getAttribute("method")||"GET").toUpperCase();'+
- 'var d={};new FormData(f).forEach(function(v,k){d[k]=String(v);});'+
- 'if(m==="GET"){var q=new URLSearchParams(d).toString();send(u+(q?(u.indexOf("?")>=0?"&":"?")+q:""),"GET");}'+
- 'else send(u,"POST",d);},true);})();</scr'+'ipt>';
-// Rewrite local src/href asset refs to data: URIs (srcdoc has no server to fetch from).
-async function phpInlineAssets(html, curDir){
-  const items=await fsList(); const map={}; for(const f of items) map[f.path]=f;
-  const mime=p=>/\.css$/i.test(p)?'text/css':/\.js$/i.test(p)?'text/javascript':/\.png$/i.test(p)?'image/png':/\.jpe?g$/i.test(p)?'image/jpeg':/\.gif$/i.test(p)?'image/gif':/\.svg$/i.test(p)?'image/svg+xml':/\.ico$/i.test(p)?'image/x-icon':'application/octet-stream';
-  return html.replace(/(src|href)=["']([^"']+)["']/gi,(m0,attr,val)=>{
-    if(/^(https?:|data:|mailto:|#|javascript:|\/\/)/i.test(val)) return m0;
-    if(/\.(php|html?)([?#]|$)/i.test(val)) return m0;   // navigation -> bridge handles it
-    const clean=val.replace(/[?#].*$/,'').replace(/^\.?\//,''); const f=map[curDir?curDir+'/'+clean:clean]||map[clean]; if(!f) return m0;
-    const c=f.content||''; const b64=c.startsWith(' B64 ')?c.slice(5):btoa(unescape(encodeURIComponent(c)));
-    return attr+'="data:'+mime(clean)+';base64,'+b64+'"'; });
-}
-let phpPrevUrl=null;
-async function phpPreview(url, method, body){
-  const fr=document.getElementById('edhtmlframe');
-  let resp; try{ resp=await phpRequest(url, method, body); }
-  catch(e){ fr.srcdoc='<pre style="color:#c00;padding:1em">PHP no disponible: '+escHtml(String(e))+'</pre>'; return; }
-  phpPrevUrl=url;
-  let html=resp.text||'';
-  const ct=[].concat((resp.headers&&resp.headers['content-type'])||[])[0]||'';
-  if(ct&&!/text\/html/i.test(ct)) html='<pre style="padding:1em">'+escHtml(html)+'</pre>';
-  const curDir=url.replace(/^\//,'').split('/').slice(0,-1).join('/');
-  html=await phpInlineAssets(html,curDir);
-  fr.srcdoc=html+PHP_BRIDGE;
-}
-window.addEventListener('message', async ev=>{ const d=ev.data; if(!d||d.type!=='phpnav') return;
-  if(ev.source!==document.getElementById('edhtmlframe').contentWindow) return;
-  let u=String(d.url||''); if(!u){ u=phpPrevUrl||'/'; }
-  if(u.startsWith('?')) u=(phpPrevUrl||'/').replace(/\?.*$/,'')+u;
-  if(!u.startsWith('/')){ const base=(phpPrevUrl||'/').split('/').slice(0,-1).join('/'); u=base+'/'+u; }
-  setWorking(true); try{ await phpPreview(u, d.method||'GET', d.body); } finally{ setWorking(false); } });
 // Fallback diagnosis: when the in-browser clang dies with a mute crash (the wasm cc1 hits its
 // stack limit on a big file -> "exit 45" with no error), send the same source to Compiler
 // Explorer (godbolt.org) — a NATIVE clang with no such limit — to get the real verdict.
@@ -1092,7 +1138,7 @@ async function openEd(path){
   document.getElementById('edtext').classList.remove('hidden'); document.getElementById('edpreview').classList.add('hidden');
   document.getElementById('edhtmlframe').classList.add('hidden');
   document.getElementById('edprev').classList.toggle('hidden', !/\.md$/i.test(path));   // markdown preview only for .md
-  document.getElementById('edhtml').classList.toggle('hidden', !/\.(html?|svg|php)$/i.test(path));   // rendered view for .html/.svg/.php
+  document.getElementById('edhtml').classList.toggle('hidden', !/\.(html?|svg)$/i.test(path));   // rendered view for .html/.svg
   document.getElementById('ed').classList.remove('hidden'); }
 function closeEd(){
   document.getElementById('ed').classList.add('hidden');
@@ -1105,11 +1151,7 @@ function togglePreview(){ const ta=document.getElementById('edtext'), pv=documen
 // render the .html/.svg being edited in a sandboxed iframe (scripts allowed, but no same-origin
 // access -> can't touch the disk, localStorage or the parent page)
 function toggleHtmlView(){ const ta=document.getElementById('edtext'), fr=document.getElementById('edhtmlframe'), b=document.getElementById('edhtml');
-  if(fr.classList.contains('hidden')){
-    if(/\.php$/i.test(edCur||'')){ fsPut(edCur, ta.value).then(()=>{ refreshDisk(); phpCookies={}; return phpPreview('/'+edCur); }).catch(e=>{ fr.srcdoc='<pre style="color:#c00;padding:1em">'+escHtml(String(e))+'</pre>'; });   // save buffer first; fresh cookie jar per preview session
-      fr.srcdoc='<p style="font-family:sans-serif;color:#888;padding:1em">🐘 PHP…</p>'; }
-    else fr.srcdoc=ta.value;
-    fr.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
+  if(fr.classList.contains('hidden')){ fr.srcdoc=ta.value; fr.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
   else { fr.classList.add('hidden'); fr.srcdoc=''; ta.classList.remove('hidden'); b.textContent='🌐 Ver'; } }
 async function saveEd(){ if(edCur!=null){ await fsPut(edCur,document.getElementById('edtext').value); refreshDisk(); closeEd(); } }
 
@@ -1398,15 +1440,14 @@ const TOOLS=[
  {type:'function',function:{name:'write_file',description:'Create/overwrite a file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},
  {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
  {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait. Options can be plain strings OR objects {label, description, recommended} to show a rich clarification card with radios.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'object',properties:{label:{type:'string'},description:{type:'string'},recommended:{type:'boolean'}},required:['label']}}},required:['question']}}},
- {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. Use to split a task into parts that do not depend on each other.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks'}},required:['tasks']}}},
+ {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. ALWAYS provide a contract: exact table/column names, function signatures, file paths, API surface that ALL sub-agents MUST follow. The contract is prepended to every sub-agent prompt so they produce compatible code. Without a contract sub-agents WILL diverge on naming and break integration.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks. Include exact names/signatures/paths the sub-agent must produce or consume.'},contract:{type:'string',description:'Shared technical contract ALL sub-agents must follow: table names, column names, function signatures, file paths, API surface, naming conventions. Prepended to every sub-agent prompt. Without this they will use inconsistent names.'}},required:['tasks','contract']}}},
  {type:'function',function:{name:'git',description:'Real git on the cloned repo (isomorphic-git). action: status|log|commit|push|pull|clone. For commit pass message; for clone pass repo (owner/name).',parameters:{type:'object',properties:{action:{type:'string'},message:{type:'string'},repo:{type:'string'}},required:['action']}}},
  {type:'function',function:{name:'web_search',description:'Search the web and return the top results as text.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
  {type:'function',function:{name:'web_fetch',description:'Fetch a URL and return its readable text content.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
  {type:'function',function:{name:'shell',description:'Run a POSIX-like shell command on the virtual disk: ls cat echo pwd cd mkdir touch rm mv cp grep head tail wc find, with pipes (|) and redirect (> >>).',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']}}},
  {type:'function',function:{name:'sql',description:'Execute a SQL query on a .db virtual database file (SQLite via sqlite3). Use for SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP, ALTER. If the .db file does not exist, it is created automatically on CREATE TABLE. Returns rows as JSON with columns, rows, and changes count.',parameters:{type:'object',properties:{db:{type:'string',description:'Path to the .db file, e.g. "clientes.db" or "data/clientes.db"'},query:{type:'string',description:'SQL query to execute'}},required:['db','query']}}},
  {type:'function',function:{name:'python',description:'Run real Python (Pyodide/CPython in WASM). cwd is /disk so it can read/write the virtual disk files. Returns stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
- {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
- {type:'function',function:{name:'php',description:'Run real PHP 8 (@php-wasm/WASM). Pass path to a .php file on the virtual disk (document root /disk, includes work) OR inline code. Returns stdout (HTML/text).',parameters:{type:'object',properties:{path:{type:'string',description:'.php file to run'},code:{type:'string',description:'inline PHP code (alternative to path)'}}}}}
+ {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}}
 ];
 // sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
 const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
@@ -1469,13 +1510,12 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='delete_file'){ const p=shResolve(args.path); if(!(await askPermit('borrar el archivo',p))) return 'Rechazado por el usuario.';
     await fsDel(p); refreshDisk(); return 'deleted '+p; }
   if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
-  if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[]); }
+  if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[], args.contract||''); }
   if(name==='web_search'){ try{ const r=await fetch('https://s.jina.ai/'+encodeURIComponent(args.query||''),{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,4000); }catch(e){ return 'web_search error: '+e; } }
   if(name==='web_fetch'){ try{ const u=(args.url||''); const r=await fetch('https://r.jina.ai/'+u,{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,6000); }catch(e){ return 'web_fetch error: '+e; } }
   if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
-  if(name==='php'){ if(!args.path&&!args.code) return 'php: pass path or code'; const out=args.path? await runPhp(shResolve(args.path)) : await runPhpCode(args.code||''); termLine('php '+(args.path||'‹code›'), out, SHCWD); return out; }
   if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
     if(a==='clone'){ const okc=await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return okc?'clonado':'ERROR: el clone falló (repo inexistente, demasiado grande, rate limit o proxy caído). NO busques los ficheros: no están.'; }
@@ -1487,11 +1527,13 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   return 'unknown tool'; }
 
 /* ===== multi-agent: concurrent async sub-agents (Promise.all) + delegation card ===== */
-function delegationCard(tasks){
+function delegationCard(tasks,contract){
   const c=el('<div class="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden max-w-[90%]"></div>');
   c.innerHTML='<div class="p-3 border-b border-gray-700/50 flex items-start gap-3"><div class="mt-0.5 text-purple-400 bg-purple-900/30 p-1.5 rounded-md border border-purple-800/50">'+
     SVG('','<path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>')+
-    '</div><div><h4 class="text-sm font-semibold text-gray-200">Delegando tarea…</h4><p class="text-xs text-gray-400 mt-0.5">El agente principal espera resultados.</p></div></div><div class="dbody p-3 bg-gray-900/50 space-y-2"></div>';
+    '</div><div><h4 class="text-sm font-semibold text-gray-200">Delegando tarea…</h4><p class="text-xs text-gray-400 mt-0.5">El agente principal espera resultados.</p></div></div>'+
+    (contract?'<div class="px-3 py-2 bg-purple-900/20 border-b border-purple-800/30"><div class="text-[10px] text-purple-300 font-medium uppercase tracking-wide mb-1">📋 Contrato compartido</div><div class="text-[10px] text-gray-400 max-h-16 overflow-y-auto whitespace-pre-wrap">'+escHtml(contract.slice(0,300))+(contract.length>300?'…':'')+'</div></div>':'')+
+    '<div class="dbody p-3 bg-gray-900/50 space-y-2"></div>';
   const body=c.querySelector('.dbody'); const rows=[];
   tasks.forEach((t,i)=>{ const row=el('<div class="flex items-center justify-between bg-gray-800 border border-purple-900/50 p-2.5 rounded-lg gap-2"></div>');
     row.innerHTML='<div class="flex items-center gap-2.5 min-w-0"><span class="dotw relative flex h-2 w-2 shrink-0"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span></span><span class="text-xs font-medium text-purple-200 shrink-0">@Agent_'+(i+1)+'</span></div><span class="st text-[10px] text-gray-500 bg-black/40 px-1.5 py-0.5 rounded truncate"></span>';
@@ -1500,8 +1542,9 @@ function delegationCard(tasks){
   return { setStatus:(i,s)=>{ if(rows[i]) rows[i].querySelector('.st').textContent=String(s).slice(0,46); },
     done:(i,err)=>{ if(rows[i]){ rows[i].querySelector('.dotw').innerHTML='<span class="relative inline-flex rounded-full h-2 w-2 '+(err?'bg-red-500':'bg-green-500')+'"></span>'; rows[i].querySelector('.st').textContent=err?'✕ error':'✓ hecho'; } } };
 }
-async function subAgent(task,setStatus){
-  const msgs=[{role:'system',content:'Eres un sub-agente. Realiza SOLO esta subtarea usando las tools del disco. Responde en '+(LANGS[curLang]||'español')+', muy breve.'},{role:'user',content:task}];
+async function subAgent(task,setStatus,contract){
+  const contractBlock = contract ? '\n\n📋 CONTRATO TÉCNICO (OBLIGATORIO — todos los sub-agentes deben seguir estos nombres exactos):\n'+contract+'\n' : '';
+  const msgs=[{role:'system',content:'Eres un sub-agente. Realiza SOLO esta subtarea usando las tools del disco. Responde en '+(LANGS[curLang]||'español')+', muy breve.'},{role:'user',content:contractBlock+task}];
   for(let s=0;s<5;s++){
     const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},signal:agentAbort.signal,
@@ -1517,12 +1560,12 @@ async function subAgent(task,setStatus){
   }
   return '(límite)';
 }
-async function dispatchAgents(tasks){
+async function dispatchAgents(tasks,contract){
   if(!Array.isArray(tasks)||tasks.length<1) return 'Error: se necesitan 1-4 subtareas.';
   tasks=tasks.slice(0,4);
-  const card=delegationCard(tasks);
+  const card=delegationCard(tasks,contract);
   const results=await Promise.all(tasks.map((t,i)=>
-    subAgent(t,s=>card.setStatus(i,s)).then(r=>{card.done(i);return r;}).catch(e=>{card.done(i,true);return '(error: '+e+')';})));
+    subAgent(t,s=>card.setStatus(i,s),contract).then(r=>{card.done(i);return r;}).catch(e=>{card.done(i,true);return '(error: '+e+')';})));
   return 'Sub-agentes terminados:\n'+tasks.map((t,i)=>(i+1)+') '+t+' => '+results[i]).join('\n');
 }
 
@@ -1543,8 +1586,8 @@ const FLOW_META={
   cmd:   {i:'⌨️',dot:'bg-teal-500',   ring:'ring-teal-500/30',   v:'Comando shell'},
   slash: {i:'⚡',dot:'bg-fuchsia-500',ring:'ring-fuchsia-500/30',v:'Slash command'},
   error: {i:'❌',dot:'bg-red-500',    ring:'ring-red-500/30',    v:'Error'} };
-const TOOL_ICON={ list_files:'📂',read_file:'📄',write_file:'✏️',delete_file:'🗑',ask_user:'❓',dispatch_agents:'👥',git:'🔀',web_search:'🔎',web_fetch:'🌐',shell:'⌨️',python:'🐍',cc:'⚙️',php:'🐘' };
-const TOOL_VERB={ list_files:'Lista los ficheros',read_file:'Lee un fichero',write_file:'Escribe un fichero',delete_file:'Borra un fichero',ask_user:'Te pregunta',dispatch_agents:'Lanza sub-agentes',git:'Operación git',web_search:'Busca en la web',web_fetch:'Abre una URL',shell:'Ejecuta shell',python:'Ejecuta Python',cc:'Compila C',php:'Ejecuta PHP' };
+const TOOL_ICON={ list_files:'📂',read_file:'📄',write_file:'✏️',delete_file:'🗑',ask_user:'❓',dispatch_agents:'👥',git:'🔀',web_search:'🔎',web_fetch:'🌐',shell:'⌨️',python:'🐍',cc:'⚙️' };
+const TOOL_VERB={ list_files:'Lista los ficheros',read_file:'Lee un fichero',write_file:'Escribe un fichero',delete_file:'Borra un fichero',ask_user:'Te pregunta',dispatch_agents:'Lanza sub-agentes',git:'Operación git',web_search:'Busca en la web',web_fetch:'Abre una URL',shell:'Ejecuta shell',python:'Ejecuta Python',cc:'Compila C' };
 // Flow = Mermaid flow diagram of what the agent did (rendered in a sandboxed iframe)
 function flowCard(){
   const ov=el('<div class="fixed inset-0 bg-black/80 flex items-center justify-center p-3 md:p-6 z-50"></div>');
@@ -1608,7 +1651,7 @@ function toolMeta(n){ return ({
   write_file:{v:'Escribiendo',i:IC_FILE,a:'path'}, delete_file:{v:'Borrando',i:IC_TRASH,a:'path'},
   ask_user:{v:'Preguntando',i:IC_ASK,a:'question'},
   web_search:{v:'Buscando',i:IC_SEARCH,a:'query'}, web_fetch:{v:'Abriendo',i:IC_SEARCH,a:'url'},
-  git:{v:'git',i:IC_FILE,a:'action'}, dispatch_agents:{v:'Delegando',i:IC_FILE,a:''}, shell:{v:'Shell',i:IC_TERM,a:'command'}, python:{v:'Python',i:IC_TERM,a:''}, cc:{v:'clang',i:IC_TERM,a:''}, php:{v:'PHP',i:IC_TERM,a:'path'} }[n]||{v:n,i:IC_FILE,a:''}); }
+  git:{v:'git',i:IC_FILE,a:'action'}, dispatch_agents:{v:'Delegando',i:IC_FILE,a:''}, shell:{v:'Shell',i:IC_TERM,a:'command'}, python:{v:'Python',i:IC_TERM,a:''}, cc:{v:'clang',i:IC_TERM,a:''} }[n]||{v:n,i:IC_FILE,a:''}); }
 let curPanel=null;
 function actionPanel(){ const p=el('<div class="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden max-w-[90%]"></div>');
   const btn=el('<button class="w-full flex items-center p-2.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-700"></button>');
@@ -1753,7 +1796,7 @@ async function agent(text){
   const snap=await snapshotDisk();   // for rollback on abort
   const skillsTxt=await activeSkillsPrompt();
   let rulesTxt=''; try{ const rf=(await fsGet('AGENTS.md'))||(await fsGet('CLAUDE.md')); if(rf&&rf.content&&rf.content.trim()) rulesTxt='\n\nProject rules (AGENTS.md — follow them):\n'+rf.content.slice(0,4000); }catch(e){}
-  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python and PHP see the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM, php runs real PHP 8 (tool php: file path or inline code). If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+rulesTxt+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+rulesTxt+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
   try{
     let step=0, limit=14;
@@ -1907,10 +1950,13 @@ async function slashCmd(v){
       if(workN>0){ btwPending=note; user('💬 '+(arg||T('¿Qué estás haciendo?','What are you doing?'))); tool(T('Enviado al agente; responderá entre acciones, sin interrumpir.','Sent to the agent; it will answer between actions, without interrupting.')); }
       else { await agent(note); } break; }
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
-    case '/php': { setWorking(true); let out; const a=arg.trim();
-      if(/^[\w./-]+\.php$/.test(a)) out=await runPhp(shResolve(a)); else out=await runPhpCode(arg);
-      setWorking(false); termLine('php '+(/\.php$/.test(a)?a:'‹code›'), out, SHCWD); break; }
     case '/cc': { setWorking(true); const isFiles=/\.(c|cpp|cc|cxx)(\s|$)/i.test(arg); const out = isFiles? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(isFiles?arg:'‹code›'), out, SHCWD); break; }
+    case '/ssh': {
+      if(!arg.trim()){ tool('Uso: /ssh [user@]host [-p puerto]'); break; }
+      const cwd=SHCWD; const out=await shRun('ssh '+arg.trim());
+      if(out) termLine('ssh '+arg.trim(), out, cwd);
+      break;
+    }
     default: tool(T('Comando desconocido: ','Unknown command: ')+cmd+'. '+T('Prueba /help.','Try /help.'));
   }
 }
@@ -2082,7 +2128,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/php','PHP 8 (@php-wasm/WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/ssh','SSH a servidor remoto'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
@@ -2144,7 +2190,7 @@ async function runSkill(name,task){
   await agent('Sigue esta SKILL "'+name+'":\n'+p+'\n\nTarea: '+(task||'aplícala al contexto actual del disco.'));
 }
 /* ===== /tool: list the agent tools, or run one directly for testing ===== */
-function toolSafety(name){ return ['write_file','delete_file','git','dispatch_agents','shell','python','cc','php'].includes(name)?'warn':'safe'; }
+function toolSafety(name){ return ['write_file','delete_file','git','dispatch_agents','shell','python','cc'].includes(name)?'warn':'safe'; }
 function toolsCard(){
   const c=el('<div class="bg-[#1a1d24] border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   const head=el('<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700/50"></div>');
@@ -2245,6 +2291,7 @@ refreshDisk();
 loadShared().then(shared=>{   // ?session= / #s= -> read-only view; otherwise restore the local session
   if(!shared && !restoreSession()) bot(T('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.','Welcome to <b>Agents Web</b>. The left panel is a <b>virtual disk</b> (IndexedDB), persistent in this browser. Syncable with the GitHub repo. Type <code>/help</code>... or <code>ls</code>.'));
 });
+
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </body>
