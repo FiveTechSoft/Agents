@@ -35,18 +35,37 @@ SSL_KEY=/etc/letsencrypt/live/proxy.example.com/privkey.pem \
 node ssh-proxy.js 8443
 ```
 
-## Configurar Agents Web
+## Cómo usarlo
 
-En el terminal de Agents Web:
+### Opción A: Cloudflare Worker (sin proxy local — recomendado)
+
+El mismo Worker que ya sirve de CORS proxy puede tunelizar SSH. Requiere **Workers Paid** ($5/mes, necesario para la API `connect()` TCP).
+
+1. Despliega el worker actualizado en Cloudflare
+2. Configura Agents Web:
+
+```bash
+sshproxy wss://tu-worker.tu-usuario.workers.dev/ssh
+/ssh anto@192.168.18.184
+```
+
+Ventaja: nada que instalar, siempre disponible, TLS incluido.
+
+### Opción B: Proxy local (ssh-proxy.js)
+
+```bash
+node ssh-proxy.js 8080
+```
+
+En Agents Web:
 
 ```bash
 sshproxy ws://localhost:8080        # desarrollo local
 sshproxy wss://proxy.example.com    # producción con TLS
-ssh usuario@servidor.com            # conectar
-ssh -p 2222 admin@10.0.0.1          # puerto personalizado
+/ssh anto@192.168.18.184            # conectar
+/ssh -p 2222 admin@10.0.0.1         # puerto personalizado
+/ssh anto@host.com 2222             # puerto sin -p
 ```
-
-O usa `/proxy` para configurarlo permanentemente.
 
 ## Health check
 

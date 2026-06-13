@@ -53,6 +53,50 @@ export default {
 
     const u = new URL(request.url);
 
+    // ---- SSH WebSocket-to-TCP tunnel (requires Workers Paid plan for connect()) ----
+    if (u.pathname === '/ssh' && request.headers.get('Upgrade') === 'websocket') {
+      const host = u.searchParams.get('host') || 'localhost';
+      const port = parseInt(u.searchParams.get('port')) || 22;
+      // Workers connect() supports all ports except 25/587/2525 (SMTP). SSH port 22 is allowed.
+      // Requires Workers Paid plan ($5/mo). Falls back gracefully if connect is not available.
+      if (typeof connect !== 'function') {
+        return new Response('SSH tunnel requires Workers Paid plan (connect API)', { status: 402, headers: CORS });
+      }
+      try {
+        const [client, server] = Object.values(new WebSocketPair());
+        // Accept the client WebSocket
+        server.accept();
+        // Connect to the SSH target
+        const tcp = connect({ hostname: host, port });
+        const writer = tcp.writable.getWriter();
+        const reader = tcp.readable.getReader();
+        let closed = false;
+        const cleanup = () => { if (closed) return; closed = true; try { server.close(); } catch (e) {} try { writer.close(); } catch (e) {} };
+        // WebSocket → TCP
+        server.addEventListener('message', async (ev) => {
+          if (closed) return;
+          try { await writer.write(typeof ev.data === 'string' ? new TextEncoder().encode(ev.data) : new Uint8Array(ev.data)); }
+          catch (e) { cleanup(); }
+        });
+        server.addEventListener('close', cleanup);
+        server.addEventListener('error', cleanup);
+        // TCP → WebSocket
+        (async () => {
+          try {
+            while (!closed) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              if (!closed) server.send(value);
+            }
+          } catch (e) {}
+          cleanup();
+        })();
+        return new Response(null, { status: 101, webSocket: client });
+      } catch (e) {
+        return new Response('SSH tunnel error: ' + e.message, { status: 500, headers: CORS });
+      }
+    }
+
     // ---- short session links (KV) ----
     if (u.pathname === '/session' && request.method === 'POST') {
       if (!env || !env.SESSIONS) return json({ error: 'KV namespace SESSIONS not bound (see file header)' }, 501);
