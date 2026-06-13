@@ -1,0 +1,2033 @@
+window.coi={
+  // COEP credentialless only where supported (Chromium). Firefox/Safari don't parse it
+  // and end up blocking cross-origin subresources -> use require-corp there (the SW
+  // injects CORP:cross-origin on intercepted responses, and jsdelivr/unpkg send it anyway).
+  coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
+  shouldRegister:()=>true, doReload:()=>window.location.reload() };
+;
+(function(){var BUILD='u40';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+;
+
+/* =====================================================================
+   Simulated storage unit: a virtual filesystem on IndexedDB.
+   Each file = { path, content, mtime }. This is the "disk" the page
+   reads/writes; optionally synced to a GitHub repo via the Contents API.
+   ===================================================================== */
+const DB='agents-disk', STORE='files';
+function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB,1);
+  r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:'path'});
+  r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function fsPut(path,content){ const db=await idb(); return new Promise((res,rej)=>{
+  const t=db.transaction(STORE,'readwrite'); t.objectStore(STORE).put({path,content,mtime:Date.now()});
+  t.oncomplete=res; t.onerror=()=>rej(t.error); }); }
+async function fsGet(path){ const db=await idb(); return new Promise((res)=>{
+  const r=db.transaction(STORE).objectStore(STORE).get(path); r.onsuccess=()=>res(r.result||null); r.onerror=()=>res(null); }); }
+async function fsDel(path){ const db=await idb(); return new Promise((res)=>{
+  const t=db.transaction(STORE,'readwrite'); t.objectStore(STORE).delete(path); t.oncomplete=res; }); }
+async function fsList(){ const db=await idb(); return new Promise((res)=>{
+  const r=db.transaction(STORE).objectStore(STORE).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>res([]); }); }
+
+/* ---- disk UI: folder tree (paths split on '/') ---- */
+let dirOpen=(()=>{ try{ return new Set(JSON.parse(localStorage.getItem('diropen')||'[]')); }catch(e){ return new Set(); } })();
+function saveDirOpen(){ try{ localStorage.setItem('diropen',JSON.stringify([...dirOpen])); }catch(e){} }
+function buildTree(items){ const root={dirs:{},files:[],path:''};
+  items.forEach(f=>{ const parts=f.path.split('/'); let node=root;
+    for(let i=0;i<parts.length-1;i++){ const d=parts[i]; if(!node.dirs[d]) node.dirs[d]={dirs:{},files:[],path:(node.path?node.path+'/':'')+d}; node=node.dirs[d]; }
+    node.files.push(f); });
+  return root; }
+function renderNode(node, box, depth){
+  Object.keys(node.dirs).sort().forEach(name=>{ const d=node.dirs[name], open=dirOpen.has(d.path);
+    const row=document.createElement('div'); row.className='flex items-center justify-between gap-1 py-1 rounded hover:bg-gray-800 cursor-pointer group'; row.style.paddingLeft=(depth*12+6)+'px';
+    const left=document.createElement('span'); left.className='truncate text-gray-300 flex items-center gap-1'; left.textContent=(open?'▾ 📂 ':'▸ 📁 ')+name;
+    left.onclick=()=>{ if(open)dirOpen.delete(d.path); else dirOpen.add(d.path); saveDirOpen(); refreshDisk(); };
+    const del=document.createElement('button'); del.className='opacity-0 group-hover:opacity-100 text-red-400 text-xs pr-1'; del.textContent='✕';
+    del.onclick=async(e)=>{ e.stopPropagation(); if(confirm('¿Borrar carpeta '+d.path+' y su contenido?')){ const all=await fsList(); for(const f of all){ if(f.path===d.path||f.path.startsWith(d.path+'/')) await fsDel(f.path); } refreshDisk(); } };
+    row.appendChild(left); row.appendChild(del); box.appendChild(row);
+    if(open) renderNode(d, box, depth+1); });
+  node.files.sort((a,b)=>a.path.localeCompare(b.path)).forEach(f=>{ const name=f.path.split('/').pop();
+    const row=document.createElement('div'); row.className='flex items-center justify-between gap-1 py-1 rounded hover:bg-gray-800 cursor-pointer group'; row.style.paddingLeft=(depth*12+6)+'px';
+    const nm=document.createElement('span'); nm.className='truncate text-gray-300'; nm.textContent='📄 '+name; nm.onclick=()=>openEd(f.path);
+    const actions=document.createElement('span'); actions.className='flex items-center gap-1 shrink-0';
+    if(/\.(html?|svg)$/i.test(name)){ const view=document.createElement('button'); view.className='opacity-0 group-hover:opacity-100 text-blue-400 text-xs'; view.textContent='🌐'; view.title='Ver renderizado'; view.onclick=(e)=>{ e.stopPropagation(); openEd(f.path).then(()=>toggleHtmlView()); }; actions.appendChild(view); }
+    { const dl=document.createElement('button'); dl.className='opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-200 text-xs'; dl.textContent='↓'; dl.title='Descargar'; dl.onclick=(e)=>{ e.stopPropagation(); downloadFile(f.path); }; actions.appendChild(dl); }
+    const del=document.createElement('button'); del.className='opacity-0 group-hover:opacity-100 text-red-400 text-xs pr-1'; del.textContent='✕'; del.onclick=async(e)=>{ e.stopPropagation(); await fsDel(f.path); refreshDisk(); };
+    actions.appendChild(del); row.appendChild(nm); row.appendChild(actions); box.appendChild(row); });
+}
+const MIME={pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',svg:'image/svg+xml',zip:'application/zip',wasm:'application/wasm',json:'application/json',csv:'text/csv',db:'application/sql',html:'text/html',htm:'text/html',txt:'text/plain',md:'text/markdown'};
+async function downloadFile(path){ const f=await fsGet(path); if(!f) return; const ext=(path.split('.').pop()||'').toLowerCase(); const mime=MIME[ext]||'application/octet-stream';
+  let c=f.content||'';
+  // .db binary files: convert to SQL dump for export
+  if(ext==='db' && c.startsWith(' B64 ')){ c=await dbExportSql(path)||c; }
+  let blob;
+  if(c.startsWith(' B64 ')){ const bin=atob(c.slice(5)); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); blob=new Blob([u],{type:mime}); }
+  else blob=new Blob([c],{type:mime});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=path.split('/').pop().replace(/\.db$/,'.sql'); document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),2000); }
+async function dbExportSql(path){ try{ await ensurePy(); const f=await fsGet(path); if(!f) return '';
+  const c=f.content||''; if(!c.startsWith(' B64 ')) return c;  // already text
+  const b64=c.slice(5); const raw=atob(b64); const bin=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++)bin[i]=raw.charCodeAt(i);
+  const py=pyodide; try{py.FS.mkdir('/tmp');}catch(e){}
+  py.FS.writeFile('/tmp/_export.db',bin);
+  const dump=py.runPython("import sqlite3\nconn=sqlite3.connect('/tmp/_export.db')\nd='\\n'.join(list(conn.iterdump()))\nconn.close()\nd");
+  return dump||''; }catch(e){ console.error('dbExportSql:',e); return ''; } }
+async function refreshDisk(){
+  const items=await fsList(); const box=document.getElementById('files'); box.innerHTML='';
+  let bytes=0; items.forEach(f=>bytes+=(f.content||'').length);
+  renderNode(buildTree(items), box, 0);
+  document.getElementById('diskinfo').textContent=items.length+' files · '+bytes+' B';
+}
+async function downloadDiskAsZip(){
+  const all=await fsList(); if(!all.length){ tool('📦 Disco vacío, nada que comprimir.'); return; }
+  tool('📦 Comprimiendo '+all.length+' ficheros...');
+  const zip=new JSZip();
+  for(const f of all){
+    let c=f.content||'';
+    if(f.path.endsWith('.db') && c.startsWith(' B64 ')) c=await dbExportSql(f.path)||c;
+    zip.file(f.path, c);
+  }
+  const blob=await zip.generateAsync({type:'blob'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download='disco-virtual.zip'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+  tool('📦 '+all.length+' ficheros descargados como disco-virtual.zip');
+}
+async function eraseDisk(){ if(!confirm('¿Borrar TODO el disco virtual? No se puede deshacer.')) return;
+  const all=await fsList(); for(const f of all) await fsDel(f.path); refreshDisk(); tool('🗑 Disco virtual borrado ('+all.length+' ficheros).'); }
+async function newFile(){ let p=document.getElementById('newpath').value.trim(); if(!p)return;
+  if(p.endsWith('/')){ p+='.keep'; }   // trailing slash -> create an empty folder marker
+  await fsPut(p,''); document.getElementById('newpath').value='';
+  const dir=p.includes('/')? p.slice(0,p.lastIndexOf('/')) : ''; if(dir) dirOpen.add(dir), saveDirOpen();
+  refreshDisk(); if(!p.endsWith('.keep')) openEd(p); }
+
+/* =====================================================================
+   Simulated POSIX shell over the virtual disk (no real OS). Supports
+   pipes (|) and output redirect (> >>). cwd persists in SHCWD.
+   ===================================================================== */
+let SHCWD='';   // disk-relative cwd ('' = root)
+let SH_EXIT=0;  // last command exit code (for && ||)
+const SH_VARS={};  // shell variables
+let SH_BRK=false, SH_CONT=false;   // break / continue signals for loops
+function shVarSub(s){ return (s||'').replace(/\$\?/g,()=>String(SH_EXIT)).replace(/\$\{(\w+)\}/g,(m,n)=>SH_VARS[n]!==undefined?SH_VARS[n]:'').replace(/\$(\w+)/g,(m,n)=>SH_VARS[n]!==undefined?SH_VARS[n]:''); }
+async function shExpandSubst(line){ let g=0; let m;
+  while(g++<60){
+    if(m=line.match(/\$\(\(([^()]*)\)\)/)){ const expr=shVarSub(m[1]); let v=''; try{ if(/^[\d\s+\-*/%().]+$/.test(expr)) v=String(Function('return('+expr+')')()); }catch(e){} line=line.slice(0,m.index)+v+line.slice(m.index+m[0].length); continue; }
+    if(m=line.match(/\$\(([^()]*)\)/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
+    if(m=line.match(/`([^`]*)`/)){ const out=(await shRun(m[1])).replace(/\n+/g,' ').trim(); line=line.slice(0,m.index)+out+line.slice(m.index+m[0].length); continue; }
+    break; }
+  return line; }
+const SHELL_CMDS=new Set(['ls','cat','echo','pwd','cd','mkdir','touch','rm','mv','cp','grep','head','tail','wc','find','which','clear','help','date','whoami','read','del','write','env','cc','clang','gcc','python','python3','py','curl','wget','make','apt','apt-get','git','uname','hostname','sleep','type','seq','for','while','until','if','test','[','true','false','export','unset','break','continue','sort','sql','uniq','cut','tr','tee','rev','nl','tac','printf','sed','awk','basename','dirname','pip','pip3','diff']);
+function mkExpand(s,vars){ return (s||'').replace(/\$[\(\{](\w+)[\)\}]/g,(m,n)=>vars[n]!==undefined?vars[n]:''); }
+let MK_VARS={}, MK_SKIPPED=0;
+function parseMake(text){ const vars=MK_VARS={}, targets={}; let cur=null;
+  (text||'').replace(/\r/g,'').split('\n').forEach(raw=>{ if(!raw.trim()||raw.trim().startsWith('#'))return;
+    if(/^[ \t]+/.test(raw) && cur){ targets[cur].recipe.push(mkExpand(raw.replace(/^[ \t]+@?/,''),vars)); return; }   // any indent = recipe (tabs optional)
+    const am=raw.match(/^(\w+)\s*:?=\s*(.*)$/) && raw.match(/^(\w+)\s*(?::=|\?=|=)\s*(.*)$/);
+    if(am){ vars[am[1]]=mkExpand(am[2],vars); return; }
+    const tm=raw.match(/^([^:=#]+):(?!=)(.*)$/); if(tm){ cur=mkExpand(tm[1].trim(),vars); targets[cur]={deps:mkExpand(tm[2].trim(),vars).split(/\s+/).filter(d=>d&&d!=='|'),recipe:[]}; } });
+  return targets; }
+function shNorm(p){ const out=[]; (p||'').split('/').forEach(s=>{ if(s===''||s==='.')return; if(s==='..')out.pop(); else out.push(s); }); return out.join('/'); }
+function shResolve(arg){ if(!arg) return shNorm(SHCWD); return shNorm(arg.startsWith('/')?arg:(SHCWD+'/'+arg)); }
+async function shList(dir){ const items=await fsList(); const pre=dir?dir+'/':''; const dirs=new Set(), files=[];
+  items.forEach(f=>{ if(dir && f.path!==dir && !f.path.startsWith(pre))return; const rest=dir?f.path.slice(pre.length):f.path; if(!rest)return; const sl=rest.indexOf('/'); if(sl>=0)dirs.add(rest.slice(0,sl)); else if(rest!=='.keep')files.push(rest); });
+  return {dirs:[...dirs].sort(),files:files.sort()}; }
+async function shOne(cmd, stdin){
+  cmd=cmd.trim();
+  const am=cmd.match(/^(\w+)=(.*)$/); if(am){ SH_VARS[am[1]]=shVarSub(am[2].replace(/^["']|["']$/g,'')); SH_EXIT=0; return ''; }   // VAR=value
+  // tokenize honoring '…' (literal) and "…" (expanded); glob unquoted args
+  const raw=[]; const re=/'([^']*)'|"([^"]*)"|([^\s'"]+)/g; let mm;
+  while(mm=re.exec(cmd)){ raw.push(mm[1]!==undefined?{v:mm[1],q:"'"}:(mm[2]!==undefined?{v:mm[2],q:'"'}:{v:mm[3],q:''})); }
+  if(!raw.length) return '';
+  const all=[]; for(const tk of raw){ const val=tk.q==="'"?tk.v:shVarSub(tk.v); if(tk.q===''&&/[*?]/.test(val)){ all.push(...(await shGlob(val))); } else all.push(val); }
+  const name=all[0], toks=all.slice(1), rest=toks.join(' ');
+  const a0=toks.filter(x=>!x.startsWith('-')); const flags=toks.filter(x=>x.startsWith('-')).join('');
+  SH_EXIT=0;
+  switch(name){
+    case 'pwd': return '/'+shNorm(SHCWD);
+    case 'echo': { let a=toks.slice(), esc=false; while(a[0]==='-n'||a[0]==='-e'){ if(a[0]==='-e')esc=true; a.shift(); } let s=a.join(' '); if(esc)s=s.replace(/\\n/g,'\n').replace(/\\t/g,'\t'); return s; }
+    case 'printf': { let fmt=(toks[0]||'').replace(/\\n/g,'\n').replace(/\\t/g,'\t'); const ar=toks.slice(1); let ai=0; return fmt.replace(/%[sd]/g,()=>ar[ai++]!==undefined?ar[ai-1]:''); }
+    case 'whoami': return 'agent';
+    case 'hostname': return 'agents';
+    case 'true': SH_EXIT=0; return '';
+    case 'false': SH_EXIT=1; return '';
+    case 'break': SH_BRK=true; SH_EXIT=0; return '';
+    case 'continue': SH_CONT=true; SH_EXIT=0; return '';
+    case 'export': { for(const x of a0){ const e=x.match(/^(\w+)=(.*)$/); if(e)SH_VARS[e[1]]=e[2]; } return ''; }
+    case 'unset': { for(const x of a0) delete SH_VARS[x]; return ''; }
+    case 'test': case '[': { const A=a0.slice(); if(name==='[' && A[A.length-1]===']') A.pop(); let ok=false;
+      if(A.length===2){ const op=A[0], x=A[1];
+        if(op==='-z')ok=(x===''); else if(op==='-n')ok=(x!==''); else if(op==='-f'||op==='-e')ok=!!(await fsGet(shResolve(x))); else if(op==='-d'){ const all=await fsList(); ok=all.some(f=>f.path.startsWith(shResolve(x)+'/')); } }
+      else if(A.length===3){ const a=A[0], op=A[1], b=A[2], na=parseFloat(a), nb=parseFloat(b);
+        ok = op==='='||op==='=='?a===b : op==='!='?a!==b : op==='-eq'?na===nb : op==='-ne'?na!==nb : op==='-lt'?na<nb : op==='-le'?na<=nb : op==='-gt'?na>nb : op==='-ge'?na>=nb : false; }
+      else if(A.length===1){ ok=(A[0]!==''); }
+      SH_EXIT=ok?0:1; return ''; }
+    case 'seq': { let a=1,b=1,s=1; if(a0.length===1){b=parseInt(a0[0])||0;} else if(a0.length===2){a=parseInt(a0[0])||1;b=parseInt(a0[1])||0;} else if(a0.length>=3){a=parseInt(a0[0])||1;s=parseInt(a0[1])||1;b=parseInt(a0[2])||0;} const r=[]; if(s>0)for(let i=a;i<=b;i+=s)r.push(i); else if(s<0)for(let i=a;i>=b;i+=s)r.push(i); if(r.length>2000)return 'seq: rango demasiado grande'; return r.join('\n'); }
+    case 'sleep': { const n=Math.min(5,parseInt(a0[0])||1); await new Promise(r=>setTimeout(r,n*1000)); return ''; }
+    case 'uname': { if(flags.includes('a')) return 'Linux agents 6.0-agentsweb #1 WASM '+new Date().getFullYear()+' wasm32 Agents Web'; const r=[]; if(flags.includes('s')||!flags)r.push('Linux'); if(flags.includes('n'))r.push('agents'); if(flags.includes('r'))r.push('6.0-agentsweb'); if(flags.includes('m'))r.push('wasm32'); if(flags.includes('o'))r.push('Agents Web'); return r.join(' '); }
+    case 'date': return new Date().toString();
+    case 'env': return 'CWD=/'+shNorm(SHCWD)+'\nMODEL='+MODEL+'\nLANG='+curLang;
+    case 'clear': clearChat(); return '';
+    case 'which': { const found=a0.filter(x=>SHELL_CMDS.has(x)); SH_EXIT=(a0.length&&found.length===a0.length)?0:1; return found.map(x=>'/usr/bin/'+x).join('\n'); }
+    case 'type': { const r=a0.map(x=> SHELL_CMDS.has(x)? x+' is /usr/bin/'+x : x+': '+T('no encontrado','not found')); SH_EXIT=a0.every(x=>SHELL_CMDS.has(x))?0:1; return r.join('\n'); }
+    case 'help': return 'ls cat echo pwd cd mkdir touch rm[-r] mv cp grep diff head tail wc find which date whoami env cc python git curl wget make apt | > >> && || ;';
+    case 'ls': { const d=shResolve(a0[0]||'');
+      { const bm=d.match(/^(?:usr\/bin|usr\/local\/bin|bin|sbin)(?:\/(.*))?$/); if(bm){ const list=[...SHELL_CMDS].sort(); if(bm[1]){ return list.includes(bm[1])? '/usr/bin/'+bm[1] : (SH_EXIT=1,'ls: '+a0[0]+': '+T('no existe','No such file')); } return list.join('  '); } }
+      const {dirs,files}=await shList(d);
+      if(flags.includes('l')){ const fl=[]; for(const x of files){ const f=await fsGet((d?d+'/':'')+x); fl.push('-rw-r--r-- '+String((f&&f.content||'').length).padStart(6)+' '+x); } return dirs.map(x=>'drwxr-xr-x      - '+x+'/').concat(fl).join('\n'); }
+      const all=dirs.map(x=>x+'/').concat(files); return all.length?all.join('  '):''; }
+    case 'cd': { SHCWD=shResolve(a0[0]||''); return ''; }
+    case 'cat': case 'read': { if(!a0.length) return stdin||''; const out=[]; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f) out.push(f.content); else { SH_EXIT=1; out.push('cat: '+x+': '+T('no existe','No such file')); } } return out.join('\n'); }
+    case 'touch': { for(const x of a0){ const k=shResolve(x); if(!(await fsGet(k))) await fsPut(k,''); } refreshDisk(); return ''; }
+    case 'mkdir': { for(const x of a0) await fsPut(shResolve(x)+'/.keep',''); refreshDisk(); return ''; }
+    case 'rm': case 'del': { for(const x of a0){ const k=shResolve(x); if(flags.includes('r')){ const all=await fsList(); for(const f of all){ if(f.path===k||f.path.startsWith(k+'/')) await fsDel(f.path); } } else await fsDel(k); } refreshDisk(); return ''; }
+    case 'mv': { if(a0.length<2){SH_EXIT=1;return 'mv: '+T('faltan argumentos','missing args');} const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f){SH_EXIT=1;return 'mv: '+T('no existe ','no such file ')+a0[0];} await fsPut(d,f.content); await fsDel(s); refreshDisk(); return ''; }
+    case 'cp': { if(a0.length<2){SH_EXIT=1;return 'cp: '+T('faltan argumentos','missing args');} const s=shResolve(a0[0]),d=shResolve(a0[1]); const f=await fsGet(s); if(!f){SH_EXIT=1;return 'cp: '+T('no existe ','no such file ')+a0[0];} await fsPut(d,f.content); refreshDisk(); return ''; }
+    case 'grep': { let pat=a0[0]||''; const files=a0.slice(1);
+      const ic=flags.includes('i'), inv=flags.includes('v'), num=flags.includes('n'), cnt=flags.includes('c'),
+            only=flags.includes('o'), word=flags.includes('w'), rec=flags.includes('r')||flags.includes('R'),
+            flist=flags.includes('l'), fixedF=flags.includes('F'), noFn=flags.includes('h');
+      if(fixedF) pat=pat.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); else if(!flags.includes('E')) pat=pat.replace(/\\([|+?(){}])/g,'$1');   // BRE -> ERE (\| \+ etc)
+      if(word) pat='\\b(?:'+pat+')\\b';
+      let re=null, reg=null, lit=false; try{ re=new RegExp(pat, ic?'i':''); reg=new RegExp(pat, ic?'gi':'g'); }catch(e){ lit=true; }   // bad regex -> literal substring
+      const test=(l)=> lit ? (ic? l.toLowerCase().indexOf(pat.toLowerCase())>=0 : l.indexOf(pat)>=0) : re.test(l);
+      let sources=[];
+      if(rec){ const base=files[0]?shResolve(files[0]):shNorm(SHCWD); const all=await fsList(); for(const f of all){ if(!base||f.path===base||f.path.startsWith(base+'/')) sources.push({name:'/'+f.path,text:f.content||''}); } }
+      else if(files.length){ for(const x of files){ const f=await fsGet(shResolve(x)); if(!f)SH_EXIT=1; sources.push({name:x,text:f?f.content:''}); } }
+      else sources.push({name:'',text:stdin||''});
+      const showFn=rec||files.length>1; const out=[]; let any=false;
+      for(const src of sources){ const lines=src.text.split('\n'); const matched=[]; let fc=0;
+        lines.forEach((l,i)=>{ let hit=test(l); if(inv)hit=!hit; if(!hit)return; any=true; fc++;
+          const pre=(showFn&&!noFn?src.name+':':'')+(num?(i+1)+':':'');
+          if(only&&!inv){ if(lit){ matched.push(pre+pat); } else (l.match(reg)||[]).forEach(mm=>matched.push(pre+mm)); } else matched.push(pre+l); });
+        if(flist){ if(fc>0)out.push(src.name); } else if(cnt){ out.push((showFn&&!noFn?src.name+':':'')+fc); } else out.push(...matched); }
+      SH_EXIT=any?0:1; return out.join('\n'); }
+    case 'head': case 'tail': { let n=10; const ni=toks.indexOf('-n'); if(ni>=0)n=parseInt(toks[ni+1])||10; let text=stdin; const file=a0.find(x=>x!==String(n)); if(file){ const f=await fsGet(shResolve(file)); text=f?f.content:''; } const L=(text||'').split('\n'); return (name==='head'?L.slice(0,n):L.slice(Math.max(0,L.length-n))).join('\n'); }
+    case 'wc': { let text=stdin; if(a0[0]){ const f=await fsGet(shResolve(a0[0])); text=f?f.content:''; } const x=text||''; return (x?x.split('\n').length:0)+' '+x.split(/\s+/).filter(Boolean).length+' '+x.length; }
+    case 'find': { let path='', nameRe=null, type=null, maxdepth=Infinity;
+      for(let i=0;i<toks.length;i++){ const t=toks[i];
+        if(t==='-name'||t==='-iname'){ const pat=toks[++i]||''; nameRe=new RegExp('^'+pat.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.')+'$', t==='-iname'?'i':''); }
+        else if(t==='-type'){ type=toks[++i]; }
+        else if(t==='-maxdepth'){ maxdepth=parseInt(toks[++i])||Infinity; }
+        else if(t==='.'){ path=''; }
+        else if(!t.startsWith('-') && !path){ path=t; } }
+      const base=shResolve(path); const all=await fsList(); const dirset=new Set(); const files=[];
+      for(const f of all){ if(base && f.path!==base && !f.path.startsWith(base+'/')) continue;
+        const parts=f.path.split('/'); for(let i=1;i<parts.length;i++) dirset.add(parts.slice(0,i).join('/'));
+        if(!f.path.endsWith('/.keep')) files.push(f.path); }
+      const entries=[]; files.forEach(p=>entries.push({path:p,type:'f'})); dirset.forEach(d=>{ if(!base||d===base||d.startsWith(base+'/')) entries.push({path:d,type:'d'}); });
+      const seen=new Set(); const out=[];
+      entries.sort((a,b)=>a.path.localeCompare(b.path)).forEach(e=>{ if(seen.has(e.type+e.path))return; seen.add(e.type+e.path);
+        if(type && e.type!==type) return;
+        const rel = base? (e.path===base?'':e.path.slice(base.length+1)) : e.path; const depth=rel?rel.split('/').length:0; if(depth>maxdepth) return;
+        if(nameRe && !nameRe.test(e.path.split('/').pop())) return;
+        out.push('/'+e.path); });
+      SH_EXIT=out.length?0:1; return out.join('\n'); }
+    case 'write': { const fn=toks[0]||'untitled'; const c=toks.slice(1).join(' '); await fsPut(shResolve(fn),c); refreshDisk(); return ''; }
+    case 'cc': case 'clang': case 'gcc': { if(!toks.length){SH_EXIT=1;return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');} return await ccExec(toks); }
+    case 'python': case 'python3': case 'py': { if(!a0[0]){SH_EXIT=1;return T('uso: python <fichero.py>','usage: python <file.py>');} const f=await fsGet(shResolve(a0[0])); if(!f){SH_EXIT=1;return 'python: '+T('no existe ','no such file ')+a0[0];} return await runPython(f.content); }
+    case 'curl': case 'wget': { let url=a0.find(x=>/^https?:\/\//.test(x))||a0[a0.length-1]; const oi=toks.indexOf('-o'); let outf=oi>=0?toks[oi+1]:(name==='wget'&&url?(url.split('/').pop()||'index.html'):null);
+      if(!url){SH_EXIT=1;return name+': '+T('falta URL','missing URL');}
+      const cands=[]; if(PROXY)cands.push(PROXY+'/?url='+encodeURIComponent(url)); cands.push(url,'https://corsproxy.io/?url='+encodeURIComponent(url),'https://api.allorigins.win/raw?url='+encodeURIComponent(url),'https://r.jina.ai/'+url);
+      let got=null,ct='';
+      for(const c of cands){ try{ const r=await fetch(c); if(!r.ok)continue; ct=r.headers.get('content-type')||''; if(/^text|json|xml|javascript|charset|svg/i.test(ct)||!ct){ got={text:await r.text()}; } else { got={buf:new Uint8Array(await r.arrayBuffer())}; } break; }catch(e){} }
+      if(!got){ SH_EXIT=1; return name+': '+T('descarga falló (CORS/red)','download failed (CORS/network)'); }
+      if(got.text!=null){ if(outf){ await fsPut(shResolve(outf),got.text); refreshDisk(); return name==='wget'?('saved '+outf+' ('+got.text.length+' B)'):''; } return got.text.slice(0,6000); }
+      let bin=''; for(let i=0;i<got.buf.length;i++)bin+=String.fromCharCode(got.buf[i]); const b64=btoa(bin);
+      if(outf){ await fsPut(shResolve(outf),'B64'+b64); refreshDisk(); return 'saved '+outf+' ('+got.buf.length+' B '+T('binario, base64','binary, base64')+')'; }
+      return '['+T('binario','binary')+' '+got.buf.length+' B, '+ct+'] '+T('usa -o fichero','use -o file'); }
+    case 'make': { if(a0[0]==='--version'||flags.includes('v')) return 'GNU Make (Agents Web, simulado)'; const mk=await fsGet(shResolve('Makefile'))||await fsGet(shResolve('makefile')); if(!mk){SH_EXIT=1;return 'make: '+T('no hay Makefile','no Makefile');}
+      const asg=[], pos=[]; for(const x of a0){ const am2=x.match(/^(\w+)=(.*)$/); if(am2)asg.push(am2); else pos.push(x); }   // make VAR=value target
+      MK_SKIPPED=0;
+      const targets=parseMake(mk.content); asg.forEach(am2=>{ MK_VARS[am2[1]]=am2[2]; });
+      const tgt=pos[0]||Object.keys(targets)[0]; if(!targets[tgt]){SH_EXIT=1;return 'make: *** No rule to make target \''+tgt+'\'.';}
+      const out=[], done=new Set(); const runT=async(t)=>{ if(done.has(t))return; done.add(t); const T2=targets[t]; if(!T2)return; for(const d of T2.deps){ if(targets[d]) await runT(d); }
+        for(const raw of T2.recipe){ let line=raw.replace(/\$@/g,t).replace(/\$</g,T2.deps[0]||'').replace(/\$\^/g,T2.deps.join(' ')).replace(/\$\?/g,T2.deps.join(' '));   // automatic vars
+          line=mkExpand(line,MK_VARS).replace(/\$[\(\{]\w+[\)\}]/g,'');   // re-expand $(VAR) + drop leftovers (so the shell never runs them as $(cmd))
+          let g2=0; const had=line; while(/\$[\(\{]/.test(line)&&g2++<10) line=line.replace(/\$[\(\{][^(){}]*[\)\}]/g,'');   // strip unsupported GNU functions ($(if ...), $(wildcard ...)) instead of running the garbage
+          line=line.trim(); if(!line){ if(had.trim()) MK_SKIPPED++; continue; }
+          out.push(line); const o=await shRun(line); if(o)out.push(o); if(SH_EXIT!==0){ out.push('make: *** ['+t+'] Error'); return; } } };
+      await runT(tgt);
+      if(MK_SKIPPED) out.push('make: ('+T('simulado','simulated')+') '+MK_SKIPPED+' '+T('recetas saltadas: usan funciones GNU no soportadas ($(if), $(wildcard), $(shell)...). Este make NO puede construir proyectos complejos; compila directo con cc.','recipes skipped: they use unsupported GNU functions ($(if), $(wildcard), $(shell)...). This make can NOT build complex projects; compile directly with cc.'));
+      return out.join('\n'); }
+    case 'git': { const sub=(a0[0]||'').replace(/^--/,''); if(sub==='version'){ return 'git version 1.27.1 (isomorphic-git, WASM-free, en navegador)'; }
+      if(a0[0]==='clone'){ const tgt=a0.slice(1).find(x=>/[\/.]/.test(x))||GIT_REPO||'FiveTechSoft/Agents';   // skip numeric args like the value of --depth
+        const okc=await gitClone(tgt); if(!okc){ SH_EXIT=1; return 'git clone: '+T('falló (ver card de error)','failed (see error card)'); } return ''; } await gitCmd(rest); return ''; }
+    case 'apt': case 'apt-get': { const sub=(a0[0]||'').toLowerCase(); const avail=Object.keys(APT_ALIAS).filter(k=>k.length>2);
+      if(sub==='install'){ const pkgs=a0.slice(1).filter(x=>x!=='-y'); if(!pkgs.length){SH_EXIT=1;return T('uso: apt install <paquete>. Disponibles: ','usage: apt install <package>. Available: ')+avail.join(' ');}
+        const out=[]; for(const p of pkgs){ out.push('Get: '+p+' (Wasmer registry)…'); try{ const ref=await aptInstall(p); out.push('✓ '+p+' '+T('instalado','installed')+' ['+ref+']'); }catch(e){ SH_EXIT=1; out.push('✗ '+p+': '+T('no está en el registry Wasmer.','not in the Wasmer registry.')+' '+T('Disponibles: ','Available: ')+avail.join(' ')); } } return out.join('\n'); }
+      if(sub==='update'||sub==='upgrade') return T('Listas leídas. Hecho.','Reading package lists... Done.');
+      if(sub==='search'){ const q=(a0[1]||'').toLowerCase(); return avail.filter(k=>k.indexOf(q)>=0).map(k=>k+' -> '+APT_ALIAS[k]).join('\n')||T('(sin coincidencias)','(no matches)'); }
+      if(sub==='list'){ const k=Object.keys(INSTPKGS); if(a0[1]==='--available'||a0[1]==='-a') return T('Disponibles (Wasmer): ','Available (Wasmer): ')+avail.join(' '); return 'built-in: clang python3 make curl wget git'+(k.length?'\n'+T('instalados','installed')+': '+k.join(' '):''); }
+      if(sub==='remove'){ a0.slice(1).forEach(p=>{ delete INSTPKGS[p]; }); return T('eliminado','removed'); }
+      SH_EXIT=1; return T('uso: apt install|search|list [--available]|remove <paquete>','usage: apt install|search|list [--available]|remove <package>'); }
+    case 'pip': case 'pip3': { const sub=(a0[0]||'').toLowerCase(); if(sub!=='install'){SH_EXIT=1;return T('uso: pip install <paquete>','usage: pip install <package>');}
+      const pkgs=a0.slice(1); try{ const py=await ensurePy(); await py.loadPackage('micropip'); const mp=py.pyimport('micropip'); for(const p of pkgs){ await mp.install(p); } return '✓ '+T('instalado','installed')+': '+pkgs.join(' ')+' ('+T('úsalo desde python','use it from python')+')'; }catch(e){ SH_EXIT=1; return 'pip: '+e; } }
+    case 'sort': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||''; let L=txt.split('\n'); if(L.length&&L[L.length-1]==='')L.pop(); L.sort((a,b)=> flags.includes('n')?((parseFloat(a)||0)-(parseFloat(b)||0)):a.localeCompare(b)); if(flags.includes('u'))L=L.filter((v,i)=>L.indexOf(v)===i); if(flags.includes('r'))L.reverse(); return L.join('\n'); }
+    case 'uniq': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } const L=(txt||'').split('\n'); const out=[]; let prev=null,cnt=0; const flush=()=>{ if(prev!==null) out.push(flags.includes('c')?(String(cnt).padStart(7)+' '+prev):prev); }; for(const l of L){ if(l===prev)cnt++; else { flush(); prev=l; cnt=1; } } flush(); return out.join('\n'); }
+    case 'tac': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } const L=(txt||'').split('\n'); if(L.length&&L[L.length-1]==='')L.pop(); return L.reverse().join('\n'); }
+    case 'rev': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } return (txt||'').split('\n').map(l=>l.split('').reverse().join('')).join('\n'); }
+    case 'nl': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } let n=0; return (txt||'').split('\n').map(l=>l.trim()?(String(++n).padStart(6)+'\t'+l):l).join('\n'); }
+    case 'tee': { const txt=stdin||''; for(const x of a0) await fsPut(shResolve(x),txt); if(a0.length)refreshDisk(); return txt; }
+    case 'tr': { let txt=stdin; for(const x of a0){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||''; const exp=s=>s.replace(/(.)-(.)/g,(m,x,y)=>{let r='';for(let c=x.charCodeAt(0);c<=y.charCodeAt(0)&&r.length<200;c++)r+=String.fromCharCode(c);return r;});
+      if(flags.includes('d')){ const set=exp(a0[0]||''); return txt.replace(new RegExp('['+set.replace(/[.*+?^${}()|[\]\\-]/g,'\\$&')+']','g'),''); }
+      const A=exp(a0[0]||''),B=exp(a0[1]||''); let out=''; for(const ch of txt){ const i=A.indexOf(ch); out+= i>=0?(B[i]||B[B.length-1]||''):ch; } return out; }
+    case 'cut': { let txt=stdin; const di=toks.indexOf('-d'), delim=di>=0?toks[di+1]:'\t'; const fi=toks.indexOf('-f'), field=fi>=0?parseInt(toks[fi+1]):1; const ci=toks.indexOf('-c');
+      for(const x of a0){ if(x===delim||/^\d/.test(x))continue; const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||'';
+      return txt.split('\n').map(line=>{ if(ci>=0){ const r=(toks[ci+1]||'1').split('-'); return line.slice((parseInt(r[0])||1)-1, r[1]?parseInt(r[1]):(parseInt(r[0])||1)); } return line.split(delim)[field-1]||''; }).join('\n'); }
+    case 'sed': { const expr=a0[0]||''; const sm=expr.match(/^s([\/|#])(.*)\1(.*)\1(g?)$/); if(!sm){SH_EXIT=1;return 'sed: '+T('solo s/a/b/[g]','only s/a/b/[g]');} let txt=stdin; for(const x of a0.slice(1)){ const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||''; let re; try{re=new RegExp(sm[2], sm[4]?'g':'');}catch(e){SH_EXIT=1;return 'sed: regex';} return txt.split('\n').map(l=>l.replace(re,sm[3])).join('\n'); }
+    case 'awk': { const fi=toks.indexOf('-F'); const FS=fi>=0?toks[fi+1]:null; const prog=a0.find(x=>x.indexOf('{')>=0)||''; let txt=stdin; for(const x of a0){ if(x===prog)continue; const f=await fsGet(shResolve(x)); if(f){txt=f.content;break;} } txt=txt||'';
+      const pm=prog.match(/\{\s*print\s+([^}]*)\}/); return txt.split('\n').filter(l=>l!=='').map(line=>{ const F=[line].concat(FS?line.split(FS):line.trim().split(/\s+/)); if(!pm) return line; return pm[1].split(',').map(t=>{ t=t.trim(); const f2=t.match(/^\$(\d+)$/); if(f2)return F[parseInt(f2[1])]||''; if(t==='NF')return String(F.length-1); return t.replace(/^"|"$/g,''); }).join(' '); }).join('\n'); }
+    case 'diff': { if(a0.length<2){SH_EXIT=1;return 'diff: '+T('faltan argumentos','missing operand');}
+      const A=await fsGet(shResolve(a0[0])), B=await fsGet(shResolve(a0[1]));
+      if(!A||!B){SH_EXIT=1;return 'diff: '+(A?a0[1]:a0[0])+': '+T('no existe','No such file');}
+      const ops=diffLines(A.content,B.content); const out=[]; let chg=false;
+      ops.forEach(o=>{ if(o.t==='-'){ out.push('< '+o.x); chg=true; } else if(o.t==='+'){ out.push('> '+o.x); chg=true; } else if(flags.includes('u')) out.push('  '+o.x); });
+      SH_EXIT=chg?1:0; return chg?out.join('\n'):''; }
+    case 'basename': { let p=(a0[0]||'').replace(/\/+$/,''); let b=p.split('/').pop()||p; if(a0[1]&&b.endsWith(a0[1]))b=b.slice(0,-a0[1].length); return b; }
+    case 'dirname': { let p=(a0[0]||'').replace(/\/+$/,''); const i=p.lastIndexOf('/'); return i<0?'.':(i===0?'/':p.slice(0,i)); }
+    case 'sql': {
+      // sql <archivo.db> <SQL query>
+      const m = rest.match(/^(\S+\.db)\s+(.+)$/i);
+      if (!m) { SH_EXIT = 1; return 'sql archivo.db <SQL>\nEj: sql clientes.db SELECT * FROM customers'; }
+      const dbPath = shResolve(m[1]);
+      const query = m[2];
+      const result = await pyDbExec(dbPath, query);
+      if (typeof result === 'string') { SH_EXIT = 1; return result; }
+      SH_EXIT = 0;
+      if (!result.columns || !result.columns.length) {
+        return result.changes > 0 ? result.changes + ' rows affected' : '(ok)';
+      }
+      return shFormatTable(result.columns, result.rows);
+    }
+    default: { if(INSTPKGS[name]){ try{ return await INSTPKGS[name](toks); }catch(e){ SH_EXIT=1; return name+': '+e; } }
+      // run a wasm binary from the disk (compiled with cc -o): ./prog [args].
+      // The disk's text files are mounted FLAT at /project (unique basenames only) so the
+      // program can READ them; files it creates/changes under /project are written back
+      // to the disk afterwards (e.g. hbpp generating pptable.c).
+      const exe=await fsGet(shResolve(name.replace(/^\.\//,'')));
+      if(exe && (exe.content||'').startsWith(' B64 ')){
+        try{ await ensureWasmer(); const bin=atob(exe.content.slice(5)); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+          const project=new wasmerMod.Directory();
+          const all=await fsList(); const byBase={}, mounted={};
+          for(const f of all){ const c=f.content||''; if(c.startsWith(' B64 '))continue; const b=f.path.split('/').pop(); (byBase[b]=byBase[b]||[]).push(f.path); }
+          for(const b in byBase){ if(byBase[b].length===1){ const src=all.find(f=>f.path===byBase[b][0]); try{ await project.writeFile(b, src.content||''); mounted[b]=src.content||''; }catch(e){} } }
+          const pkg=await wasmerMod.Wasmer.fromFile(bytes);
+          const ins=await pkg.entrypoint.run({args:toks, mount:{'/project':project}, cwd:'/project'}); const o=await ins.wait();
+          try{ let ents=await project.readDir('/'); let nNew=0;
+            for(const ent of (ents||[])){ const nm=(ent&&ent.name)||ent; if(typeof nm!=='string')continue;
+              let c2; try{ c2=new TextDecoder().decode(await project.readFile(nm)); }catch(e){ continue; }
+              if(mounted[nm]===c2) continue;
+              const target=(byBase[nm]&&byBase[nm].length===1)?byBase[nm][0]:nm;
+              await fsPut(target,c2); nNew++; }
+            if(nNew) refreshDisk(); }catch(e){}
+          SH_EXIT=o.code||0; return ((o.stdout||'')+(o.stderr?('\n'+o.stderr):'')).replace(/\n$/,'');
+        }catch(e){ SH_EXIT=126; return name+': '+T('no se pudo ejecutar el wasm: ','could not run the wasm: ')+e; } }
+      SH_EXIT=1; return name+': '+T('orden no encontrada','command not found'); }
+  }
+}
+function shSplitTop(line, seps){   // split on operators that are OUTSIDE quotes
+  const out=[]; let buf='', q=null, i=0;
+  while(i<line.length){ const c=line[i];
+    if(q){ buf+=c; if(c===q)q=null; i++; continue; }
+    if(c==='"'||c==="'"){ q=c; buf+=c; i++; continue; }
+    let m=null; for(const s of seps){ if(line.startsWith(s,i)){ m=s; break; } }
+    if(m){ out.push(buf, m); buf=''; i+=m.length; continue; }
+    buf+=c; i++; }
+  out.push(buf); return out; }
+async function shPipe(line){   // one pipeline (| ) with optional redirect (> >>)
+  line=(line||'').trim(); if(!line) return '';
+  let redir=null, app=false;
+  { // find the redirect OUTSIDE quotes (so `echo "a > b"` is not a redirect)
+    let q=null, ri=-1;
+    for(let i=0;i<line.length;i++){ const c=line[i];
+      if(q){ if(c===q)q=null; continue; }
+      if(c==='"'||c==="'"){ q=c; continue; }
+      if(c==='>'){ if(i>0 && /\d/.test(line[i-1]) && (i<2||/\s/.test(line[i-2]))) continue;   // fd redirect (2>) — not ours
+        ri=i; break; } }
+    if(ri>=0){ app=line[ri+1]==='>'; redir=line.slice(ri+(app?2:1)).trim().split(/\s+/)[0]||null; line=line.slice(0,ri); } }
+  let stdin=null, out='';
+  const stages=shSplitTop(line,['|']).filter((_,i)=>i%2===0).map(s=>s.trim()).filter(Boolean);
+  for(const st of stages){ out=await shOne(st, stdin); stdin=out; }
+  if(redir){ const k=shResolve(shVarSub(redir)); const prev=app?((await fsGet(k))||{content:''}).content:''; await fsPut(k, app?(prev+(prev&&!prev.endsWith('\n')?'\n':'')+out):out); refreshDisk(); return ''; }
+  return out;
+}
+async function shGlob(item){ if(item.indexOf('*')<0 && item.indexOf('?')<0) return [item];
+  const mkRe=s=>new RegExp('^'+s.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'[^/]*').replace(/\?/g,'[^/]')+'$');
+  if(item.indexOf('/')>=0){   // path glob (src/compiler/*.c): match against full disk paths
+    const re=mkRe(shResolve(item)); const all=await fsList();
+    const m=all.map(f=>f.path).filter(p=>re.test(p));
+    return m.length? m.map(p=>'/'+p) : [item]; }
+  const {dirs,files}=await shList(shResolve('')); const all=dirs.map(d=>d+'/').concat(files);
+  const re=mkRe(item);
+  const m=all.filter(x=>re.test(x)||re.test(x.replace(/\/$/,''))); return m.length?m.map(x=>x.replace(/\/$/,'')):[item]; }
+function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function shFormatTable(cols, rows){
+  if (!rows.length) return '(empty)\n0 rows';
+  const widths = cols.map((c, i) => {
+    let w = String(c).length;
+    rows.forEach(r => { const v = r[i]; const s = v === null ? 'NULL' : String(v); if (s.length > w) w = s.length; });
+    return w;
+  });
+  const sep = '─'.repeat(widths.reduce((a,b)=>a+b+3, -1));
+  let out = '┌' + sep + '┐\n';
+  out += '│ ' + cols.map((c,i) => String(c).padEnd(widths[i])).join(' │ ') + ' │\n';
+  out += '├' + sep + '┤\n';
+  for (const r of rows) {
+    out += '│ ' + r.map((v, i) => {
+      const s = v === null ? 'NULL' : String(v);
+      return s.padEnd(widths[i]);
+    }).join(' │ ') + ' │\n';
+  }
+  out += '└' + sep + '┘\n';
+  out += rows.length + ' rows';
+  return out;
+}
+async function shRun(line){   // for/while/if, ; && ||, $() $(()) vars, exit codes
+  line=(line||'').replace(/\s*2>\s*\/dev\/null/g,'').replace(/\s*2>&1/g,'').replace(/\s*1>&2/g,'').trim(); if(!line) return '';
+  line=await shExpandSubst(line);   // command substitution + arithmetic
+  // for VAR in LIST; do BODY; done
+  const fm=line.match(/^for\s+(\w+)\s+in\s+(.+?)\s*;\s*do\s+([\s\S]+?)\s*;?\s*done\s*$/);
+  if(fm){ const v=fm[1], body=fm[3]; let items=[]; for(const tok of fm[2].trim().split(/\s+/)) items=items.concat(await shGlob(tok));
+    const out=[]; for(const it of items){ SH_VARS[v]=it; const o=await shRun(body); if(o)out.push(o); if(SH_BRK){SH_BRK=false;break;} if(SH_CONT)SH_CONT=false; } return out.join('\n'); }
+  // while COND; do BODY; done
+  const wm=line.match(/^while\s+([\s\S]+?)\s*;\s*do\s+([\s\S]+?)\s*;?\s*done\s*$/);
+  if(wm){ const out=[]; let g=0; while(g++<2000){ await shRun(wm[1]); if(SH_EXIT!==0)break; const o=await shRun(wm[2]); if(o)out.push(o); if(SH_BRK){SH_BRK=false;break;} if(SH_CONT){SH_CONT=false;continue;} } if(g>=2000)out.push('while: '+T('límite de iteraciones','iteration limit')); return out.join('\n'); }
+  // until COND; do BODY; done
+  const um=line.match(/^until\s+([\s\S]+?)\s*;\s*do\s+([\s\S]+?)\s*;?\s*done\s*$/);
+  if(um){ const out=[]; let g=0; while(g++<2000){ await shRun(um[1]); if(SH_EXIT===0)break; const o=await shRun(um[2]); if(o)out.push(o); if(SH_BRK){SH_BRK=false;break;} if(SH_CONT){SH_CONT=false;continue;} } if(g>=2000)out.push('until: '+T('límite de iteraciones','iteration limit')); return out.join('\n'); }
+  // if COND; then BODY; [else BODY2;] fi
+  const im=line.match(/^if\s+([\s\S]+?)\s*;\s*then\s+([\s\S]+?)(?:\s*;\s*else\s+([\s\S]+?))?\s*;?\s*fi\s*$/);
+  if(im){ await shRun(im[1]); if(SH_EXIT===0) return await shRun(im[2]); if(im[3]) return await shRun(im[3]); return ''; }
+  const parts=shSplitTop(line,['&&','||',';']); const acc=[];
+  for(let i=0;i<parts.length;i+=2){ const op=parts[i-1], seg=(parts[i]||'').trim(); if(!seg)continue;
+    if(op==='&&' && SH_EXIT!==0) continue;
+    if(op==='||' && SH_EXIT===0) continue;
+    const o=await shPipe(seg); if(o) acc.push(o); if(SH_BRK||SH_CONT) break; }
+  return acc.join('\n');
+}
+function termLine(cmd, out, cwd){
+  const c=el('<div class="bg-black/60 border border-gray-700 rounded-lg p-3 font-mono text-xs max-w-[90%] overflow-x-auto"></div>');
+  const pr=document.createElement('div'); pr.innerHTML='<span class="text-green-400">agent@agents</span><span class="text-gray-500">:</span><span class="text-blue-400">/'+shNorm(cwd!=null?cwd:SHCWD)+'</span><span class="text-gray-500">$</span> ';
+  const cs=document.createElement('span'); cs.className='text-gray-200'; cs.textContent=cmd; pr.appendChild(cs); c.appendChild(pr);
+  if(out){ const o=document.createElement('div'); o.className='text-gray-300 whitespace-pre-wrap mt-1'; o.textContent=out; c.appendChild(o); }
+  chat().appendChild(c); down();
+}
+
+/* =====================================================================
+   Real Python via Pyodide (CPython -> WASM). Lazy-loaded (~6MB). The
+   virtual disk is mirrored into Pyodide's FS at /disk (cwd), so Python
+   can read/write the same files.
+   ===================================================================== */
+let pyodide=null, pyLoading=null;
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=()=>rej(new Error('no se pudo cargar '+src)); document.head.appendChild(s); }); }
+async function ensurePy(){ if(pyodide) return pyodide; if(pyLoading) return pyLoading;
+  tool('🐍 Cargando Python (Pyodide ~6MB, primera vez)…');
+  pyLoading=(async()=>{ const base='https://cdn.jsdelivr.net/pyodide/v0.26.4/full/'; await loadScript(base+'pyodide.js'); pyodide=await loadPyodide({indexURL:base}); await pyodide.loadPackage('sqlite3'); return pyodide; })();
+  try{ return await pyLoading; }catch(e){ pyLoading=null; throw e; } }
+function pyMkdirp(py,dir){ let cur=''; dir.split('/').filter(Boolean).forEach(p=>{ cur+='/'+p; try{py.FS.mkdir(cur);}catch(e){} }); }
+async function pyMirrorIn(py){ try{py.FS.mkdir('/disk');}catch(e){} const items=await fsList();
+  for(const f of items){ const full='/disk/'+f.path; pyMkdirp(py, full.slice(0,full.lastIndexOf('/')));
+    try{ const c=f.content||'';
+      if(c.startsWith(' B64 ')){ const bin=atob(c.slice(5)); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); py.FS.writeFile(full,u); }   // binary file -> raw bytes
+      else py.FS.writeFile(full, c);
+    }catch(e){} } }
+async function pyMirrorOut(py){ const walk=(d,base)=>{ let out=[]; let names; try{names=py.FS.readdir(d);}catch(e){return out;}
+    for(const n of names){ if(n==='.'||n==='..')continue; const full=d+'/'+n, rel=base?base+'/'+n:n; let st; try{st=py.FS.stat(full);}catch(e){continue;}
+      if(py.FS.isDir(st.mode)) out=out.concat(walk(full,rel));
+      else { let content; try{ const u=py.FS.readFile(full); /* Uint8Array */
+          if(isUtf8Text(u)){ content=new TextDecoder('utf-8').decode(u); }
+          else { let bin=''; for(let i=0;i<u.length;i++)bin+=String.fromCharCode(u[i]); content=' B64 '+btoa(bin); }   // binary -> base64, no corruption
+        }catch(e){ content=''; }
+        out.push({path:rel,content}); } } return out; };
+  for(const f of walk('/disk','')) await fsPut(f.path, f.content); refreshDisk(); }
+// heuristic: valid UTF-8 with no NUL byte -> treat as text
+function isUtf8Text(u){ if(!u||!u.length) return true; for(let i=0;i<u.length;i++){ if(u[i]===0) return false; }
+  try{ new TextDecoder('utf-8',{fatal:true}).decode(u); return true; }catch(e){ return false; } }
+async function runPython(code){
+  let py; try{ py=await ensurePy(); }catch(e){ return 'Python no disponible: '+e; }
+  await pyMirrorIn(py); let out='';
+  try{ py.setStdout({batched:s=>{out+=s+'\n';}}); py.setStderr({batched:s=>{out+=s+'\n';}}); }catch(e){}
+  try{ py.runPython('import os\ntry:\n os.chdir("/disk")\nexcept Exception:\n pass'); const r=await py.runPythonAsync(code); if(r!==undefined&&r!==null) out+=String(r); }
+  catch(e){ out+=String(e.message||e); }
+  await pyMirrorOut(py); return out.trim()||'(sin salida)';
+}
+
+/* =====================================================================
+   Virtual Database Engine — Python sqlite3 via Pyodide.
+   Each .db file is stored as SQL text (sqlite3 dump) in IndexedDB.
+   Read: load dump into :memory: DB → execute query → return rows.
+   Write: execute DDL/DML → iter dump → save back to IndexedDB.
+   ===================================================================== */
+async function pyDbExec(path, sql){
+  if (!sql || !sql.trim()) return 'SQL Error: empty query';
+  try { await ensurePy(); } catch(e) { return 'SQL Error: Python (Pyodide) no disponible: '+e; }
+  const py = pyodide;
+  const f = await fsGet(path);
+  const isBinary = f && f.content && f.content.startsWith(' B64 ');
+  let script;
+
+  const sqlTrimmed = sql.trim();
+  const sqlUpper = sqlTrimmed.toUpperCase();
+  const isWrite = /\b(INSERT|UPDATE|DELETE|CREATE(?:\s+(?:UNIQUE|TEMP(?:ORARY)?|VIRTUAL))?(?:\s+IF\s+NOT\s+EXISTS)?\s+(TABLE|INDEX|VIEW|TRIGGER)|DROP|ALTER|PRAGMA|REPLACE)\b/i.test(sqlUpper);
+  const sqlJson = JSON.stringify(sqlTrimmed);
+
+  if (isBinary) {
+    // Binary SQLite file (created by Python tool) — load via Pyodide FS
+    const b64 = f.content.slice(5);
+    const raw = atob(b64);
+    const bin = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bin[i] = raw.charCodeAt(i);
+    try { py.FS.mkdir('/tmp'); } catch(e) {}
+    py.FS.writeFile('/tmp/_db.sqlite3', bin);
+    script = `import sqlite3, json
+_err = None
+_conn = None
+_rows = []; _cols = []; _changes = 0; _new_dump = None
+try:
+    _conn = sqlite3.connect('/tmp/_db.sqlite3')
+    _cur = _conn.execute(${sqlJson})
+    _rows = _cur.fetchall()
+    _cols = [d[0] for d in _cur.description] if _cur.description else []
+    _changes = getattr(_conn, 'changes', 0)
+    _new_dump = '\\n'.join(list(_conn.iterdump())) if ${isWrite ? 'True' : 'False'} else None
+except Exception as _e:
+    _err = str(_e)
+finally:
+    if _conn:
+        _conn.close()
+_ok = _err is None
+with open('/tmp/_result.json','w') as _f: _f.write(json.dumps({'ok':_ok,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_new_dump,'error':_err}))`;
+  } else {
+    // Text SQL dump (created by pyDbExec) — load into :memory:
+    const dump = (f && f.content) ? f.content : '';
+    const dumpJson = JSON.stringify(dump);
+    script = `import sqlite3, json
+_conn = sqlite3.connect(':memory:')
+_err = None
+_old_dump = ${dumpJson}
+if _old_dump:
+    try:
+        _conn.executescript(_old_dump)
+    except Exception as _e:
+        _err = str(_e)
+_q = ${sqlJson}
+try:
+    _cur = _conn.execute(_q)
+    _rows = _cur.fetchall()
+    _cols = [d[0] for d in _cur.description] if _cur.description else []
+    _changes = getattr(_conn, 'changes', 0)
+    _new_dump = '\\n'.join(list(_conn.iterdump())) if ${isWrite ? 'True' : 'False'} else None
+except Exception as _e:
+    if not _err: _err = str(_e)
+    _rows = []; _cols = []; _changes = 0; _new_dump = None
+with open('/tmp/_result.json','w') as _f: _f.write(json.dumps({'ok':_err is None,'cols':_cols,'rows':_rows,'changes':_changes,'dump':_new_dump,'error':_err}))`;
+  }
+
+  // File-based IPC — Python writes result to /tmp/_result.json, JS reads it
+  try {
+    await py.runPythonAsync(script);
+  } catch(e) {
+    console.error('pyDbExec: runPythonAsync failed', e);
+    return 'SQL Error: ' + (e.message || e);
+  }
+  let raw;
+  try {
+    raw = py.FS.readFile('/tmp/_result.json', {encoding: 'utf8'});
+  } catch(e) {
+    console.error('pyDbExec: failed to read /tmp/_result.json', e);
+    return 'SQL Error: failed to read result file';
+  }
+  if (!raw || typeof raw !== 'string') {
+    console.error('pyDbExec: non-string result file', raw);
+    return 'SQL Error: Python returned no output';
+  }
+  let result;
+  try {
+    result = JSON.parse(raw);
+  } catch(e) {
+    console.error('pyDbExec: JSON.parse failed, raw:', raw.slice(0,200));
+    return 'SQL Error: failed to parse result from Python';
+  }
+
+  if (!result.ok) {
+    return 'SQL Error: ' + (result.error || 'unknown error');
+  }
+
+  if (isWrite && result.dump) {
+    // Always save as text SQL dump (convert binary → dump transparently)
+    await fsPut(path, result.dump);
+    refreshDisk();
+  }
+
+  return { columns: result.cols, rows: result.rows, changes: result.changes };
+}
+
+/* ---- DB Viewer state ---- */
+let dbvPath = '';
+let dbvTable = '';
+let dbvCurPage = 0;
+const DBV_PAGE = 100;
+
+async function openDbViewer(path){
+  dbvPath = path; dbvTable = ''; dbvCurPage = 0;
+  document.getElementById('edpath').textContent = '🗄 ' + path;
+  document.getElementById('edtext').classList.add('hidden');
+  document.getElementById('edpreview').classList.add('hidden');
+  document.getElementById('edhtmlframe').classList.add('hidden');
+  document.getElementById('edprev').classList.add('hidden');
+  document.getElementById('edhtml').classList.add('hidden');
+  document.getElementById('eddbviewer').classList.remove('hidden');
+  document.getElementById('ed').classList.remove('hidden');
+  document.getElementById('dbv-rows').innerHTML = '<div class="text-xs text-gray-500 p-4 text-center">Cargando tablas…</div>';
+  document.getElementById('dbv-info').textContent = '';
+  document.getElementById('dbv-pageinfo').classList.add('hidden');
+  document.getElementById('dbv-prev').classList.add('hidden');
+  document.getElementById('dbv-next').classList.add('hidden');
+  document.getElementById('dbv-sql-input').value = '';
+  document.getElementById('dbv-sql-panel').classList.add('hidden');
+  document.getElementById('dbv-sql-toggle').textContent = '▸ SQL';
+
+  const result = await pyDbExec(path, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
+  const tb = document.getElementById('dbv-tables');
+  const rowsDiv = document.getElementById('dbv-rows');
+  if (typeof result === 'string') {
+    tb.innerHTML = '<div class="text-[10px] text-gray-600 px-2">(error)</div>';
+    rowsDiv.innerHTML = '<div class="text-xs text-red-400 p-4 text-center">' + escHtml(result) + '</div>';
+    return;
+  }
+  if (!result.rows.length) {
+    tb.innerHTML = '<div class="text-[10px] text-gray-600 px-2">(sin tablas)</div>';
+    rowsDiv.innerHTML = '<div class="text-xs text-gray-500 p-4 text-center">Base de datos vacía — crea tablas con SQL</div>';
+  } else {
+    tb.innerHTML = result.rows.map(r => {
+      const raw = r[0];
+      const t = escHtml(raw);
+      const escapedName = raw.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      return '<button onclick="dbvOpenTable(\'' + escapedName + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
+    }).join('');
+  }
+}
+
+async function dbvOpenTable(name){
+  dbvTable = name; dbvCurPage = 0;
+  await dbvLoadPage();
+}
+
+async function dbvLoadPage(){
+  const off = dbvCurPage * DBV_PAGE;
+  const cnt = await pyDbExec(dbvPath, 'SELECT COUNT(*) FROM "' + dbvTable.replace(/"/g,'""') + '"');
+  const total = typeof cnt === 'string' ? 0 : cnt.rows[0][0];
+  const data = await pyDbExec(dbvPath,
+    'SELECT * FROM "' + dbvTable.replace(/"/g,'""') + '" LIMIT ' + DBV_PAGE + ' OFFSET ' + off);
+
+  const rowsDiv = document.getElementById('dbv-rows');
+  if (typeof data === 'string') {
+    rowsDiv.innerHTML = '<div class="text-xs text-red-400 p-4">' + escHtml(data) + '</div>';
+    return;
+  }
+  if (!data.rows.length) {
+    rowsDiv.innerHTML = '<div class="text-xs text-gray-500 p-4 text-center">(tabla vacía)</div>';
+  } else {
+    let html = '<table class="w-full text-xs text-gray-300 border-collapse"><thead><tr class="sticky top-0 bg-gray-800">';
+    data.columns.forEach(c => { html += '<th class="px-2 py-1.5 text-left border-b border-gray-700 text-blue-300 font-medium whitespace-nowrap">' + escHtml(c) + '</th>'; });
+    html += '</tr></thead><tbody>';
+    data.rows.forEach(r => {
+      html += '<tr class="hover:bg-gray-800/50">';
+      r.forEach(v => {
+        const cls = v === null ? 'text-gray-600' : typeof v === 'number' ? 'text-green-400' : 'text-gray-200';
+        const txt = v === null ? 'NULL' : escHtml(String(v).length > 200 ? String(v).slice(0,200)+'…' : String(v));
+        html += '<td class="px-2 py-0.5 border-b border-gray-800/50 max-w-[300px] truncate ' + cls + '">' + txt + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    rowsDiv.innerHTML = html;
+  }
+  document.getElementById('dbv-info').textContent = dbvTable + ' · ' + total + ' rows';
+  const info = document.getElementById('dbv-pageinfo');
+  const prev = document.getElementById('dbv-prev');
+  const next = document.getElementById('dbv-next');
+  if (total > DBV_PAGE) {
+    const end = Math.min((dbvCurPage+1)*DBV_PAGE, total);
+    info.textContent = (dbvCurPage*DBV_PAGE+1) + '-' + end + ' de ' + total;
+    info.classList.remove('hidden');
+    prev.classList.remove('hidden');
+    next.classList.remove('hidden');
+    prev.disabled = dbvCurPage === 0;
+    next.disabled = end >= total;
+  } else {
+    info.classList.add('hidden');
+    prev.classList.add('hidden');
+    next.classList.add('hidden');
+  }
+}
+
+async function dbvPage(dir){
+  dbvCurPage += dir;
+  if (dbvCurPage < 0) dbvCurPage = 0;
+  await dbvLoadPage();
+}
+
+function toggleDbvSql(){
+  const panel = document.getElementById('dbv-sql-panel');
+  const toggle = document.getElementById('dbv-sql-toggle');
+  if (panel.classList.contains('hidden')) {
+    panel.classList.remove('hidden');
+    toggle.textContent = '▾ SQL';
+  } else {
+    panel.classList.add('hidden');
+    toggle.textContent = '▸ SQL';
+  }
+}
+
+async function dbvRunSql(){
+  const input = document.getElementById('dbv-sql-input');
+  const resultEl = document.getElementById('dbv-sql-result');
+  const sql = input.value.trim();
+  if (!sql) return;
+  resultEl.textContent = 'Ejecutando…';
+  resultEl.className = 'text-[10px] text-gray-400';
+
+  const result = await pyDbExec(dbvPath, sql);
+  if (typeof result === 'string') {
+    resultEl.textContent = result;
+    resultEl.className = 'text-[10px] text-red-400';
+    return;
+  }
+  resultEl.textContent = result.changes > 0 ? result.changes + ' rows affected' : (result.rows ? result.rows.length + ' rows' : 'OK');
+  resultEl.className = 'text-[10px] text-green-400';
+
+  // If query returned columns (SELECT), show results directly
+  if (result.columns && result.columns.length) {
+    dbvTable = '';  // not a pre-selected table
+    document.getElementById('dbv-info').textContent = 'Query · ' + result.rows.length + ' rows';
+    const rowsDiv = document.getElementById('dbv-rows');
+    let html = '<table class="w-full text-xs text-gray-300 border-collapse"><thead><tr class="sticky top-0 bg-gray-800">';
+    result.columns.forEach(c => { html += '<th class="px-2 py-1.5 text-left border-b border-gray-700 text-blue-300 font-medium whitespace-nowrap">' + escHtml(c) + '</th>'; });
+    html += '</tr></thead><tbody>';
+    result.rows.forEach(r => {
+      html += '<tr class="hover:bg-gray-800/50">';
+      r.forEach(v => {
+        const cls = v === null ? 'text-gray-600' : typeof v === 'number' ? 'text-green-400' : 'text-gray-200';
+        const txt = v === null ? 'NULL' : escHtml(String(v).length > 200 ? String(v).slice(0,200)+'…' : String(v));
+        html += '<td class="px-2 py-0.5 border-b border-gray-800/50 max-w-[300px] truncate ' + cls + '">' + txt + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    rowsDiv.innerHTML = html;
+    document.getElementById('dbv-pageinfo').classList.add('hidden');
+    document.getElementById('dbv-prev').classList.add('hidden');
+    document.getElementById('dbv-next').classList.add('hidden');
+  } else {
+    // Write query: refresh table list and current table
+    const tableResult = await pyDbExec(dbvPath, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
+    const tb = document.getElementById('dbv-tables');
+    if (typeof tableResult !== 'string') {
+      tb.innerHTML = tableResult.rows.length
+        ? tableResult.rows.map(r => {
+            const raw = r[0];
+            const t = escHtml(raw);
+            const escapedName = raw.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+            return '<button onclick="dbvOpenTable(\'' + escapedName + '\')" class="w-full text-left text-xs px-2 py-1 rounded hover:bg-gray-700 text-gray-300">📋 ' + t + '</button>';
+          }).join('')
+        : '<div class="text-[10px] text-gray-600 px-2">(sin tablas)</div>';
+    }
+    if (dbvTable) await dbvLoadPage();
+  }
+}
+
+/* =====================================================================
+   Real clang (C) via the Wasmer JS SDK (WASM). Compiles C to a wasm
+   module and runs it (WASI). Needs cross-origin isolation -> coi-sw.
+   ===================================================================== */
+let wasmerMod=null, clangPkg=null;
+const INSTPKGS={};   // apt-installed Wasmer packages: name -> runner(argv,stdin)->stdout
+// curated catalog of packages known to exist on the Wasmer registry (wasmer.io)
+const APT_ALIAS={ cowsay:'syrusakbary/cowsay', python:'python/python', python3:'python/python', cpython:'python/python',
+  clang:'clang/clang', quickjs:'saghul/quickjs', qjs:'saghul/quickjs', bash:'sharrattj/bash', sh:'sharrattj/bash',
+  coreutils:'sharrattj/coreutils', wasmer:'wasmer/wasmer', winterjs:'wasmer/winterjs' };
+async function ensureWasmer(){ if(wasmerMod) return wasmerMod;
+  if(!self.crossOriginIsolated) throw new Error('sin cross-origin isolation (recarga la página una vez para activar el service worker)');
+  tool('⚙️ Cargando Wasmer SDK (primera vez)…');
+  wasmerMod=await import('https://unpkg.com/@wasmer/sdk@latest/dist/index.mjs'); await wasmerMod.init(); return wasmerMod; }
+async function ensureClang(){ if(clangPkg) return clangPkg; await ensureWasmer(); tool('⚙️ clang…'); clangPkg=await wasmerMod.Wasmer.fromRegistry('clang/clang'); return clangPkg; }
+async function aptInstall(name){ const ref=APT_ALIAS[name]||name; const w=await ensureWasmer();
+  const pkg=await w.Wasmer.fromRegistry(ref);
+  INSTPKGS[name]=async(argv)=>{ const project=new w.Directory(); const all=await fsList(); for(const f of all){ try{ await project.writeFile(f.path.split('/').pop(), f.content); }catch(e){} }
+    const ins=await pkg.entrypoint.run({args:argv, mount:{'/project':project}}); const o=await ins.wait(); return ((o.stdout||'')+(o.stderr?('\n'+o.stderr):'')).replace(/\n$/,''); };
+  if(!SHELL_CMDS.has(name)) SHELL_CMDS.add(name); return ref; }
+// Full-ish clang invocation: multiple sources, -o, -c, flags, linking. Mounts the
+// disk's .c/.h/.cpp so #include resolves; runs the resulting wasm unless -c.
+async function ccExec(argv, inlineCode){
+  let clang; try{ clang=await ensureClang(); }catch(e){ return 'clang no disponible: '+e; }
+  try{
+    const project=new wasmerMod.Directory();   // Wasmer Directory has no nested mkdir -> mount FLAT (basename) at /project root
+    // mount all headers (so #include "x.h" resolves) by basename
+    const all=await fsList(); for(const f of all){ if(/\.(h|hpp|hxx|ch|api)$/i.test(f.path)){ try{ await project.writeFile(f.path.split('/').pop(), f.content); }catch(e){} } }   // .ch/.api: xBase-style headers (Harbour etc.)
+    { const cBase={}; for(const f of all){ if(/\.c$/i.test(f.path)){ const bn=f.path.split('/').pop(); (cBase[bn]=cBase[bn]||[]).push(f); } }   // sources with a unique basename too: some projects #include "x.c" (Harbour's hbpp)
+      for(const bn in cBase){ if(cBase[bn].length===1){ try{ await project.writeFile(bn, cBase[bn][0].content||''); }catch(e){} } } }
+    let outName=null, compileOnly=false, missing=null; const cargs=[]; let nSrc=0; const srcParts=[], userFlags=[];
+    if(inlineCode!=null){ await project.writeFile('__main.c', inlineCode); cargs.push('/project/__main.c'); nSrc=1; srcParts.push(inlineCode); }
+    for(let i=0;i<argv.length;i++){ const a=argv[i];
+      if(a==='-o'){ outName=argv[++i]; }
+      else if(a==='-c'){ compileOnly=true; cargs.push('-c'); }
+      else if(/\.(c|cpp|cc|cxx)$/i.test(a)){ const base=a.split('/').pop(); const f=await fsGet(shResolve(a)); if(!f){ missing=a; break; } try{ await project.writeFile(base, f.content); }catch(e){} cargs.push('/project/'+base); nSrc++; srcParts.push('/* === '+base+' === */\n'+(f.content||'')); }
+      else { cargs.push(a); if(/^-(O|std=|D|W|f|m)/.test(a)) userFlags.push(a); } }
+    if(missing) return 'cc: '+T('no existe ','no such file ')+missing;
+    if(!nSrc) return T('uso: cc <fichero.c> [mas.c] [-o salida] [flags]','usage: cc <file.c> [more.c] [-o out] [flags]');
+    const outBase=(outName||(compileOnly?'a.o':'a.out.wasm')).split('/').pop();   // flat output in /project
+    cargs.push('-o','/project/'+outBase);
+    const ins=await clang.entrypoint.run({args:cargs, mount:{'/project':project}}); const o=await ins.wait();
+    if(!o.ok){ const local=((o.stdout?o.stdout+'\n':'')+(o.stderr||'')).trim();
+      const muted=!/:\d+:\d+:/.test(local);   // a real diagnostic has a file:line:col position; "clang frontend command failed" (exit 45) does not -> ask Godbolt
+      const second= muted ? await godboltDiagnose(srcParts.join('\n'), userFlags) : '';
+      return T('compilación falló','compilation failed')+' (exit '+o.code+')'+(local?':\n'+local:'')+second; }
+    // persist the output back to the virtual disk at the requested path (wasm binary -> base64)
+    const savePath = outName? (inlineCode!=null?outName:shResolve(outName)) : null;
+    try{ const w=await project.readFile(outBase); if(savePath){ let bin=''; for(let k=0;k<w.length;k++)bin+=String.fromCharCode(w[k]); await fsPut(savePath,' B64 '+btoa(bin)); refreshDisk(); } }catch(e){}
+    if(compileOnly) return '✓ '+T('compilado','compiled')+' '+(outName||outBase)+(o.stderr?'\n'+o.stderr:'');
+    try{ const wasm=await project.readFile(outBase); const ex=await wasmerMod.Wasmer.fromFile(wasm); const r=await ex.entrypoint.run(); const ro=await r.wait();
+      return ('✓ '+(outName||outBase)+'\n'+(ro.stdout||'')+(ro.stderr?('\n'+ro.stderr):'')).trim(); }
+    catch(e){ return '✓ '+T('compilado','compiled')+' '+(outName||outBase)+' ('+T('no ejecutable directamente','not directly runnable')+')'; }
+  }catch(e){ return 'cc error: '+e; } }
+async function ccRun(code){ return await ccExec([], code); }   // inline code path (/cc <code>, cc tool)
+/* =====================================================================
+   Real PHP via @php-wasm (WordPress Playground build). Lazy-loaded
+   (~10MB). The virtual disk is mirrored into PHP's FS at /disk
+   (document root), so PHP can read/write the same files. One PHP
+   instance lives for the whole session -> $_SESSION persists.
+   ===================================================================== */
+let phpInst=null, phpHandler=null, phpLoading=null, phpCookies={};
+async function ensurePhp(){ if(phpHandler) return phpHandler; if(phpLoading) return phpLoading;
+  tool('🐘 '+T('Cargando PHP (~10MB, primera vez)…','Loading PHP (~10MB, first time)…'));
+  phpLoading=(async()=>{
+    const web=await import('https://cdn.jsdelivr.net/npm/@php-wasm/web/+esm');
+    const uni=await import('https://cdn.jsdelivr.net/npm/@php-wasm/universal/+esm');
+    phpInst=new uni.PHP(await web.loadWebRuntime('8.3'));
+    try{ phpInst.mkdir('/disk'); }catch(e){} try{ phpInst.mkdir('/tmp'); }catch(e){}
+    phpHandler=new uni.PHPRequestHandler({ phpFactory: async()=>phpInst, documentRoot:'/disk' });
+    return phpHandler; })();
+  try{ return await phpLoading; }catch(e){ phpLoading=null; throw e; } }
+async function phpMirrorIn(){ const php=phpInst; try{php.mkdir('/disk');}catch(e){} const items=await fsList();
+  for(const f of items){ const full='/disk/'+f.path; const dir=full.slice(0,full.lastIndexOf('/'));
+    try{ php.mkdir(dir); }catch(e){}   // @php-wasm mkdir is recursive (mkdirTree)
+    try{ const c=f.content||'';
+      if(c.startsWith(' B64 ')){ const bin=atob(c.slice(5)); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); php.writeFile(full,u); }
+      else php.writeFile(full,c);
+    }catch(e){} } }
+async function phpMirrorOut(){ const php=phpInst; const walk=(d,base)=>{ let out=[]; let names; try{names=php.listFiles(d);}catch(e){return out;}
+    for(const n of names){ const full=d+'/'+n, rel=base?base+'/'+n:n;
+      let isdir=false; try{ isdir=php.isDir(full); }catch(e){}
+      if(isdir) out=out.concat(walk(full,rel));
+      else { let content; try{ const u=php.readFileAsBuffer(full);
+          if(isUtf8Text(u)){ content=new TextDecoder('utf-8').decode(u); }
+          else { let bin=''; for(let i=0;i<u.length;i++)bin+=String.fromCharCode(u[i]); content=' B64 '+btoa(bin); }
+        }catch(e){ content=''; }
+        out.push({path:rel,content}); } } return out; };
+  for(const f of walk('/disk','')) await fsPut(f.path, f.content); refreshDisk(); }
+// One simulated HTTP request: cookie jar + follow local 3xx redirects (max 5 hops).
+async function phpRequest(url, method, body){
+  const handler=await ensurePhp(); await phpMirrorIn();
+  let resp=null, hops=0, m=(method||'GET').toUpperCase(), b=body;
+  while(hops<5){
+    const headers={}; const jar=Object.entries(phpCookies).map(([k,v])=>k+'='+v).join('; '); if(jar) headers['cookie']=jar;
+    resp=await handler.request({url, method:m, headers, body:b});
+    const sc=resp.headers&&resp.headers['set-cookie'];
+    if(sc) for(const c of [].concat(sc)){ const mm=/^([^=;]+)=([^;]*)/.exec(c); if(mm) phpCookies[mm[1]]=mm[2]; }
+    const loc=resp.headers&&resp.headers['location'];
+    if(resp.httpStatusCode>=300&&resp.httpStatusCode<400&&loc&&!/^https?:/i.test([].concat(loc)[0])){ url=[].concat(loc)[0]; m='GET'; b=undefined; hops++; continue; }
+    break; }
+  await phpMirrorOut(); return resp; }
+// CLI-style execution (shell `php f.php`, /php, agent tool). path is disk-relative.
+async function runPhp(path){
+  try{ await ensurePhp(); }catch(e){ return 'PHP no disponible: '+e; }
+  await phpMirrorIn();
+  try{ const r=await phpInst.runStream({scriptPath:'/disk/'+path}); const out=await r.stdoutText, err=await r.stderrText;
+    await phpMirrorOut(); return ((out||'')+(err?('\n'+err):'')).trim()||'(sin salida)'; }
+  catch(e){ await phpMirrorOut(); return 'php error: '+(e.message||e); } }
+async function runPhpCode(code){
+  try{ await ensurePhp(); }catch(e){ return 'PHP no disponible: '+e; }
+  await phpMirrorIn(); if(!/^\s*<\?/.test(code)) code='<?php '+code;
+  try{ phpInst.writeFile('/tmp/__inline.php', code); const r=await phpInst.runStream({scriptPath:'/tmp/__inline.php'});
+    const out=await r.stdoutText, err=await r.stderrText; await phpMirrorOut();
+    return ((out||'')+(err?('\n'+err):'')).trim()||'(sin salida)'; }
+  catch(e){ await phpMirrorOut(); return 'php error: '+(e.message||e); } }
+// Fallback diagnosis: when the in-browser clang dies with a mute crash (the wasm cc1 hits its
+// stack limit on a big file -> "exit 45" with no error), send the same source to Compiler
+// Explorer (godbolt.org) — a NATIVE clang with no such limit — to get the real verdict.
+// CORS-friendly; goes through the proxy if one is set. Diagnostic only (no execution: that
+// compiler is freestanding, no wasi-libc, so it cannot produce a runnable executable).
+async function godboltDiagnose(source, userFlags){
+  if(!source || source.length>180000) return '';   // keep the request reasonable
+  const args=(userFlags&&userFlags.length?userFlags.join(' ')+' ':'')+'--target=wasm32-wasip1 -c -fsyntax-only';
+  const body=JSON.stringify({source, options:{userArguments:args, filters:{}}});
+  const url='https://godbolt.org/api/compiler/wasm32cclang/compile';
+  try{
+    const r=await fetch(PROXY?(PROXY+'/?url='+encodeURIComponent(url)):url,
+      {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    const err=(j.stderr||[]).map(x=>x.text).join('\n').replace(/\[[\d;]*m/g,'').trim();   // strip ANSI colours
+    if(j.code===0){ return '\n\n'+T('↪ El clang del navegador no pudo con este fichero (límite del compilador WASM), pero un clang nativo (Compiler Explorer) lo compila SIN errores: tu C es válido.','↪ The in-browser clang could not handle this file (WASM compiler limit), but a native clang (Compiler Explorer) compiles it with NO errors: your C is valid.')+(err?('\n'+err.split('\n').filter(l=>/warning:/i.test(l)).slice(0,5).join('\n')):''); }
+    return '\n\n'+T('↪ Segunda opinión (clang nativo, Compiler Explorer) — errores reales:','↪ Second opinion (native clang, Compiler Explorer) — real errors:')+'\n'+(err.split('\n').slice(0,25).join('\n')||('exit '+j.code)); }
+  catch(e){ return '\n\n'+T('(no pude consultar Compiler Explorer: ','(could not reach Compiler Explorer: ')+e+')'; }
+}
+
+/* ---- editor ---- */
+let edCur=null;
+async function openEd(path){
+  if (/\.db$/i.test(path)) { await openDbViewer(path); return; }
+  const f = await fsGet(path); edCur = path;
+  if(window.innerWidth<768){ const d=document.getElementById('disk'); if(d && !d.classList.contains('-translate-x-full')) toggleDisk(); }   // close the drawer on mobile so the editor is visible
+  document.getElementById('edpath').textContent=path; document.getElementById('edtext').value=f?f.content:'';
+  document.getElementById('eddbviewer').classList.add('hidden');
+  document.getElementById('edtext').classList.remove('hidden'); document.getElementById('edpreview').classList.add('hidden');
+  document.getElementById('edhtmlframe').classList.add('hidden');
+  document.getElementById('edprev').classList.toggle('hidden', !/\.md$/i.test(path));   // markdown preview only for .md
+  document.getElementById('edhtml').classList.toggle('hidden', !/\.(html?|svg)$/i.test(path));   // rendered view for .html/.svg
+  document.getElementById('ed').classList.remove('hidden'); }
+function closeEd(){
+  document.getElementById('ed').classList.add('hidden');
+  document.getElementById('eddbviewer').classList.add('hidden');
+  const fr = document.getElementById('edhtmlframe'); if(fr) fr.srcdoc='';
+}   // unload iframe
+function togglePreview(){ const ta=document.getElementById('edtext'), pv=document.getElementById('edpreview'), b=document.getElementById('edprev');
+  if(pv.classList.contains('hidden')){ pv.innerHTML=md(ta.value); pv.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
+  else { pv.classList.add('hidden'); ta.classList.remove('hidden'); b.textContent='👁 Preview'; } }
+// render the .html/.svg being edited in a sandboxed iframe (scripts allowed, but no same-origin
+// access -> can't touch the disk, localStorage or the parent page)
+function toggleHtmlView(){ const ta=document.getElementById('edtext'), fr=document.getElementById('edhtmlframe'), b=document.getElementById('edhtml');
+  if(fr.classList.contains('hidden')){ fr.srcdoc=ta.value; fr.classList.remove('hidden'); ta.classList.add('hidden'); b.textContent='✎ Editar'; }
+  else { fr.classList.add('hidden'); fr.srcdoc=''; ta.classList.remove('hidden'); b.textContent='🌐 Ver'; } }
+async function saveEd(){ if(edCur!=null){ await fsPut(edCur,document.getElementById('edtext').value); refreshDisk(); closeEd(); } }
+
+/* ---- chat helpers ---- */
+// markdown -> sanitized HTML (LLM output and disk files are untrusted; without
+// DOMPurify a crafted <img onerror=...> in a reply would run in this page)
+function md(s){ s=s||''; const h=window.marked?marked.parse(s):s; return window.DOMPurify?DOMPurify.sanitize(h):h; }
+function el(h){ const t=document.createElement('template'); t.innerHTML=h.trim(); return t.content.firstChild; }
+const chat=()=>document.getElementById('chat');
+function down(){ const c=chat(); c.scrollTop=c.scrollHeight; }
+function user(t){ const d=el('<div class="flex justify-end"><div class="bg-blue-600 text-white p-2 px-4 rounded-xl rounded-tr-none max-w-[80%] whitespace-pre-wrap"></div></div>'); d.firstElementChild.textContent=t; chat().appendChild(d); down(); }
+function bot(html){ const d=el('<div class="bg-gray-800 border border-gray-700 p-3 rounded-xl rounded-tl-none max-w-[90%]"></div>'); d.innerHTML=html; chat().appendChild(d); down(); return d; }
+function tool(t){ const d=el('<div class="text-xs text-gray-400 border-l-2 border-green-600 pl-3 whitespace-pre-wrap"></div>'); d.textContent=t; chat().appendChild(d); down(); }
+
+/* glass box — agent reasoning (mockup 4 case 7) */
+function thinkingCard(text){ const d=el('<div class="pl-4 border-l-2 border-purple-500 text-xs text-gray-400 italic py-1 max-w-[90%] whitespace-pre-wrap"></div>'); d.textContent=text; chat().appendChild(d); down(); }
+/* error card with terminal block + Auto-corregir (mockup 4 case 6) */
+function errorCard(title,detail,term,onFix){
+  try{ flowAdd('error',title,(detail||'')+(term?(' — '+term):'')); }catch(e){}
+  const c=el('<div class="bg-red-950/40 border border-red-800/50 p-3.5 rounded-lg max-w-[90%]"></div>');
+  const head=el('<div class="flex items-start mb-2"></div>');
+  head.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round" class="mr-2 mt-0.5 shrink-0"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+  const tx=document.createElement('div'); const h=document.createElement('h4'); h.className='text-red-400 text-sm font-semibold'; h.textContent=title;
+  const p=document.createElement('p'); p.className='text-xs text-red-200/80 mt-1'; p.textContent=detail||''; tx.appendChild(h); tx.appendChild(p); head.appendChild(tx); c.appendChild(head);
+  if(term){ const t=document.createElement('div'); t.className='bg-black/50 border border-red-900/30 rounded p-2 mt-2 mb-3 font-mono text-[10px] text-gray-300 overflow-x-auto whitespace-pre-wrap'; t.textContent=term; c.appendChild(t); }
+  if(onFix){ const wrap=el('<div class="flex"></div>'); const b=el('<button class="flex-1 bg-red-900/60 hover:bg-red-800/80 text-red-100 text-xs py-1.5 rounded border border-red-700/50">↑ Auto-corregir</button>'); b.onclick=()=>{ b.disabled=true; onFix(); }; wrap.appendChild(b); c.appendChild(wrap); }
+  chat().appendChild(c); down();
+}
+/* task completion / waiting line (mockup 4 case 9) */
+function doneLine(text){ const d=el('<div class="flex items-center text-xs text-gray-400 pt-1 gap-2"></div>');
+  d.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-gray-500"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg><span></span>';
+  d.querySelector('span').textContent=text||'Esperando respuesta del usuario…'; chat().appendChild(d); down(); }
+
+/* =====================================================================
+   GitHub repo as durable storage (Contents API over fetch).
+   Pull: read every file under <path> into the disk. Push: commit each
+   disk file under <path>.
+   ===================================================================== */
+function ghHeaders(){ const h={'Accept':'application/vnd.github+json'}; const t=document.getElementById('ghtok').value.trim(); if(t)h['Authorization']='Bearer '+t; return h; }
+async function ghPull(){ const repo=document.getElementById('ghrepo').value.trim(), base=document.getElementById('ghpath').value.trim();
+  tool('Pull '+repo+'/'+base+' ...');
+  try{ let n=0;
+    const pull=async(path)=>{ const r=await fetch('https://api.github.com/repos/'+repo+'/contents/'+path,{headers:ghHeaders()});
+      if(!r.ok){ tool('Pull error '+r.status+' ('+path+')'); return; }
+      const list=await r.json();
+      for(const it of (Array.isArray(list)?list:[list])){
+        if(it.type==='file'){ const fr=await fetch(it.download_url); await fsPut(it.path,await fr.text()); n++; }
+        else if(it.type==='dir'){ await pull(it.path); } } };
+    await pull(base);
+    refreshDisk(); tool('Pulled '+n+' files.');
+  }catch(e){ tool('Pull failed: '+e); } }
+async function ghPush(){ const repo=document.getElementById('ghrepo').value.trim(), base=document.getElementById('ghpath').value.trim();
+  if(!document.getElementById('ghtok').value.trim()){ tool('Push necesita un token.'); return; }
+  const items=await fsList(); let n=0,skip=0; tool('Push '+items.length+' files to '+repo+'/'+base+' ...');
+  for(const f of items){ const url='https://api.github.com/repos/'+repo+'/contents/'+base+'/'+f.path.split('/').map(encodeURIComponent).join('/');
+    let sha='', remote=null; const g=await fetch(url,{headers:ghHeaders()});
+    if(g.ok){ const gj=await g.json(); sha=gj.sha; try{ remote=decodeURIComponent(escape(atob((gj.content||'').replace(/\n/g,'')))); }catch(e){ remote=null; } }
+    if(remote===(f.content||'')){ skip++; continue; }
+    const body={message:'agents-web: save '+f.path,content:btoa(unescape(encodeURIComponent(f.content||'')))}; if(sha)body.sha=sha;
+    const p=await fetch(url,{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body)}); if(p.ok)n++; else tool('push '+f.path+': '+p.status); }
+  tool('Pushed '+n+' files'+(skip?(' ('+skip+' sin cambios)'):'')+'.'); }
+
+/* =====================================================================
+   Real git in the browser (isomorphic-git + LightningFS).
+   The git working tree lives in LightningFS (/repo); it mirrors to/from
+   the virtual disk so files show in the panel and are editable. Network
+   git (clone/push/pull) goes through a CORS proxy; push needs a token.
+   ===================================================================== */
+const GFS = (typeof LightningFS!=='undefined') ? new LightningFS('agitfs') : null;
+const GP = GFS ? GFS.promises : null;
+const GITDIR='/repo', CORSPX='https://cors.isomorphic-git.org';
+let GIT_REPO=(()=>{ try{return localStorage.getItem('gitrepo')||null;}catch(e){return null;} })();
+let PROXY=(()=>{ try{return localStorage.getItem('corsproxy')||'';}catch(e){return '';} })();   // Cloudflare Worker CORS proxy
+function setProxy(u){ PROXY=(u||'').replace(/\/+$/,''); try{localStorage.setItem('corsproxy',PROXY);}catch(e){} }
+function gitReady(){ return (typeof git!=='undefined' && GFS && typeof GitHttp!=='undefined'); }
+function ghTok(){ const e=document.getElementById('ghtok'); return e?e.value.trim():''; }
+function gitAuthor(){ return {name:'Agents Web', email:'agents@web.local'}; }
+function gitOnAuth(){ return ()=>({username: ghTok()||'anonymous', password: ghTok()? 'x-oauth-basic':''}); }
+async function mkdirp(dir){ const parts=dir.split('/').filter(Boolean); let cur=''; for(const p of parts){ cur+='/'+p; try{ await GP.mkdir(cur); }catch(e){} } }
+async function rmrfFS(dir){ let st; try{ st=await GP.stat(dir); }catch(e){ return; }   // LightningFS rmdir is NOT recursive
+  if(st.type==='dir'){ let names=[]; try{ names=await GP.readdir(dir); }catch(e){}
+    for(const n of names) await rmrfFS(dir+'/'+n);
+    try{ await GP.rmdir(dir); }catch(e){} }
+  else { try{ await GP.unlink(dir); }catch(e){} } }
+function normRepo(r){ return (r||'').trim().replace(/^https?:\/\/(www\.)?github\.com\//i,'').replace(/^git@github\.com:/i,'').replace(/\.git$/i,'').replace(/\/+$/,''); }
+async function walkFS(dir, base){ let out=[]; let names; try{ names=await GP.readdir(dir); }catch(e){ return out; }
+  for(const n of names){ if(n==='.git')continue; const full=dir+'/'+n, rel=base?base+'/'+n:n; let st;
+    try{ st=await GP.stat(full);}catch(e){continue;}
+    if(st.type==='dir'){ out=out.concat(await walkFS(full, rel)); }
+    else { let c=''; try{ c=await GP.readFile(full,'utf8'); }catch(e){} out.push({path:rel,content:c}); } }
+  return out; }
+async function mirrorToDisk(){ const files=await walkFS(GITDIR,''); for(const f of files) await fsPut(f.path, f.content); refreshDisk(); return files.length; }
+async function mirrorFromDisk(){ const items=await fsList(); for(const f of items){ const full=GITDIR+'/'+f.path; const dir=full.slice(0,full.lastIndexOf('/')); await mkdirp(dir); await GP.writeFile(full, f.content||'', 'utf8'); } }
+async function gitChanges(){ const m=await git.statusMatrix({fs:GFS,dir:GITDIR}); return m.filter(r=>!(r[2]===1&&r[3]===1)); }
+
+async function gitCard(){
+  const c=el('<div class="bg-gray-800/80 border border-gray-700 p-3 rounded-xl max-w-[90%]"></div>');
+  let branch='?', changes=0, repo=GIT_REPO||'(sin repo)';
+  try{ branch=await git.currentBranch({fs:GFS,dir:GITDIR})||'(detached)'; }catch(e){}
+  try{ changes=(await gitChanges()).length; }catch(e){}
+  c.innerHTML='<div class="flex items-center justify-between mb-2 border-b border-gray-700/50 pb-2"><h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">'+
+    SVG('','<circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M6 21V9a9 9 0 0 0 9 9"></path>')+'Git</h4>'+
+    '<span class="text-[10px] text-gray-300 bg-gray-900 px-1.5 py-0.5 rounded border border-gray-700">branch: '+branch+'</span></div>'+
+    '<div class="text-xs text-gray-300 flex items-center justify-between"><span>'+repo+'</span><span class="text-[10px] '+(changes?'text-orange-400':'text-green-400')+'">'+(changes?changes+' cambios':'limpio')+'</span></div>';
+  chat().appendChild(c); down();
+}
+// Clone over the GitHub API (CORS-friendly, no proxy): fetch the tree + blobs,
+// write them to LightningFS + the disk, then init a local real git repo + commit.
+async function gitCloneSmart(repo){   // real git smart-http through the CORS proxy
+  GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
+  tool('git clone '+repo+' (smart-http via proxy)…'); setWorking(true);
+  try{ await rmrfFS(GITDIR);
+    await git.clone({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:PROXY,url:'https://github.com/'+repo+'.git',singleBranch:true,depth:25,onAuth:gitOnAuth()});
+    const n=await mirrorToDisk(); gitCard(); tool('clonado (git real): '+n+' ficheros.'); return true;
+  }catch(e){ errorCard('git clone falló', String(e), 'proxy: '+PROXY, null); return false; } finally{ setWorking(false); } }
+async function gitClone(repo){
+  repo=normRepo(repo)||'FiveTechSoft/Agents';   // accepts owner/name, full URL or git@ form
+  if(!gitReady()){ tool('isomorphic-git no cargó (revisa conexión).'); return false; }
+  if(PROXY) return await gitCloneSmart(repo);   // use real git if a proxy is configured
+  GIT_REPO=repo; try{localStorage.setItem('gitrepo',repo);}catch(e){}
+  tool('Clonando '+repo+' (GitHub API)…'); setWorking(true);
+  try{
+    const meta=await (await fetch('https://api.github.com/repos/'+repo,{headers:ghHeaders()})).json();
+    if(meta.message) throw new Error(meta.message);
+    const branch=meta.default_branch||'main';
+    const tr=await (await fetch('https://api.github.com/repos/'+repo+'/git/trees/'+branch+'?recursive=1',{headers:ghHeaders()})).json();
+    if(!tr.tree) throw new Error(tr.message||'sin árbol');
+    let blobs=tr.tree.filter(t=>t.type==='blob');
+    if(blobs.length>300){ tool('repo grande ('+blobs.length+'); clono 300 ficheros.'); blobs=blobs.slice(0,300); }
+    await rmrfFS(GITDIR);
+    await mkdirp(GITDIR); await git.init({fs:GFS,dir:GITDIR,defaultBranch:branch});
+    let n=0;
+    for(const b of blobs){
+      // fetch file content from raw.githubusercontent.com (CDN, CORS *, NOT API-rate-limited)
+      let content=''; try{ const r=await fetch('https://raw.githubusercontent.com/'+repo+'/'+branch+'/'+b.path.split('/').map(encodeURIComponent).join('/')); if(r.ok) content=await r.text(); }catch(e){}
+      await fsPut(b.path, content);
+      const full=GITDIR+'/'+b.path; await mkdirp(full.slice(0,full.lastIndexOf('/'))); await GP.writeFile(full, content,'utf8');
+      await git.add({fs:GFS,dir:GITDIR,filepath:b.path}); n++;
+    }
+    await git.commit({fs:GFS,dir:GITDIR,message:'clone '+repo,author:gitAuthor()});
+    refreshDisk(); gitCard(); tool('clonado: '+n+' ficheros · git local iniciado (branch '+branch+').'); return true;
+  }catch(e){ errorCard('clone falló', String(e), T('Repo privado o rate limit (60/h sin token) → pon token con /ghtoken (sube a 5000/h).','Private repo or rate limit (60/h unauthenticated) → set a token with /ghtoken (raises it to 5000/h).'), null); return false; }
+  finally{ setWorking(false); } }
+async function gitCommit(msg){ if(!gitReady()){tool('git no listo.');return;} await mirrorFromDisk();
+  const m=await git.statusMatrix({fs:GFS,dir:GITDIR});
+  for(const [fp,h,w] of m){ if(w===0){ try{await git.remove({fs:GFS,dir:GITDIR,filepath:fp});}catch(e){} } else { await git.add({fs:GFS,dir:GITDIR,filepath:fp}); } }
+  try{ const sha=await git.commit({fs:GFS,dir:GITDIR,message:msg||'agents-web: update',author:gitAuthor()});
+    tool('commit '+sha.slice(0,7)+' — '+(msg||'update')); gitCard();
+  }catch(e){ tool('commit: '+e); } }
+// Push over the GitHub API (CORS-friendly): commit changed files via Contents API.
+async function gitPush(){ if(!GIT_REPO){ tool('clona primero (/clone <repo>).'); return; }
+  if(!ghTok()){ tool('push necesita token (/ghtoken).'); return; }
+  if(PROXY){ tool('git push (smart-http via proxy)…'); setWorking(true);
+    try{ await gitCommit('push'); const r=await git.push({fs:GFS,http:GitHttp,dir:GITDIR,corsProxy:PROXY,onAuth:gitOnAuth()}); tool('push (git real) '+((r&&r.ok)?'ok':'enviado')); }
+    catch(e){ errorCard('git push falló', String(e),'proxy: '+PROXY,null); } finally{ setWorking(false); } return; }
+  tool('Push (GitHub API) → '+GIT_REPO+' …'); setWorking(true);
+  try{ const items=await fsList(); let n=0;
+    for(const f of items){ const url='https://api.github.com/repos/'+GIT_REPO+'/contents/'+encodeURI(f.path);
+      let sha='', remote=null; const g=await fetch(url,{headers:ghHeaders()});
+      if(g.ok){ const gj=await g.json(); sha=gj.sha; try{ remote=decodeURIComponent(escape(atob((gj.content||'').replace(/\n/g,'')))); }catch(e){ remote=null; } }
+      if(remote===(f.content||'')) continue;   // unchanged
+      const body={message:'agents-web: update '+f.path, content:btoa(unescape(encodeURIComponent(f.content||'')))}; if(sha)body.sha=sha;
+      const p=await fetch(url,{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body)}); if(p.ok)n++; else tool('push '+f.path+': '+p.status); }
+    tool(n? ('push: '+n+' fichero(s) actualizados en '+GIT_REPO) : 'push: nada cambiado.');
+    await gitCommit('push to '+GIT_REPO);
+  }catch(e){ errorCard('push falló', String(e),'',null); } finally{ setWorking(false); } }
+async function gitPull(){ if(!GIT_REPO){ tool('clona primero (/clone <repo>).'); return; } await gitClone(GIT_REPO); }
+async function gitLog(){ if(!gitReady()){tool('git no listo.');return;}
+  try{ const cs=await git.log({fs:GFS,dir:GITDIR,depth:10});
+    const c=el('<div class="bg-gray-800 border border-gray-700 p-3 rounded-xl max-w-[90%] text-xs space-y-1.5"></div>');
+    c.innerHTML='<h4 class="font-semibold text-gray-200 mb-1">git log</h4>';
+    cs.forEach(x=>{ const d=document.createElement('div'); d.className='flex gap-2'; d.innerHTML='<span class="text-amber-400 font-mono shrink-0">'+x.oid.slice(0,7)+'</span><span class="text-gray-300 truncate"></span>'; d.children[1].textContent=(x.commit.message||'').split('\n')[0]; c.appendChild(d); });
+    chat().appendChild(c); down(); }catch(e){ tool('log: '+e); } }
+async function gitStatus(){ if(!gitReady()){tool('git no listo.');return;} await mirrorFromDisk();
+  try{ const ch=await gitChanges();
+    if(!ch.length){ tool('git status: limpio.'); return; }
+    tool('git status ('+ch.length+'):\n'+ch.map(r=>{ const st=r[2]===0?'deleted':(r[1]===0?'new':'modified'); return '  '+st+': '+r[0]; }).join('\n'));
+  }catch(e){ tool('status: '+e); } }
+async function gitCmd(arg){ const sp=(arg||'').indexOf(' '); const sub=(sp<0?arg:arg.slice(0,sp)).toLowerCase(); const rest=sp<0?'':arg.slice(sp+1).trim();
+  switch(sub){ case 'status': await gitStatus(); break; case 'log': await gitLog(); break;
+    case 'commit': await gitCommit(rest); break; case 'push': await gitPush(); break;
+    case 'pull': await gitPull(); break; case 'branch': { try{ tool('branch: '+(await git.currentBranch({fs:GFS,dir:GITDIR})||'(detached)')); }catch(e){ tool('branch: '+e); } break; }
+    case 'card': case '': await gitCard(); break; default: tool('git: status|log|commit <msg>|push|pull|branch'); } }
+
+/* =====================================================================
+   Mini command shell + optional LLM agent (DeepSeek, function calling).
+   Shell commands operate directly on the virtual disk.
+   ===================================================================== */
+// runnable suggestions: shown as placeholder AND inserted by Tab
+const HINTS=['ls -la','/plan crea un README del proyecto','/cost','write notas.txt Hola mundo',
+  '/sh find . -type f | sort','python -c "print(sum(range(101)))"','/help','/skill','/goal '];
+let hintIdx=0;
+function nextHint(){ hintIdx=(hintIdx+1)%HINTS.length; const p=document.getElementById('prompt'); if(p) p.placeholder=HINTS[hintIdx]; }
+
+/* prompt history: Up/Down navigate previous/next used prompts (persisted) */
+const hist=(()=>{ try{ return JSON.parse(localStorage.getItem('hist')||'[]'); }catch(e){ return []; } })();
+let histI=hist.length;
+function saveHist(){ try{ localStorage.setItem('hist',JSON.stringify(hist.filter(c=>!/^\/(key|ghtoken)\s/i.test(c)).slice(-100))); }catch(e){} }
+function runCmd(cmd){ const p=document.getElementById('prompt'); p.value=cmd; run(); }
+function promptKey(e){ const i=e.target;
+  if(e.key==='Enter'){ run(); return; }
+  if(e.key==='Tab'){ if(!i.value){ i.value=HINTS[hintIdx]; e.preventDefault(); } return; }   // accept the current runnable hint (not the static placeholder)
+  if(e.key==='ArrowUp'){ if(hist.length && histI>0){ histI--; i.value=hist[histI]; e.preventDefault(); setTimeout(()=>i.setSelectionRange(i.value.length,i.value.length),0); } }
+  else if(e.key==='ArrowDown'){ if(histI<hist.length-1){ histI++; i.value=hist[histI]; } else { histI=hist.length; i.value=''; } e.preventDefault(); }
+}
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function runDemo(){
+  clearChat();
+  if(localStorage.getItem('ds_key')){ await runDemoLLM(); } else { await runDemoSim(); }
+}
+async function runDemoLLM(){
+  setWorking(true);
+  tool('▶ Demo (con LLM): el agente procesará una conversación distinta cada vez.'); await sleep(300);
+  const key=localStorage.getItem('ds_key');
+  // ask DeepSeek for a fresh topic so every demo differs
+  let topic='organizar notas de un proyecto';
+  try{
+    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({model:MODEL,messages:[{role:'user',content:'Give ONE short idea (max 8 words, in '+(LANGS[curLang]||'español')+') of a small distinct task to demo an agent that creates and edits files on a disk. Only the idea, no quotes or trailing punctuation.'}]})});
+    const j=await r.json(); addUsage(j.usage);
+    topic=((j.choices&&j.choices[0].message.content)||topic).trim().replace(/^["']|["'.]+$/g,'');
+  }catch(e){ tool('(no pude pedir tema; uso uno por defecto)'); }
+  tool('Tema de la demo: '+topic);
+  const seq=['/goal '+topic, '/plan',
+    T('Crea un fichero (en el disco virtual) relacionado con: '+topic+'. Inventa un nombre adecuado y un contenido breve.','Create a file (on the virtual disk) related to: '+topic+'. Invent a suitable name and short content.'),
+    T('Ahora edita ese fichero para ampliarlo un poco','Now edit that file to expand it a bit'), '/cost'];
+  for(const p of seq){ const i=document.getElementById('prompt'); i.value=p; await run(); await sleep(900); }
+  tool('✓ Demo (LLM) completada.');
+  setWorking(false);
+}
+async function runDemoSim(){
+  setWorking(true);
+  tool(T('▶ Demo (simulada — sin API key): cards de muestra.','▶ Demo (simulated — no API key): sample cards.')); await sleep(400);
+  user('/goal'); goalCard(T('Mostrar las capacidades de Agents Web: gestionar ficheros en un disco virtual (IndexedDB) con un agente IA, generar y ejecutar planes, y sincronizar con un repo de GitHub.','Show what Agents Web can do: manage files on a virtual disk (IndexedDB) with an AI agent, generate and run plans, and sync with a GitHub repo.')); await sleep(800);
+  user('/plan'); planCard([{title:T('Crear ficheros en el disco virtual','Create files on the virtual disk'),state:'done'},{title:T('Editar un fichero y mostrar el diff de cambios','Edit a file and show the change diff'),state:'active',note:T('Modificando bienvenida.md…','Editing welcome.md…')},{title:T('Sincronizar el disco con GitHub (Push)','Sync the disk with GitHub (Push)'),state:'pending'}]); await sleep(900);
+  user(T('Crea bienvenida.md y luego edítalo','Create welcome.md then edit it')); curPanel=null;
+  const r1=addActionRow('write_file',{path:'bienvenida.md'}); await sleep(500); markDone(r1);
+  const r2=addActionRow('read_file',{path:'bienvenida.md'}); await sleep(400); markDone(r2);
+  const r3=addActionRow('write_file',{path:'bienvenida.md'}); await sleep(500); markDone(r3);
+  await fsPut('bienvenida.md','# Agents Web\n\nDisco virtual con IA.\n'); refreshDisk();
+  diffCard('bienvenida.md', diffLines('# Agents Web\n\nDisco virtual con IA.\n','# Agents Web\n\nDisco virtual con IA en el navegador.\n\n## Comandos\n- /plan, /cost, /init\n')); await sleep(900);
+  thinkingCard(T('El usuario quiere organizar el disco. Reviso los ficheros, propongo cambios y pido permiso antes de tocar nada.','The user wants to organize the disk. I review the files, propose changes and ask permission before touching anything.')); await sleep(800);
+  errorCard(T('Error en el comando','Command error'),T('Un comando de ejemplo falló por una dependencia faltante.','A sample command failed due to a missing dependency.'),'Error: Cannot find module \'clsx\'\nRequire stack:\n- /src/components/Sidebar.jsx', ()=>{ tool(T('↑ Auto-corrigiendo… (demo)','↑ Auto-fixing… (demo)')); }); await sleep(800);
+  askPermit(T('ejecutar el comando','run the command'),'npm install clsx').then(()=>{}); await sleep(300);
+  askUser(T('¿Dónde guardamos el resultado?','Where do we save the result?'),[
+    {label:T('Disco virtual','Virtual disk'),description:T('Rápido y local en el navegador (IndexedDB).','Fast and local in the browser (IndexedDB).'),recommended:true},
+    {label:T('Repo GitHub (Push)','GitHub repo (Push)'),description:T('Persistente y versionado. Necesita token.','Persistent and versioned. Needs a token.')},
+    {label:T('Solo mostrarlo','Just show it'),description:T('No guardar nada.','Do not save anything.')}]).then(()=>{}); await sleep(700);
+  user(T('Reparte el trabajo en varios agentes','Split the work across several agents')); { const dc=delegationCard([T('Listar ficheros del disco','List disk files'),T('Resumir su contenido','Summarize their content'),T('Proponer mejoras','Propose improvements')]); await sleep(700); dc.setStatus(0,'list_files…'); await sleep(500); dc.done(0); dc.setStatus(1,'read_file…'); await sleep(500); dc.done(1); await sleep(400); dc.done(2); } await sleep(500);
+  user('/cost'); costCard({pin:125430,pout:8205}); await sleep(700);
+  user('/compact'); compactCard(84500,12100); await sleep(700);
+  user('/init'); await fsPut('AGENTS.md','# Reglas del proyecto\n\n- Estilo: ...\n').then(refreshDisk); initCard('AGENTS.md'); await sleep(600);
+  user(T('terminal: crea y lee un fichero','terminal: create and read a file'));
+  for(const sc of ['mkdir src','echo "hola mundo" > src/readme.txt','cat src/readme.txt','grep hola src/readme.txt | wc','ls -l src']){ const cwd=SHCWD; termLine(sc, await shRun(sc), cwd); await sleep(350); }
+  user(T('Busca en la web qué es Harbour','Search the web for what Harbour is')); curPanel=null; { const rw=addActionRow('web_search',{query:'Harbour language'}); await sleep(700); markDone(rw); } bot(T('🔎 Harbour es un compilador open-source del lenguaje xBase (Clipper), multiplataforma.','🔎 Harbour is an open-source, cross-platform compiler for the xBase (Clipper) language.')); await sleep(500);
+  user(T('Ejecuta Python sobre el disco','Run Python over the disk')); curPanel=null; { const rp=addActionRow('python',{}); await sleep(700); markDone(rp); } termLine('python ‹code›', 'import os; print(len(os.listdir(".")), "ficheros")\n6 ficheros', SHCWD); await sleep(500);
+  user('/clone'); await gitCard(); await sleep(300);
+  user('/git'); await gitCard(); await sleep(400);
+  contextCard(112000,128000); await sleep(700);
+  abortCard(true); await sleep(600);
+  user('/skill'); skillCard(await listSkills()); await sleep(400);
+  user('/tool'); toolsCard(); await sleep(400);
+  user('/loop'); loopCard({iter:3,max:15,cmds:8}); await sleep(400);
+  user('/help'); helpCard(); await sleep(300);
+  doneLine(T('Esperando respuesta del usuario…','Waiting for the user…'));
+  tool(T('✓ Demo completada','✓ Demo finished')+' — goal · plan · acciones · diff · thinking · error · permit · ask_user · cost · compact · init · loop · help · done.');
+  setWorking(false);
+}
+
+async function run(){
+  const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
+  hist.push(v); histI=hist.length; saveHist();
+  if(v[0]==='/'){ flowAdd('slash',v); await slashCmd(v); nextHint(); return; }
+  const cmd0=v.split(/\s+/)[0];
+  if(SHELL_CMDS.has(cmd0) || cmd0.startsWith('./')){ const cwd=SHCWD; const out=await shRun(v); flowAdd('cmd',v,(out||'').slice(0,200)); termLine(v, out, cwd); nextHint(); return; }
+  // otherwise: send to the LLM agent
+  flowAdd('user',v); await agent(v); nextHint();
+}
+
+/* ---- LLM agent with tools over the disk ---- */
+const TOOLS=[
+ {type:'function',function:{name:'list_files',description:'List files on the disk',parameters:{type:'object',properties:{}}}},
+ {type:'function',function:{name:'read_file',description:'Read a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
+ {type:'function',function:{name:'write_file',description:'Create/overwrite a file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},
+ {type:'function',function:{name:'delete_file',description:'Delete a file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path']}}},
+ {type:'function',function:{name:'ask_user',description:'Ask the user a question and wait. Options can be plain strings OR objects {label, description, recommended} to show a rich clarification card with radios.',parameters:{type:'object',properties:{question:{type:'string'},options:{type:'array',items:{type:'object',properties:{label:{type:'string'},description:{type:'string'},recommended:{type:'boolean'}},required:['label']}}},required:['question']}}},
+ {type:'function',function:{name:'dispatch_agents',description:'Run 2-4 INDEPENDENT subtasks in parallel sub-agents and return the combined results. ALWAYS provide a contract: exact table/column names, function signatures, file paths, API surface that ALL sub-agents MUST follow. The contract is prepended to every sub-agent prompt so they produce compatible code. Without a contract sub-agents WILL diverge on naming and break integration.',parameters:{type:'object',properties:{tasks:{type:'array',items:{type:'string'},description:'2 to 4 independent subtasks. Include exact names/signatures/paths the sub-agent must produce or consume.'},contract:{type:'string',description:'Shared technical contract ALL sub-agents must follow: table names, column names, function signatures, file paths, API surface, naming conventions. Prepended to every sub-agent prompt. Without this they will use inconsistent names.'}},required:['tasks','contract']}}},
+ {type:'function',function:{name:'git',description:'Real git on the cloned repo (isomorphic-git). action: status|log|commit|push|pull|clone. For commit pass message; for clone pass repo (owner/name).',parameters:{type:'object',properties:{action:{type:'string'},message:{type:'string'},repo:{type:'string'}},required:['action']}}},
+ {type:'function',function:{name:'web_search',description:'Search the web and return the top results as text.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
+ {type:'function',function:{name:'web_fetch',description:'Fetch a URL and return its readable text content.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
+ {type:'function',function:{name:'shell',description:'Run a POSIX-like shell command on the virtual disk: ls cat echo pwd cd mkdir touch rm mv cp grep head tail wc find, with pipes (|) and redirect (> >>).',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']}}},
+ {type:'function',function:{name:'sql',description:'Execute a SQL query on a .db virtual database file (SQLite via sqlite3). Use for SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP, ALTER. If the .db file does not exist, it is created automatically on CREATE TABLE. Returns rows as JSON with columns, rows, and changes count.',parameters:{type:'object',properties:{db:{type:'string',description:'Path to the .db file, e.g. "clientes.db" or "data/clientes.db"'},query:{type:'string',description:'SQL query to execute'}},required:['db','query']}}},
+ {type:'function',function:{name:'python',description:'Run real Python (Pyodide/CPython in WASM). cwd is /disk so it can read/write the virtual disk files. Returns stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
+ {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}}
+];
+// sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
+const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
+
+// Renders a question card and resolves when the user answers (the agent loop awaits this).
+function askUser(question, options){
+  return new Promise(res=>{
+    options = Array.isArray(options)&&options.length ? options.map(o=> typeof o==='string'?{label:o}:o) : null;
+    const rich = options && options.some(o=>o.description||o.recommended);
+    if(rich){ renderClarify(question, options, res); return; }
+    const card=el('<div class="bg-[#2a1f0c] border border-yellow-700/50 p-3 rounded-lg max-w-[90%]"></div>');
+    const q=document.createElement('div'); q.className='text-yellow-300 font-semibold mb-2'; q.textContent=question; card.appendChild(q);
+    if(options){
+      options.forEach(o=>{ const b=el('<button class="block w-full text-left bg-yellow-700/30 hover:bg-yellow-600 text-yellow-100 px-3 py-2 rounded mb-1"></button>');
+        b.textContent=o.label; b.onclick=()=>{ card.querySelectorAll('button,input').forEach(x=>x.disabled=true); b.classList.add('ring-2','ring-yellow-300'); res(o.label); }; card.appendChild(b); });
+    } else {
+      const wrap=el('<div class="flex gap-2"></div>');
+      const inp=el('<input class="flex-1 bg-gray-900 border border-yellow-700/50 rounded px-2 py-1 text-gray-100">');
+      const ok=el('<button class="bg-yellow-600 hover:bg-yellow-500 text-white px-3 rounded">OK</button>');
+      const send=()=>{ wrap.querySelectorAll('button,input').forEach(x=>x.disabled=true); res(inp.value||'(sin respuesta)'); };
+      ok.onclick=send; inp.onkeydown=(e)=>{ if(e.key==='Enter') send(); };
+      wrap.appendChild(inp); wrap.appendChild(ok); card.appendChild(wrap);
+    }
+    chat().appendChild(card); down(); const f=card.querySelector('input'); if(f) f.focus();
+  });
+}
+// rich clarification card: radios + description + "Recomendado" + Confirmar (mockup)
+function renderClarify(question, options, res){
+  const card=el('<div class="bg-[#1e2330] border border-blue-900/50 p-4 rounded-xl max-w-[90%]"></div>');
+  const head=el('<div class="flex items-start mb-3"></div>');
+  head.innerHTML='<div class="bg-blue-900/50 p-1.5 rounded-lg mr-2.5 mt-0.5">'+SVG('text-blue-400','<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>')+'</div>';
+  const tx=document.createElement('div'); const h=document.createElement('h4'); h.className='text-blue-300 text-sm font-semibold'; h.textContent='Se requiere clarificación';
+  const p=document.createElement('p'); p.className='text-xs text-gray-300 mt-1 leading-relaxed'; p.textContent=question; tx.appendChild(h); tx.appendChild(p); head.appendChild(tx); card.appendChild(head);
+  const list=el('<div class="space-y-2 mt-3"></div>'); const nm='clar'+(renderClarify._n=(renderClarify._n||0)+1); let sel=null;
+  options.forEach(o=>{ const lab=el('<label class="flex items-start p-3 border border-gray-700 rounded-lg bg-gray-800/50 hover:bg-gray-700/50 cursor-pointer"></label>');
+    const radio=document.createElement('input'); radio.type='radio'; radio.name=nm; radio.className='mt-0.5 mr-3 accent-blue-500'; radio.onclick=()=>{ sel=o.label; };
+    const d=document.createElement('div'); const t=document.createElement('div'); t.className='text-sm font-medium text-gray-200'; t.textContent=o.label;
+    if(o.recommended){ const bg=document.createElement('span'); bg.className='text-[10px] ml-1 bg-green-900/40 text-green-400 px-1.5 py-0.5 rounded border border-green-800/50'; bg.textContent='Recomendado'; t.appendChild(bg); }
+    d.appendChild(t); if(o.description){ const ds=document.createElement('div'); ds.className='text-xs text-gray-400 mt-0.5'; ds.textContent=o.description; d.appendChild(ds); }
+    lab.appendChild(radio); lab.appendChild(d); list.appendChild(lab); });
+  card.appendChild(list);
+  const btn=el('<button class="w-full mt-3 bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded-md font-medium">Confirmar Selección</button>');
+  btn.onclick=()=>{ if(sel==null) sel=options[0].label; card.querySelectorAll('input,button').forEach(x=>x.disabled=true); res(sel); };
+  card.appendChild(btn); chat().appendChild(card); down();
+}
+// wrapper: every agent tool call passes through here -> record it in the didactic Flow
+async function execTool(name,rawArgs){
+  const out=await execToolRaw(name,rawArgs);
+  try{ let a={}; try{a=JSON.parse(rawArgs||'{}');}catch(e){}
+    flowAdd('tool',name,{args:a,result:String(out||'')}); }catch(e){}
+  return out;
+}
+async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(e){ args={}; }
+  if(name==='list_files'){ return (await fsList()).map(f=>f.path).join('\n')||'(empty)'; }
+  if(name==='read_file'){ const p=shResolve(args.path); const f=await fsGet(p); return f?f.content:'not found'; }
+  if(name==='write_file'){ const p=shResolve(args.path); if(!(await askPermit('escribir el archivo',p))) return 'Rechazado por el usuario.';
+    const old=await fsGet(p); await fsPut(p,args.content||''); refreshDisk();
+    if(old && old.content!==(args.content||'')) diffCard(p, diffLines(old.content,args.content||''));
+    return 'wrote '+p; }
+  if(name==='delete_file'){ const p=shResolve(args.path); if(!(await askPermit('borrar el archivo',p))) return 'Rechazado por el usuario.';
+    await fsDel(p); refreshDisk(); return 'deleted '+p; }
+  if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
+  if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[], args.contract||''); }
+  if(name==='web_search'){ try{ const r=await fetch('https://s.jina.ai/'+encodeURIComponent(args.query||''),{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,4000); }catch(e){ return 'web_search error: '+e; } }
+  if(name==='web_fetch'){ try{ const u=(args.url||''); const r=await fetch('https://r.jina.ai/'+u,{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,6000); }catch(e){ return 'web_fetch error: '+e; } }
+  if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
+  if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
+  if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
+  if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
+  if(name==='git'){ const a=(args.action||'').toLowerCase();
+    if(a==='clone'){ const okc=await gitClone(args.repo||GIT_REPO||'FiveTechSoft/Agents'); return okc?'clonado':'ERROR: el clone falló (repo inexistente, demasiado grande, rate limit o proxy caído). NO busques los ficheros: no están.'; }
+    if(a==='commit'){ await gitCommit(args.message||'agents-web: update'); return 'commit hecho'; }
+    if(a==='push'){ await gitPush(); return 'push lanzado'; }
+    if(a==='pull'){ await gitPull(); return 'pull hecho'; }
+    if(a==='log'){ await gitLog(); return 'log mostrado'; }
+    await gitStatus(); return 'status mostrado'; }
+  return 'unknown tool'; }
+
+/* ===== multi-agent: concurrent async sub-agents (Promise.all) + delegation card ===== */
+function delegationCard(tasks,contract){
+  const c=el('<div class="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden max-w-[90%]"></div>');
+  c.innerHTML='<div class="p-3 border-b border-gray-700/50 flex items-start gap-3"><div class="mt-0.5 text-purple-400 bg-purple-900/30 p-1.5 rounded-md border border-purple-800/50">'+
+    SVG('','<path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>')+
+    '</div><div><h4 class="text-sm font-semibold text-gray-200">Delegando tarea…</h4><p class="text-xs text-gray-400 mt-0.5">El agente principal espera resultados.</p></div></div>'+
+    (contract?'<div class="px-3 py-2 bg-purple-900/20 border-b border-purple-800/30"><div class="text-[10px] text-purple-300 font-medium uppercase tracking-wide mb-1">📋 Contrato compartido</div><div class="text-[10px] text-gray-400 max-h-16 overflow-y-auto whitespace-pre-wrap">'+escHtml(contract.slice(0,300))+(contract.length>300?'…':'')+'</div></div>':'')+
+    '<div class="dbody p-3 bg-gray-900/50 space-y-2"></div>';
+  const body=c.querySelector('.dbody'); const rows=[];
+  tasks.forEach((t,i)=>{ const row=el('<div class="flex items-center justify-between bg-gray-800 border border-purple-900/50 p-2.5 rounded-lg gap-2"></div>');
+    row.innerHTML='<div class="flex items-center gap-2.5 min-w-0"><span class="dotw relative flex h-2 w-2 shrink-0"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span></span><span class="text-xs font-medium text-purple-200 shrink-0">@Agent_'+(i+1)+'</span></div><span class="st text-[10px] text-gray-500 bg-black/40 px-1.5 py-0.5 rounded truncate"></span>';
+    row.querySelector('.st').textContent=t.slice(0,46); body.appendChild(row); rows.push(row); });
+  chat().appendChild(c); down();
+  return { setStatus:(i,s)=>{ if(rows[i]) rows[i].querySelector('.st').textContent=String(s).slice(0,46); },
+    done:(i,err)=>{ if(rows[i]){ rows[i].querySelector('.dotw').innerHTML='<span class="relative inline-flex rounded-full h-2 w-2 '+(err?'bg-red-500':'bg-green-500')+'"></span>'; rows[i].querySelector('.st').textContent=err?'✕ error':'✓ hecho'; } } };
+}
+async function subAgent(task,setStatus,contract){
+  const contractBlock = contract ? '\n\n📋 CONTRATO TÉCNICO (OBLIGATORIO — todos los sub-agentes deben seguir estos nombres exactos):\n'+contract+'\n' : '';
+  const msgs=[{role:'system',content:'Eres un sub-agente. Realiza SOLO esta subtarea usando las tools del disco. Responde en '+(LANGS[curLang]||'español')+', muy breve.'},{role:'user',content:contractBlock+task}];
+  for(let s=0;s<5;s++){
+    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},signal:agentAbort.signal,
+      body:JSON.stringify({model:MODEL,messages:msgs,tools:SUBTOOLS})});
+    if(!r.ok) throw new Error('LLM '+r.status);
+    const j=await r.json(); addUsage(j.usage);
+    const mo=j.choices[0].message; msgs.push(mo);
+    if(mo.tool_calls&&mo.tool_calls.length){
+      for(const tc of mo.tool_calls){ setStatus(tc.function.name+'…'); const out=await execTool(tc.function.name,tc.function.arguments); msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
+      continue;
+    }
+    return mo.content||'';
+  }
+  return '(límite)';
+}
+async function dispatchAgents(tasks,contract){
+  if(!Array.isArray(tasks)||tasks.length<1) return 'Error: se necesitan 1-4 subtareas.';
+  tasks=tasks.slice(0,4);
+  const card=delegationCard(tasks,contract);
+  const results=await Promise.all(tasks.map((t,i)=>
+    subAgent(t,s=>card.setStatus(i,s),contract).then(r=>{card.done(i);return r;}).catch(e=>{card.done(i,true);return '(error: '+e+')';})));
+  return 'Sub-agentes terminados:\n'+tasks.map((t,i)=>(i+1)+') '+t+' => '+results[i]).join('\n');
+}
+
+function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
+
+/* ===== Flow: didactic timeline of what the agent did (prompts, tool calls, replies) ===== */
+let FLOW=(()=>{ try{ return JSON.parse(sessionStorage.getItem('flow')||'[]'); }catch(e){ return []; } })();
+function flowAdd(kind,label,detail){ FLOW.push({k:kind,l:String(label||''),d:detail,ts:Date.now()});
+  if(FLOW.length>2000) FLOW.shift(); try{ sessionStorage.setItem('flow',JSON.stringify(FLOW.slice(-2000))); }catch(e){} }
+function flowClear(){ FLOW.length=0; try{ sessionStorage.removeItem('flow'); }catch(e){} }
+// visual style per event kind: emoji, dot colour, ring colour, label
+const FLOW_META={
+  user:  {i:'🧑',dot:'bg-blue-500',   ring:'ring-blue-500/30',   v:'Tú pides'},
+  think: {i:'🧠',dot:'bg-purple-500', ring:'ring-purple-500/30', v:'El agente razona'},
+  tool:  {i:'🔧',dot:'bg-amber-500',  ring:'ring-amber-500/30',  v:'Usa una herramienta'},
+  permit:{i:'🔐',dot:'bg-orange-500', ring:'ring-orange-500/30', v:'Pide permiso'},
+  reply: {i:'🤖',dot:'bg-emerald-500',ring:'ring-emerald-500/30',v:'El agente responde'},
+  cmd:   {i:'⌨️',dot:'bg-teal-500',   ring:'ring-teal-500/30',   v:'Comando shell'},
+  slash: {i:'⚡',dot:'bg-fuchsia-500',ring:'ring-fuchsia-500/30',v:'Slash command'},
+  error: {i:'❌',dot:'bg-red-500',    ring:'ring-red-500/30',    v:'Error'} };
+const TOOL_ICON={ list_files:'📂',read_file:'📄',write_file:'✏️',delete_file:'🗑',ask_user:'❓',dispatch_agents:'👥',git:'🔀',web_search:'🔎',web_fetch:'🌐',shell:'⌨️',python:'🐍',cc:'⚙️' };
+const TOOL_VERB={ list_files:'Lista los ficheros',read_file:'Lee un fichero',write_file:'Escribe un fichero',delete_file:'Borra un fichero',ask_user:'Te pregunta',dispatch_agents:'Lanza sub-agentes',git:'Operación git',web_search:'Busca en la web',web_fetch:'Abre una URL',shell:'Ejecuta shell',python:'Ejecuta Python',cc:'Compila C' };
+// Flow = Mermaid flow diagram of what the agent did (rendered in a sandboxed iframe)
+function flowCard(){
+  const ov=el('<div class="fixed inset-0 bg-black/80 flex items-center justify-center p-3 md:p-6 z-50"></div>');
+  const box=el('<div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-5xl flex flex-col shadow-2xl" style="height:92vh"></div>');
+  const head=el('<div class="p-3 border-b border-gray-700 flex items-center justify-between shrink-0"></div>');
+  head.innerHTML='<span class="font-semibold text-gray-100 flex items-center gap-2">🔀 Flow <span class="text-[11px] text-gray-400 font-normal">'+T('— qué hizo el agente','— what the agent did')+' ('+FLOW.length+')</span></span>';
+  const hb=el('<div class="flex gap-2 shrink-0"></div>');
+  const cp=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">📋 '+T('Copiar código','Copy code')+'</button>');
+  const lk=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">🔗 mermaid.live</button>');
+  const cl=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">🗑</button>');
+  const cls=el('<button class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs">✕</button>');
+  hb.appendChild(cp); hb.appendChild(lk); hb.appendChild(cl); hb.appendChild(cls); head.appendChild(hb); box.appendChild(head);
+  const close=()=>ov.remove();
+  if(!FLOW.length){
+    const empty=el('<div class="flex-1 flex items-center justify-center text-gray-500 text-sm text-center"></div>');
+    empty.innerHTML=T('Aún no hay actividad.<br>Pídele algo al agente y vuelve aquí.','No activity yet.<br>Ask the agent to do something and come back.');
+    box.appendChild(empty); ov.appendChild(box); document.body.appendChild(ov);
+    cls.onclick=close; ov.onclick=(e)=>{ if(e.target===ov) close(); }; cl.onclick=()=>{ flowClear(); close(); }; return;
+  }
+  const code=flowToMermaid();
+  const fr=el('<iframe class="flex-1 bg-white rounded-b-xl" sandbox="allow-scripts"></iframe>');
+  const srcdoc='<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#0b1020;display:flex;justify-content:center}#d{padding:16px}</style></head><body><pre class="mermaid" id="d"></pre>'+
+    '<scr'+'ipt type="module">import m from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";document.getElementById("d").textContent='+JSON.stringify(code)+';m.initialize({startOnLoad:false,theme:"dark"});m.run();</scr'+'ipt></body></html>';
+  fr.setAttribute('srcdoc', srcdoc);
+  box.appendChild(fr); ov.appendChild(box); document.body.appendChild(ov);
+  cls.onclick=close; ov.onclick=(e)=>{ if(e.target===ov) close(); };
+  cp.onclick=async()=>{ try{ await navigator.clipboard.writeText(code); cp.textContent='✓'; }catch(e){} };
+  lk.onclick=()=>{ try{ const data=btoa(unescape(encodeURIComponent(JSON.stringify({code,mermaid:{theme:'dark'}})))); window.open('https://mermaid.live/edit#base64:'+data,'_blank'); }catch(e){} };
+  cl.onclick=()=>{ flowClear(); close(); };
+}
+// build a Mermaid flowchart from the Flow timeline
+function flowToMermaid(){
+  const MC={user:'#3b82f6',think:'#a855f7',tool:'#f59e0b',permit:'#f97316',reply:'#10b981',cmd:'#14b8a6',slash:'#d946ef',error:'#ef4444'};
+  const clean=s=>(''+s).replace(/["\\]/g,' ').replace(/[\r\n]+/g,' ').replace(/[<>]/g,'').trim();
+  const lbl=(e)=>{ const m=FLOW_META[e.k]||FLOW_META.tool; const ic=e.k==='tool'?(TOOL_ICON[e.l]||'🔧'):m.i;
+    let t=clean(e.k==='tool'?((TOOL_VERB[e.l]||e.l)):(m.v));
+    let sub='';
+    if(e.k==='tool'&&e.d){ const a=e.d.args||{}; const k=Object.keys(a)[0]; if(k) sub=(''+a[k]).slice(0,30); }
+    else if(typeof e.d==='string'&&e.d) sub=e.d.slice(0,40);
+    else if(e.l&&e.k!=='tool') sub=e.l.slice(0,40);
+    sub=clean(sub);
+    return ic+' '+t+(sub?('<br/>'+sub):''); };
+  let out='flowchart TD\n';
+  FLOW.forEach((e,i)=>{ out+='  n'+i+'["'+lbl(e)+'"]\n'; });
+  for(let i=0;i<FLOW.length-1;i++) out+='  n'+i+' --> n'+(i+1)+'\n';
+  FLOW.forEach((e,i)=>{ const c=MC[e.k]||'#6b7280'; out+='  style n'+i+' fill:'+c+'22,stroke:'+c+',color:#e5e7eb\n'; });
+  return out;
+}
+/* ===== collapsible "N acciones" panel with per-tool icons + check (mockup 1) ===== */
+const SVG=(cls,b)=>'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="'+cls+'">'+b+'</svg>';
+const IC_FILE=SVG('text-blue-400 shrink-0','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
+const IC_SEARCH=SVG('text-purple-400 shrink-0','<circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>');
+const IC_TRASH=SVG('text-red-400 shrink-0','<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>');
+const IC_ASK=SVG('text-yellow-400 shrink-0','<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>');
+const IC_TERM=SVG('text-emerald-400 shrink-0','<polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>');
+const IC_CHECK=SVG('text-green-500 shrink-0','<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>');
+const IC_X=SVG('text-red-500 shrink-0','<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>');
+const IC_CHEV=SVG('mr-1.5','<polyline points="6 9 12 15 18 9"></polyline>');
+function toolMeta(n){ return ({
+  list_files:{v:'Listando',i:IC_SEARCH,a:''}, read_file:{v:'Leyendo',i:IC_FILE,a:'path'},
+  write_file:{v:'Escribiendo',i:IC_FILE,a:'path'}, delete_file:{v:'Borrando',i:IC_TRASH,a:'path'},
+  ask_user:{v:'Preguntando',i:IC_ASK,a:'question'},
+  web_search:{v:'Buscando',i:IC_SEARCH,a:'query'}, web_fetch:{v:'Abriendo',i:IC_SEARCH,a:'url'},
+  git:{v:'git',i:IC_FILE,a:'action'}, dispatch_agents:{v:'Delegando',i:IC_FILE,a:''}, shell:{v:'Shell',i:IC_TERM,a:'command'}, python:{v:'Python',i:IC_TERM,a:''}, cc:{v:'clang',i:IC_TERM,a:''} }[n]||{v:n,i:IC_FILE,a:''}); }
+let curPanel=null;
+function actionPanel(){ const p=el('<div class="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden max-w-[90%]"></div>');
+  const btn=el('<button class="w-full flex items-center p-2.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-700"></button>');
+  btn.innerHTML=IC_CHEV+'<span class="count font-medium">Acciones</span>';
+  const body=el('<div class="p-3 border-t border-gray-700 space-y-3 text-xs"></div>');
+  btn.onclick=()=>{ body.style.display=body.style.display==='none'?'':'none'; };
+  p.appendChild(btn); p.appendChild(body); p._body=body; p._btn=btn; p._n=0; chat().appendChild(p); return p; }
+function addActionRow(name,args){ if(!curPanel)curPanel=actionPanel(); const m=toolMeta(name);
+  const row=el('<div class="flex items-center text-gray-300"></div>'); const ic=el('<span class="mr-2.5"></span>'); ic.innerHTML=m.i;
+  const txt=el('<span class="flex-1 min-w-0 truncate"></span>'); const verb=document.createElement('span'); verb.textContent=m.v+' ';
+  const code=el('<code class="px-1.5 py-0.5 rounded border border-gray-800 bg-gray-900 text-pink-400 break-all"></code>');
+  code.textContent=(args&&(args[m.a]||args.path||args.query||args.question))||''; txt.appendChild(verb); txt.appendChild(code);
+  const chk=el('<span class="ml-2 shrink-0 text-gray-500 animate-pulse">●</span>'); row.appendChild(ic); row.appendChild(txt); row.appendChild(chk);
+  curPanel._body.appendChild(row); down(); return {chk}; }
+function markDone(ref,err){ if(ref){ ref.chk.innerHTML=err?IC_X:IC_CHECK; ref.chk.classList.remove('animate-pulse','text-gray-500'); }
+  if(curPanel){ curPanel._n++; curPanel._btn.querySelector('.count').textContent=curPanel._n+(curPanel._n===1?' accion completada':' acciones completadas'); } }
+
+/* ===== permit/reject gate (mockup 1) ===== */
+let autoApprove=false;
+function askPermit(action,detail){ if(autoApprove) return Promise.resolve(true);
+  return new Promise(res=>{
+    const card=el('<div class="bg-[#2a1f0c] border border-yellow-700/50 p-3 rounded-lg max-w-[90%]"></div>');
+    const head=el('<div class="flex items-start gap-2 mb-2"></div>');
+    head.innerHTML=SVG('text-yellow-500 shrink-0 mt-0.5','<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>');
+    const tx=document.createElement('div'); tx.innerHTML='<h4 class="text-yellow-500 text-sm font-semibold">Requiere confirmación</h4>';
+    const p=document.createElement('p'); p.className='text-xs text-gray-300 mt-1'; p.textContent='El agente desea '+action+': ';
+    const c=document.createElement('code'); c.className='text-yellow-200 bg-yellow-900/40 px-1 rounded break-all'; c.textContent=detail; p.appendChild(c);
+    tx.appendChild(p); head.appendChild(tx); card.appendChild(head);
+    const btns=el('<div class="flex gap-2"></div>');
+    const ok=el('<button class="flex-1 bg-yellow-600 hover:bg-yellow-500 text-white text-xs py-2 rounded">Permitir Ejecución</button>');
+    const al=el('<button class="bg-yellow-700/40 hover:bg-yellow-700/60 text-yellow-100 text-xs py-2 px-2 rounded">Siempre</button>');
+    const no=el('<button class="flex-1 bg-gray-700 hover:bg-gray-600 text-white text-xs py-2 rounded">Rechazar</button>');
+    const dis=()=>btns.querySelectorAll('button').forEach(b=>b.disabled=true);
+    ok.onclick=()=>{ dis(); flowAdd('permit',action+': '+detail,'✓ permitido'); res(true); }; al.onclick=()=>{ autoApprove=true; dis(); flowAdd('permit',action+': '+detail,'✓ siempre'); res(true); }; no.onclick=()=>{ dis(); flowAdd('permit',action+': '+detail,'✗ rechazado'); res(false); };
+    btns.appendChild(ok); btns.appendChild(al); btns.appendChild(no); card.appendChild(btns); chat().appendChild(card); down();
+  }); }
+
+let agentAbort=null;
+let AGENT_WAITING=false;      // last agent turn ended asking the user something (pauses /run)
+let workN=0;                  // blink the 😎 icon while Agents is working
+let tStart=0, tTimer=null, tOutTok=0;   // live timer + token flow
+function kfmt(n){ n=n||0; return n>=1000? (n/1000).toFixed(1)+'k' : String(Math.round(n)); }
+function updStatus(){ const el=document.getElementById('status'); if(!el)return; const s=(Date.now()-tStart)/1000; const tps=s>0?tOutTok/s:0;
+  el.textContent='⏱ '+s.toFixed(1)+'s · ⬆'+kfmt(usage.pin)+' ⬇'+kfmt(usage.pout)+(tOutTok?(' · '+Math.round(tps)+' tok/s'):''); }
+function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getElementById('agi'); if(e) e.classList.toggle('blink',workN>0);
+  const st=document.getElementById('status');
+  if(workN>0 && !tTimer){ tStart=Date.now(); tOutTok=0; if(st)st.classList.remove('hidden'); updStatus(); tTimer=setInterval(updStatus,200); }
+  else if(workN===0 && tTimer){ clearInterval(tTimer); tTimer=null; updStatus(); setTimeout(()=>{ if(workN===0&&st)st.classList.add('hidden'); },5000); } }
+let MODEL=(()=>{ try{ return localStorage.getItem('model')||'deepseek-v4-flash'; }catch(e){ return 'deepseek-v4-flash'; } })();
+let THINK=(()=>{ try{ return localStorage.getItem('think')==='1'; }catch(e){ return false; } })();  // V4 thinking mode (supports tools)
+function toggleThink(){ THINK=!THINK; try{localStorage.setItem('think',THINK?'1':'0');}catch(e){}
+  const b=document.getElementById('thinkbtn'); if(b) b.classList.toggle('bg-purple-700', THINK);
+  tool('Razonamiento: '+(THINK?'ON (thinking mode '+MODEL+')':'OFF')); }
+function thinkingLive(){ const d=el('<div class="pl-4 border-l-2 border-purple-500 text-xs text-gray-400 italic py-1 max-w-[90%] whitespace-pre-wrap"></div>'); chat().appendChild(d); down(); return d; }
+const LANGS={es:'español',en:'English',fr:'français',de:'Deutsch',pt:'português',it:'italiano'};
+const LORD=['es','en','fr','de','pt','it'];
+function T(){ const a=arguments, i=Math.max(0,LORD.indexOf(curLang)); return a[i]||a[1]||a[0]; }   // pick by lang; fallback en, then es
+const LANGCC={es:'es',en:'gb',fr:'fr',de:'de',pt:'pt',it:'it'};   // flag country code
+let curLang=(()=>{ try{ return localStorage.getItem('lang')||'es'; }catch(e){ return 'es'; } })();
+function flagUrl(code){ return 'flags/'+(LANGCC[code]||'es')+'.png'; }   // same-origin (COEP-safe)
+function renderLangBtn(){ const f=document.getElementById('langflag'), c=document.getElementById('langcode');
+  if(f) f.src=flagUrl(curLang); if(c) c.textContent=curLang.toUpperCase(); }
+function buildLangMenu(){ const m=document.getElementById('langmenu'); if(!m) return; m.innerHTML='';
+  Object.keys(LANGS).forEach(code=>{ const b=el('<button class="flex items-center gap-2 w-full text-left px-2 py-1.5 text-xs hover:bg-gray-700"></button>');
+    const img=document.createElement('img'); img.src=flagUrl(code); img.className='w-4 h-3 object-cover rounded-[1px]';
+    const sp=document.createElement('span'); sp.textContent=code.toUpperCase()+' · '+LANGS[code];
+    b.appendChild(img); b.appendChild(sp); b.onclick=()=>{ setLang(code); m.classList.add('hidden'); }; m.appendChild(b); }); }
+function toggleLangMenu(e){ if(e)e.stopPropagation(); const m=document.getElementById('langmenu'); if(m) m.classList.toggle('hidden'); }
+document.addEventListener('click',()=>{ const m=document.getElementById('langmenu'); if(m) m.classList.add('hidden'); });
+function setLang(v){ curLang=v; try{ localStorage.setItem('lang',v); }catch(e){} renderLangBtn(); tool('Idioma: '+(LANGS[v]||v)); }
+function saveSession(){ try{ localStorage.setItem('convo',JSON.stringify(convo)); localStorage.setItem('usage',JSON.stringify(usage)); }catch(e){} }
+function restoreSession(){ try{
+  const su=JSON.parse(localStorage.getItem('usage')||'null'); if(su) usage={pin:su.pin||0,pout:su.pout||0,phit:su.phit||0};
+  const sc=JSON.parse(localStorage.getItem('convo')||'[]');
+  if(sc.length){ sc.forEach(m=>{ convo.push(m); if(m.role==='user') user(m.content); else if(m.role==='assistant') bot(md(m.content)); });
+    tool('↻ Sesión restaurada ('+sc.length+' mensajes). Ctrl+K para limpiar.'); return true; }
+}catch(e){} return false; }
+let lastPlan=null;            // last generated plan (steps[]) -> /plan with no arg shows it
+const convo=[];              // running conversation, used to invent a plan from context
+let loopStop=false;
+let btwPending=null;   // user interjection injected between agent actions (/btw)
+function stopLoop(){ loopStop=true; if(agentAbort) agentAbort.abort(); }
+/* ---- disk snapshot / rollback (abort) ---- */
+async function snapshotDisk(){ const m={}; for(const f of await fsList()) m[f.path]=f.content; return m; }
+async function restoreDisk(snap){ if(!snap) return; const now=await fsList(); const nowP=new Set(now.map(f=>f.path));
+  for(const f of now){ if(!(f.path in snap)) await fsDel(f.path); else if(snap[f.path]!==f.content) await fsPut(f.path, snap[f.path]); }
+  for(const p in snap){ if(!nowP.has(p)) await fsPut(p, snap[p]); } refreshDisk(); }
+/* ---- context window monitor (#2) ---- */
+const CTX_LIMIT=128000; let lastCtxWarn=0;
+function ctxTokens(){ let c=0; for(const m of convo) c+=(m.content||'').length; return Math.round(c/4); }
+function checkContext(){ const u=ctxTokens(); if(u>0.85*CTX_LIMIT && u>lastCtxWarn*1.15){ lastCtxWarn=u; contextCard(u,CTX_LIMIT); } }
+function contextCard(used,limit){ const pct=Math.min(100,Math.round(used/limit*100));
+  const c=el('<div class="bg-[#2a1a15] border border-orange-900/50 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex items-start mb-3"><div class="bg-orange-900/40 p-1.5 rounded-lg mr-2.5 mt-0.5 border border-orange-800/50">'+SVG('text-orange-500','<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>')+'</div><div class="w-full"><h4 class="text-orange-400 text-sm font-semibold">'+T('Ventana de Contexto Crítica','Context Window Critical')+'</h4><div class="mt-2.5 w-full"><div class="flex justify-between text-[10px] text-gray-400 mb-1 font-mono"><span>'+used.toLocaleString()+' / '+limit.toLocaleString()+' tkns</span><span class="text-orange-400">'+pct+'%</span></div><div class="h-1.5 w-full bg-gray-950 rounded-full overflow-hidden border border-gray-800"><div class="h-full bg-gradient-to-r from-orange-500 to-red-500" style="width:'+pct+'%"></div></div></div></div></div>';
+  const p=document.createElement('p'); p.className='text-xs text-orange-200/70 mb-3'; p.textContent=T('La memoria se está llenando. Comprime o limpia para no perder contexto.','Memory is filling up. Compress or clear to avoid losing context.'); c.appendChild(p);
+  const btns=el('<div class="flex gap-2"></div>'); const b1=el('<button class="flex-1 bg-orange-700/80 hover:bg-orange-600 text-white text-xs py-2 rounded-md">📦 '+T('Comprimir Memoria','Compress Memory')+'</button>'); b1.onclick=()=>runCmd('/compact');
+  const b2=el('<button class="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs px-3 py-2 rounded-md border border-gray-600">'+T('Limpiar','Clear')+' (/clear)</button>'); b2.onclick=()=>runCmd('/clear');
+  btns.appendChild(b1); btns.appendChild(b2); c.appendChild(btns); chat().appendChild(c); down();
+}
+/* ---- aborted-execution card (#3) ---- */
+function abortCard(reverted){ const c=el('<div class="bg-gray-900 border border-red-900/60 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex items-center justify-between border-b border-red-900/30 pb-3 mb-3"><div class="flex items-center gap-2"><div class="bg-red-500/20 text-red-500 p-1 rounded-md">'+SVG('','<rect x="3" y="3" width="18" height="18" rx="2"></rect>')+'</div><h4 class="text-sm font-bold text-red-400 uppercase tracking-wide">'+T('Ejecución Abortada','Execution Aborted')+'</h4></div><span class="text-[9px] bg-red-950/50 text-red-300 px-1.5 py-0.5 rounded font-mono border border-red-900/50">SIGINT</span></div><p class="text-xs text-gray-400 mb-3">'+T('El turno se interrumpió manualmente. La generación en curso se descartó.','The turn was interrupted manually. The in-flight generation was discarded.')+'</p>';
+  if(reverted){ const r=el('<div class="bg-red-950/20 border border-red-900/30 rounded p-2.5 flex items-start gap-2.5"></div>'); r.innerHTML=SVG('text-green-500 mt-0.5 shrink-0','<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path>')+'<div><span class="text-[11px] font-medium text-gray-300 block mb-0.5">'+T('Workspace revertido','Workspace reverted')+'</span><span class="text-[10px] text-gray-500 block">'+T('Los ficheros modificados en este turno volvieron a su estado previo.','Files modified this turn were restored.')+'</span></div>'; c.appendChild(r); }
+  chat().appendChild(c); down();
+}
+function stopAgent(){ loopStop=true; if(agentAbort){ agentAbort.abort(); tool('Detenido.'); } }
+async function copyChat(){ const txt=(document.getElementById('chat').innerText||'').trim();
+  try{ await navigator.clipboard.writeText(txt); tool(T('📋 Conversación copiada (','📋 Conversation copied (')+txt.length+' '+T('caracteres)','chars)')); }
+  catch(e){ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(e2){} ta.remove(); tool('📋 '+T('copiado','copied')); } }
+function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; flowClear(); try{localStorage.removeItem('convo');}catch(e){} }
+
+// Streamed chat completion (SSE). Updates `wait` live with the text as it arrives;
+// assembles tool_calls across deltas. Returns {content, tool_calls, usage}.
+async function streamChat(msgs, wait){
+  const body={model:MODEL,messages:msgs,tools:TOOLS,stream:true};   // V4 thinking supports tools
+  if(THINK) body.thinking={type:'enabled'};
+  const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},
+    signal:agentAbort.signal, body:JSON.stringify(body)});
+  if(!r.ok||!r.body) throw new Error('LLM '+r.status);
+  const reader=r.body.getReader(), dec=new TextDecoder(); let buf='', content='', reasoning='', usg=null, reasonBox=null; const tcs=[];
+  while(true){ const {done,value}=await reader.read(); if(done)break;
+    buf+=dec.decode(value,{stream:true}); let nl;
+    while((nl=buf.indexOf('\n'))>=0){ const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+      if(!line.startsWith('data:'))continue; const data=line.slice(5).trim(); if(data==='[DONE]')continue;
+      let j; try{ j=JSON.parse(data); }catch(e){ continue; }
+      if(j.usage)usg=j.usage;
+      const d=j.choices&&j.choices[0]&&j.choices[0].delta; if(!d)continue;
+      if(d.reasoning_content){ reasoning+=d.reasoning_content; tOutTok+=d.reasoning_content.length/4; if(!reasonBox){ if(wait){wait.remove(); wait=null;} reasonBox=thinkingLive(); } reasonBox.textContent='🧠 '+reasoning; down(); }
+      if(d.content){ if(!wait) wait=bot('<span class="text-gray-400">…</span>'); content+=d.content; tOutTok+=d.content.length/4; wait.innerHTML=md(content); down(); }
+      if(d.tool_calls)for(const t of d.tool_calls){ const i=t.index||0; tcs[i]=tcs[i]||{id:'',type:'function',function:{name:'',arguments:''}};
+        if(t.id)tcs[i].id=t.id; if(t.function){ if(t.function.name)tcs[i].function.name+=t.function.name; if(t.function.arguments)tcs[i].function.arguments+=t.function.arguments; } }
+    }
+  }
+  return {content, tool_calls:tcs.filter(Boolean), usage:usg, reasoning};
+}
+
+async function agent(text){
+  const key=getKey(); if(!key){ tool('Sin API key.'); return; }
+  AGENT_WAITING=false;
+  convo.push({role:'user',content:text}); curPanel=null;
+  const snap=await snapshotDisk();   // for rollback on abort
+  const skillsTxt=await activeSkillsPrompt();
+  let rulesTxt=''; try{ const rf=(await fsGet('AGENTS.md'))||(await fsGet('CLAUDE.md')); if(rf&&rf.content&&rf.content.trim()) rulesTxt='\n\nProject rules (AGENTS.md — follow them):\n'+rf.content.slice(0,4000); }catch(e){}
+  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+rulesTxt+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  agentAbort=new AbortController(); setWorking(true);
+  try{
+    let step=0, limit=14;
+    while(true){
+      if(step>=limit){
+        const ans=await askUser('Límite de '+limit+' pasos alcanzado. ¿Continuar?',[{label:'Sí, +14 pasos'},{label:'Detener'}]);
+        if(/detener|stop|^no/i.test(ans)){ tool('Detenido por el usuario.'); break; }
+        limit+=14;
+      }
+      step++;
+      if(btwPending){ msgs.push({role:'user',content:'[interjección del usuario] '+btwPending}); convo.push({role:'user',content:btwPending}); btwPending=null; }
+      let wait=bot('<span class="text-gray-400">pensando…</span>'); let res;
+      try{ res=await streamChat(msgs, wait); }
+      catch(e){ if(e.name==='AbortError'){ wait.remove(); convo.pop(); await restoreDisk(snap); abortCard(true); return; }
+        wait.remove(); convo.pop(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS de DeepSeek).',String(e),()=>agent(text)); return; }   // pop: agent(text) re-pushes it on retry
+      addUsage(res.usage);
+      const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
+      if(res.reasoning) flowAdd('think',res.reasoning.slice(0,400));
+      if(res.tool_calls.length){
+        if(!res.content) wait.remove();
+        for(const tc of res.tool_calls){ let a={}; try{a=JSON.parse(tc.function.arguments||'{}');}catch(e){}
+          const ref=addActionRow(tc.function.name,a);
+          const out=await execTool(tc.function.name,tc.function.arguments);
+          markDone(ref,/^(error|rechaz)/i.test(out));
+          msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
+        continue;
+      }
+      convo.push({role:'assistant',content:res.content||''});
+      if(res.content) flowAdd('reply',res.content.slice(0,300));
+      AGENT_WAITING=/[?¿]/.test(res.content||'');
+      if(AGENT_WAITING){ const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus(); doneLine('Esperando respuesta del usuario…'); }
+      return;
+    }
+  } finally{ setWorking(false); saveSession(); checkContext(); }
+}
+
+/* ===== shareable read-only session links: /share -> ?session=kv-<id> (worker KV), ?session=<gist-id> or #s=<deflate+b64url> ===== */
+const SHARE_WORKER='agents-proxy.antonio-fivetech.workers.dev';   // default session store (KV); /proxy overrides
+function b64urlEnc(bin){ return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function b64urlDec(t){ return atob(t.replace(/-/g,'+').replace(/_/g,'/')); }
+async function deflateB64(s){ try{
+    // 'deflate' (zlib wrapper) carries an adler32 checksum: a truncated/mangled link
+    // fails loudly on load instead of silently decompressing into garbage
+    const cs=new CompressionStream('deflate'); const w=cs.writable.getWriter(); w.write(new TextEncoder().encode(s)); w.close();
+    const buf=new Uint8Array(await new Response(cs.readable).arrayBuffer()); let b=''; for(const x of buf)b+=String.fromCharCode(x);
+    return 'z'+b64urlEnc(b);
+  }catch(e){ return 'p'+b64urlEnc(unescape(encodeURIComponent(s))); } }   // old browser: plain b64
+async function inflateB64(t){ const bin=b64urlDec(t.slice(1));
+  if(t[0]==='p') return decodeURIComponent(escape(bin));
+  const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+  const ds=new DecompressionStream(t[0]==='d'?'deflate-raw':'deflate'); const w=ds.writable.getWriter(); w.write(bytes); w.close();   // 'd' = legacy raw links
+  return await new Response(ds.readable).text(); }
+async function shareSession(){
+  if(!convo.length && !chat().children.length){ tool(T('Nada que compartir (sesión vacía).','Nothing to share (empty session).')); return; }
+  const data={v:1,lang:curLang,usage,convo};
+  // full visual transcript (terminal lines, action/diff/cost cards...) — convo alone
+  // only holds the user/assistant text messages
+  try{ const h=chat().innerHTML; if(h.length<=600000) data.chat=h; }catch(e){}
+  try{ const items=await fsList(); const disk={}; let sz=0, fits=true;
+    for(const f of items){ sz+=(f.content||'').length; if(sz>300000){ fits=false; break; } disk[f.path]=f.content||''; }
+    if(fits) data.disk=disk; }catch(e){}
+  let json=JSON.stringify(data); const base=location.origin+location.pathname; let url=null;
+  // safety net: if the DeepSeek key or GitHub token ever leaked into the conversation
+  // or a disk file, redact it before the session leaves this browser
+  try{ const secrets=[localStorage.getItem('ds_key')||'', ghTok()||''].filter(s=>s.length>8);
+    for(const s of secrets){ if(json.indexOf(s)>=0){ json=json.split(s).join('[REDACTED]'); tool(T('⚠️ Una clave aparecía en la sesión y se ha ocultado en el enlace.','⚠️ A key appeared in the session and was redacted from the link.')); } } }catch(e){}
+  { // shortest links: a Cloudflare Worker stores the session in KV (see docs/cloudflare-worker.js).
+    // Default worker = the app's own; /proxy overrides it with your own deployment.
+    const shareHost = PROXY? new URL(PROXY).host : SHARE_WORKER;
+    try{ const r=await fetch('https://'+shareHost+'/session',{method:'POST',body:json});
+      if(r.ok){ const j=await r.json(); url=base+'?session=kv-'+j.id+'&via='+encodeURIComponent(shareHost); }
+      else tool('KV: HTTP '+r.status+' — '+T('caigo a Gist/enlace #.','falling back to Gist/# link.'));
+    }catch(e){ tool('KV: '+e); } }
+  if(!url && ghTok()){
+    try{ const r=await fetch('https://api.github.com/gists',{method:'POST',headers:ghHeaders(),
+        body:JSON.stringify({description:'Agents Web — shared session',public:false,files:{'agents-session.json':{content:json}}})});
+      if(r.ok) url=base+'?session='+(await r.json()).id; else tool('gist: HTTP '+r.status);
+    }catch(e){ tool('gist: '+e); } }
+  if(!url){ url=base+'#s='+await deflateB64(json);
+    if(url.length>30000){ tool(T('Sesión demasiado grande para un enlace #. Pon un token GitHub (/ghtoken) y /share usará un Gist.','Session too big for a # link. Set a GitHub token (/ghtoken) and /share will use a Gist.')); return; } }
+  try{ await navigator.clipboard.writeText(url); }catch(e){}
+  const c=el('<div class="bg-gray-800 border border-blue-800/50 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<h4 class="text-sm font-semibold text-blue-300 mb-2">🔗 '+T('Sesión compartida (solo lectura)','Shared session (read-only)')+'</h4>';
+  const inp=el('<input readonly class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs font-mono text-gray-300">'); inp.value=url; inp.onclick=()=>inp.select();
+  const note=el('<p class="text-[10px] text-gray-500 mt-2"></p>');
+  note.textContent=T('Copiado al portapapeles. Quien abra el enlace verá la conversación','Copied to clipboard. Anyone opening the link sees the conversation')+(data.disk?T(' y el disco ('+Object.keys(data.disk).length+' ficheros).',' and the disk ('+Object.keys(data.disk).length+' files).'):'.')+(url.length>2000?' '+T('💡 Con un token GitHub (/ghtoken) el enlace sería corto (Gist).','💡 With a GitHub token (/ghtoken) the link would be short (Gist).'):'');
+  c.appendChild(inp); c.appendChild(note); chat().appendChild(c); down();
+}
+async function loadShared(){
+  let json=null;
+  try{
+    const sp=new URLSearchParams(location.search); const sid=sp.get('session');
+    if(sid && sid.startsWith('kv-')){   // short link served by the user's Cloudflare Worker (&via=<host>)
+      const host=(sp.get('via')||'').trim();
+      if(!/^[\w.-]+(:\d+)?$/.test(host)) throw new Error(T('enlace sin host válido (&via=)','link has no valid host (&via=)'));
+      const r=await fetch('https://'+host+'/session/'+encodeURIComponent(sid.slice(3)));
+      if(!r.ok) throw new Error('KV HTTP '+r.status);
+      json=await r.text(); }
+    else if(sid){ const r=await fetch('https://api.github.com/gists/'+encodeURIComponent(sid)); if(!r.ok) throw new Error('gist HTTP '+r.status);
+      const j=await r.json(); const f=j.files&&(j.files['agents-session.json']||Object.values(j.files)[0]); json=f&&f.content; }
+    else if(location.hash.startsWith('#s=')){ json=await inflateB64(location.hash.slice(3)); }
+  }catch(e){ tool(T('No se pudo cargar la sesión compartida (enlace incompleto o dañado — ¿se cortó al copiarlo?): ','Could not load the shared session (incomplete or corrupted link — was it cut when copying?): ')+e); return false; }
+  if(!json) return false;
+  let data; try{ data=JSON.parse(json); }catch(e){ tool(T('Enlace de sesión inválido.','Invalid session link.')); return false; }
+  const nf=data.disk?Object.keys(data.disk).length:0;
+  const banner=el('<div class="bg-blue-950/40 border border-blue-800/60 p-3 rounded-xl max-w-[90%] flex items-center justify-between gap-3"></div>');
+  const txt=el('<div class="text-xs text-blue-200"></div>');
+  txt.textContent='👁 '+T('Sesión compartida (solo lectura). Tu sesión local no se ha tocado.','Shared session (read-only). Your local session is untouched.')+(nf?(' '+T('Incluye '+nf+' ficheros — Importar para verlos en el disco.','Includes '+nf+' files — Import to get them on the disk.')):'');
+  const btn=el('<button class="shrink-0 bg-blue-700 hover:bg-blue-600 text-white text-xs px-3 py-1.5 rounded">'+T('Importar','Import')+'</button>');
+  btn.onclick=async()=>{ btn.disabled=true; convo.length=0; (data.convo||[]).forEach(m=>convo.push(m)); if(data.usage)usage=data.usage; saveSession();
+    if(data.disk){ for(const p in data.disk) await fsPut(p,data.disk[p]); refreshDisk(); }
+    tool(T('Sesión importada; ya puedes continuarla.','Session imported; you can continue it now.')); };
+  banner.appendChild(txt); banner.appendChild(btn); chat().appendChild(banner);
+  if(data.chat && window.DOMPurify){   // full transcript (sanitized: scripts/handlers stripped, cards stay visible)
+    const box=document.createElement('div'); box.className='space-y-4'; box.innerHTML=DOMPurify.sanitize(data.chat); chat().appendChild(box);
+  } else {
+    (data.convo||[]).forEach(m=>{ if(m.role==='user') user(m.content); else if(m.role==='assistant') bot(md(m.content)); });
+  }
+  tool(T('Fin de la sesión compartida.','End of shared session.'));
+  down(); return true;
+}
+
+/* ===================== slash commands (como en la app Agents) ===================== */
+async function slashCmd(v){
+  const sp=v.indexOf(' '); const cmd=(sp<0?v:v.slice(0,sp)).toLowerCase(); const arg=sp<0?'':v.slice(sp+1).trim();
+  switch(cmd){
+    case '/help': helpCard(); break;
+    case '/clear': clearChat(); clearDivider(); break;
+    case '/cost': costCard(usage); break;
+    case '/compact': await compactNow(); break;
+    case '/init': { const p='AGENTS.md'; const ex=await fsGet(p); if(!ex) await fsPut(p,'# Reglas del proyecto\n\n- Estilo de codigo: ...\n- No tocar: ...\n- Tests: ...\n'); refreshDisk(); initCard(p); break; }
+    case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool(T('API key guardada en este navegador.','API key saved in this browser.')); } else tool(T('Uso: /key <api-key>','Usage: /key <api-key>')); break;
+    case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool(T('Token de GitHub puesto (push/pull).','GitHub token set (push/pull).')); } else tool(T('Uso: /ghtoken <token>','Usage: /ghtoken <token>')); break;
+    case '/goal': { const g=arg||localStorage.getItem('goal')||'Explorar y organizar los ficheros del disco virtual con ayuda de la IA, y sincronizarlos con GitHub.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
+    case '/plan':
+      if(arg){ await planReal(arg); }                          // explicit task
+      else if(lastPlan){ planCard(lastPlan); tool('(plan actual)'); }   // show current
+      else { await planReal(null); }                            // invent from goal/conversation
+      break;
+    case '/loop': { if(!arg){ loopCard({iter:3,max:15,cmds:8}); tool(T('Uso: /loop <objetivo> [maxIter]  — ej: /loop crea un README y documenta el disco 8','Usage: /loop <goal> [maxIter]  — e.g.: /loop create a README and document the disk 8')); break; }
+      const mm=arg.match(/^(.*?)\s+(\d+)$/); const goal=mm?mm[1]:arg, mx=mm?parseInt(mm[2]):10; await loopRun(goal, mx); break; }
+    case '/run': await executePlan(lastPlan); break;
+    case '/proxy': if(arg){ setProxy(arg); tool(T('Proxy CORS: ','CORS proxy: ')+PROXY+' '+T('(git smart-http + binarios)','(git smart-http + binaries)')); } else tool(PROXY?('proxy: '+PROXY):T('Sin proxy. Uso: /proxy <url-del-worker>. Ver docs/cloudflare-worker.js','No proxy. Usage: /proxy <worker-url>. See docs/cloudflare-worker.js')); break;
+    case '/clone': await gitClone(arg||GIT_REPO||document.getElementById('ghrepo').value.trim()||'FiveTechSoft/Agents'); break;
+    case '/git': await gitCmd(arg); break;
+    case '/share': await shareSession(); break;
+    case '/skill': await skillCmd(arg); break;
+    case '/tool': await toolCmd(arg); break;
+    case '/sh': case '/shell': case '/bash': { const cwd=SHCWD; const out=await shRun(arg); termLine(arg||'', out, cwd); break; }
+    case '/btw': { const note=arg||T('¿Qué estás haciendo ahora y por qué? Resúmelo en una frase y continúa.','What are you doing right now and why? One sentence, then continue.');
+      if(workN>0){ btwPending=note; user('💬 '+(arg||T('¿Qué estás haciendo?','What are you doing?'))); tool(T('Enviado al agente; responderá entre acciones, sin interrumpir.','Sent to the agent; it will answer between actions, without interrupting.')); }
+      else { await agent(note); } break; }
+    case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
+    case '/cc': { setWorking(true); const isFiles=/\.(c|cpp|cc|cxx)(\s|$)/i.test(arg); const out = isFiles? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(isFiles?arg:'‹code›'), out, SHCWD); break; }
+    default: tool(T('Comando desconocido: ','Unknown command: ')+cmd+'. '+T('Prueba /help.','Try /help.'));
+  }
+}
+
+function goalCard(text){
+  const c=el('<div class="bg-gradient-to-br from-indigo-900/40 to-gray-800 border border-indigo-500/50 p-4 rounded-xl relative overflow-hidden max-w-[90%]"></div>');
+  c.innerHTML='<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="absolute -right-4 -bottom-4 text-indigo-500/10"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>'+
+    '<div class="flex items-start gap-3 relative z-10"><div class="p-2 bg-indigo-500/20 text-indigo-400 rounded-lg shrink-0 mt-0.5"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg></div>'+
+    '<div><h4 class="text-indigo-300 font-semibold text-xs uppercase tracking-wider mb-1">Objetivo Activo</h4><p class="text-gray-200 leading-relaxed gt"></p></div></div>';
+  c.querySelector('.gt').textContent=text; chat().appendChild(c); down();
+}
+let curPlanCard=null;
+function cycleState(s){ s.state = s.state==='pending'?'active':(s.state==='active'?'done':'pending'); }
+function planCard(steps){
+  steps=steps||[]; lastPlan=steps; const done=steps.filter(s=>s.state==='done').length;
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700"><h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-blue-400"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>Plan de Accion</h4><span class="text-[10px] bg-blue-900/50 text-blue-300 px-2 py-1 rounded font-medium">'+done+' / '+steps.length+' Completado</span></div><div class="pb space-y-4 relative before:absolute before:inset-0 before:ml-2.5 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-green-500 before:via-blue-500 before:to-gray-700"></div>';
+  const body=c.querySelector('.pb');
+  steps.forEach((s,idx)=>{ let dot,cls;
+    if(s.state==='done'){ dot='<div class="dot h-5 w-5 rounded-full bg-green-500 border-4 border-gray-800 flex items-center justify-center shrink-0 z-10 cursor-pointer"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg></div>'; cls='text-xs font-semibold text-gray-300 line-through'; }
+    else if(s.state==='active'){ dot='<div class="dot h-5 w-5 rounded-full bg-blue-500 border-4 border-gray-800 shrink-0 z-10 animate-pulse cursor-pointer"></div>'; cls='text-xs font-semibold text-blue-400'; }
+    else { dot='<div class="dot h-5 w-5 rounded-full bg-gray-700 border-4 border-gray-800 shrink-0 z-10 cursor-pointer"></div>'; cls='text-xs font-medium text-gray-500'; }
+    const row=el('<div class="relative flex items-start gap-3"><div class="shrink-0">'+dot+'</div><div class="pt-0.5 flex-1 min-w-0 flex items-start gap-2"><h5 class="'+cls+' flex-1 outline-none focus:bg-gray-900 focus:px-1 focus:rounded" contenteditable="true"></h5><button class="edt text-blue-400 hover:text-blue-300 text-xs shrink-0" title="Editar">✎</button><button class="del text-red-400 hover:text-red-300 text-xs shrink-0" title="Borrar">✕</button></div></div>');
+    const h5=row.querySelector('h5'); h5.textContent=s.title||'';
+    h5.onblur=()=>{ s.title=h5.textContent.trim(); };
+    h5.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); h5.blur(); } };
+    row.querySelector('.dot').onclick=()=>{ cycleState(s); planCard(steps); };
+    row.querySelector('.edt').onclick=()=>{ h5.focus(); const r=document.createRange(); r.selectNodeContents(h5); const sl=getSelection(); sl.removeAllRanges(); sl.addRange(r); };
+    row.querySelector('.del').onclick=()=>{ steps.splice(idx,1); planCard(steps); };
+    if(s.note){ const p=document.createElement('p'); p.className='text-[10px] text-gray-400 mt-1'; p.textContent=s.note; row.querySelector('.pt-0\\.5').appendChild(p); }
+    body.appendChild(row); });
+
+  const add=document.createElement('button'); add.className='mt-3 w-full bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs py-1.5 rounded border border-dashed border-gray-600';
+  add.textContent='+ Añadir paso'; add.onclick=()=>{ steps.push({title:'Nuevo paso',state:'pending'}); planCard(steps); };
+  c.appendChild(add);
+  if(steps.length){ const run=document.createElement('button'); run.className='mt-2 w-full bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded';
+    run.textContent='▶ Ejecutar plan'; run.onclick=()=>executePlan(steps); c.appendChild(run); }
+
+  if(curPlanCard && curPlanCard.isConnected){ curPlanCard.replaceWith(c); } else { chat().appendChild(c); }
+  curPlanCard=c; down();
+}
+
+// Run the plan step by step: each step goes to the agent WITH the plan as context;
+// if the agent ends a step asking the user something, the run pauses there.
+async function executePlan(steps){
+  if(!steps||!steps.length){ tool('No hay plan. Usa /plan primero.'); return; }
+  const goal=localStorage.getItem('goal')||'';
+  const planTxt=steps.map((s,k)=>(k+1)+'. '+s.title).join('\n');
+  const start=steps.findIndex(s=>s.state!=='done');
+  for(let i=(start<0?0:start);i<steps.length;i++){
+    steps.forEach((s,k)=>{ s.state = k<i?'done':(k===i?'active':'pending'); });
+    planCard(steps);                       // show progress
+    tool('▶ Paso '+(i+1)+'/'+steps.length+': '+steps[i].title);
+    await agent((goal?('Objetivo: '+goal+'\n'):'')+'Plan en curso:\n'+planTxt+'\n\nEjecuta SOLO el paso '+(i+1)+': "'+steps[i].title+'". Los pasos anteriores ya están hechos (su resultado está en la conversación/disco). No preguntes salvo bloqueo real.');
+    if(AGENT_WAITING){ planCard(steps); tool('⏸ Plan pausado en el paso '+(i+1)+': el agente espera tu respuesta. Contesta y usa /run para continuar.'); return; }
+    steps[i].state='done';
+  }
+  steps.forEach(s=>s.state='done'); lastPlan=steps; planCard(steps); tool('✓ Plan completado.');
+}
+
+function loopCard(d){ d=d||{};
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-4 flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-orange-400"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.5"></path></svg>Telemetria del Bucle</h4>'+
+    '<div class="grid grid-cols-2 gap-3 mb-4"><div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-gray-100">'+(d.iter||0)+' <span class="text-xs text-gray-500 font-normal">/ '+(d.max||0)+'</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Iteracion Actual</div></div>'+
+    '<div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-orange-400">'+(d.cmds||0)+' <span class="text-xs text-gray-500 font-normal">cmds</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Limite Autonomo</div></div></div>'+
+    '<div class="flex items-center justify-between bg-gray-900 p-2.5 rounded border border-gray-700"><div class="flex items-center gap-2"><span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500"></span></span><span class="text-xs text-gray-300">Bucle en ejecucion</span></div><button onclick="stopAgent()" class="text-[10px] bg-red-900/50 text-red-300 hover:bg-red-800/60 px-2 py-1 rounded border border-red-800/50">Interrumpir</button></div>';
+  chat().appendChild(c); down();
+}
+// live telemetry card for a running autonomous loop
+function liveLoopCard(maxIter){
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-4 flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-orange-400"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.5"></path></svg>Telemetria del Bucle</h4>'+
+    '<div class="grid grid-cols-2 gap-3 mb-4"><div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-gray-100"><span class="li">0</span> <span class="text-xs text-gray-500 font-normal">/ '+maxIter+'</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Iteracion Actual</div></div>'+
+    '<div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-center"><div class="text-2xl font-bold text-orange-400"><span class="lc">0</span> <span class="text-xs text-gray-500 font-normal">cmds</span></div><div class="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Comandos</div></div></div>'+
+    '<div class="flex items-center justify-between bg-gray-900 p-2.5 rounded border border-gray-700"><div class="flex items-center gap-2"><span class="ldot relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500"></span></span><span class="lstxt text-xs text-gray-300">Bucle en ejecucion</span></div><button class="lstop text-[10px] bg-red-900/50 text-red-300 hover:bg-red-800/60 px-2 py-1 rounded border border-red-800/50">Interrumpir</button></div>';
+  chat().appendChild(c); down(); c.querySelector('.lstop').onclick=()=>stopLoop();
+  return { setIter:n=>{c.querySelector('.li').textContent=n;}, setCmds:n=>{c.querySelector('.lc').textContent=n;},
+    setState:s=>{ c.querySelector('.ldot').innerHTML='<span class="relative inline-flex rounded-full h-2.5 w-2.5 '+(s==='done'?'bg-green-500':s==='run'?'bg-orange-500':'bg-gray-500')+'"></span>'; c.querySelector('.lstxt').textContent=({done:'Completado',stopped:'Interrumpido',limit:'Limite alcanzado',run:'Bucle en ejecucion'})[s]||s; c.querySelector('.lstop').disabled=(s!=='run'); } };
+}
+// real autonomous loop: keep running the agent toward a goal until DONE / limit / stop
+async function loopRun(goal, maxIter){
+  if(!getKey()){ tool('Sin API key (/key).'); return; }
+  maxIter=maxIter||10; loopStop=false; curPanel=null;
+  const card=liveLoopCard(maxIter); setWorking(true);
+  const msgs=[{role:'system',content:'Eres Agents Web en modo BUCLE AUTONOMO. Responde en '+(LANGS[curLang]||'español')+'. Objetivo: '+goal+'. En cada turno AVANZA usando las tools del disco/shell/web. NO pidas confirmacion. Cuando el objetivo este COMPLETO responde una linea que empiece exactamente con "DONE".'},{role:'user',content:'Empieza a trabajar en el objetivo.'}];
+  let iter=0, cmds=0;
+  try{
+    while(iter<maxIter && !loopStop){
+      iter++; card.setIter(iter); agentAbort=new AbortController();
+      if(btwPending){ msgs.push({role:'user',content:'[interjección del usuario] '+btwPending}); btwPending=null; }
+      let wait=bot('<span class="text-gray-400">iteración '+iter+'…</span>'); let res;
+      try{ res=await streamChat(msgs, wait); }catch(e){ if(e.name==='AbortError'){ wait.innerHTML='(detenido)'; break; } wait.remove(); errorCard('Bucle: error',String(e),'',null); break; }
+      addUsage(res.usage);
+      const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
+      if(res.tool_calls.length){
+        if(!res.content) wait.remove();
+        for(const tc of res.tool_calls){ let a={}; try{a=JSON.parse(tc.function.arguments||'{}');}catch(e){} const ref=addActionRow(tc.function.name,a); const out=await execTool(tc.function.name,tc.function.arguments); markDone(ref,/^(error|rechaz)/i.test(out)); msgs.push({role:'tool',tool_call_id:tc.id,content:out}); cmds++; card.setCmds(cmds); }
+        msgs.push({role:'user',content:'Continúa. Si el objetivo ya está completo responde DONE.'}); continue;
+      }
+      if(/^\s*DONE\b/i.test(res.content||'')){ card.setState('done'); tool('✓ Bucle completado en '+iter+' iteraciones, '+cmds+' comandos.'); setWorking(false); curPanel=null; saveSession(); return; }
+      msgs.push({role:'user',content:'Sigue avanzando hacia el objetivo. Si ya está completo responde DONE.'});
+    }
+    card.setState(loopStop?'stopped':'limit'); tool(loopStop?'Bucle interrumpido.':'Bucle: límite de '+maxIter+' iteraciones.');
+  } finally{ setWorking(false); curPanel=null; saveSession(); }
+}
+/* ---- line diff (LCS) + colored diff card ---- */
+function diffLines(a,b){ a=(a||'').split('\n'); b=(b||'').split('\n');
+  const n=a.length,m=b.length, C=Array.from({length:n+1},()=>new Array(m+1).fill(0));
+  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--) C[i][j]=a[i]===b[j]?C[i+1][j+1]+1:Math.max(C[i+1][j],C[i][j+1]);
+  const out=[]; let i=0,j=0;
+  while(i<n&&j<m){ if(a[i]===b[j]){ out.push({t:' ',x:a[i]}); i++;j++; }
+    else if(C[i+1][j]>=C[i][j+1]){ out.push({t:'-',x:a[i]}); i++; } else { out.push({t:'+',x:b[j]}); j++; } }
+  while(i<n) out.push({t:'-',x:a[i++]}); while(j<m) out.push({t:'+',x:b[j++]}); return out; }
+
+function diffCard(path, ops){
+  const add=ops.filter(o=>o.t==='+').length, del=ops.filter(o=>o.t==='-').length;
+  const bar=el('<div class="flex items-center justify-between bg-gray-800 border border-gray-700 p-3 rounded-lg max-w-[90%]"></div>');
+  const left=el('<div class="flex items-center gap-2"></div>');
+  left.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
+  const lbl=document.createElement('span'); lbl.className='text-sm font-medium'; lbl.textContent='Código generado: '+path; left.appendChild(lbl);
+  const btn=el('<button class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded border border-gray-600">Ver Cambios (Diff)</button>');
+  bar.appendChild(left); bar.appendChild(btn);
+  const box=document.createElement('div'); box.style.cssText='display:none;margin-top:.5rem;background:#0b1020;font-size:12px;padding:10px;border-radius:8px;overflow-x:auto;font-family:Consolas,monospace;line-height:1.35;max-width:90%';
+  const hdr=document.createElement('div'); hdr.style.cssText='color:#e5e7eb;font-weight:600;margin-bottom:4px'; hdr.textContent='Added '+add+' lines, removed '+del+' lines'; box.appendChild(hdr);
+  ops.forEach(o=>{ const r=document.createElement('div'); r.style.whiteSpace='pre-wrap';
+    if(o.t==='+'){ r.style.color='#86efac'; r.style.background='rgba(34,197,94,.18)'; r.textContent='+ '+o.x; }
+    else if(o.t==='-'){ r.style.color='#fca5a5'; r.style.background='rgba(239,68,68,.18)'; r.textContent='- '+o.x; }
+    else { r.style.color='#9ca3af'; r.textContent='  '+o.x; } box.appendChild(r); });
+  btn.onclick=()=>{ box.style.display=box.style.display==='none'?'block':'none'; down(); };
+  chat().appendChild(bar); chat().appendChild(box); down();
+}
+
+/* ===== session usage + /cost /compact /init /help cards (mockup 3) ===== */
+let usage={pin:0,pout:0,phit:0};
+function addUsage(u){ if(!u)return; usage.pin+=u.prompt_tokens||0; usage.pout+=u.completion_tokens||0; usage.phit+=u.prompt_cache_hit_tokens||0; }
+// DeepSeek pricing: $0.14/M input cache-miss, $0.0028/M input cache-HIT (98% off), $0.28/M output.
+// Agent loops re-send the conversation prefix every step (= cache hits), so billing all input
+// as cache-miss overstated the session cost several-fold.
+function estCost(u){ const hit=Math.min(u.phit||0,u.pin); return ((u.pin-hit)/1e6*0.14 + hit/1e6*0.0028 + u.pout/1e6*0.28); }
+function costCard(u){
+  const tot=u.pin+u.pout||1, pi=Math.round(u.pin/tot*100), po=100-pi;
+  const c=el('<div class="bg-gradient-to-br from-emerald-900/40 to-gray-800 border border-emerald-800/50 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex justify-between items-center mb-3"><h4 class="text-emerald-400 font-semibold flex items-center gap-2">'+
+    SVG('','<line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>')+'Métricas de Sesión</h4><span class="text-xl font-bold text-white">$'+estCost(u).toFixed(2)+'</span></div>'+
+    '<div class="space-y-2 text-xs"><div><div class="flex justify-between text-gray-400 mb-1"><span>Input (contexto)</span><span class="text-gray-200">'+u.pin.toLocaleString()+' tokens</span></div><div class="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden"><div class="h-full bg-blue-500" style="width:'+pi+'%"></div></div></div>'+
+    '<div><div class="flex justify-between text-gray-400 mb-1"><span>Output (generado)</span><span class="text-gray-200">'+u.pout.toLocaleString()+' tokens</span></div><div class="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden"><div class="h-full bg-emerald-500" style="width:'+po+'%"></div></div></div>'+
+    ((u.phit||0)>0?('<div class="flex justify-between text-[10px] text-gray-500"><span>⚡ '+T('de input, en caché (98% dto.)','of input, cached (98% off)')+'</span><span>'+u.phit.toLocaleString()+' tokens</span></div>'):'')+'</div>';
+  chat().appendChild(c); down();
+}
+function compactCard(before,after){
+  const c=el('<div class="bg-gray-800 border border-purple-800/50 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<div class="flex items-center gap-3 mb-2"><div class="p-2 bg-purple-900/50 text-purple-400 rounded-lg">'+
+    SVG('','<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>')+'</div>'+
+    '<div><h4 class="text-purple-400 font-semibold text-sm">Contexto Compactado</h4><p class="text-xs text-gray-400">Historial resumido con éxito.</p></div></div>'+
+    '<div class="mt-3 flex items-center justify-between bg-gray-900 rounded border border-gray-700 p-2 text-xs"><span class="text-red-400 line-through decoration-red-900">'+before.toLocaleString()+' tokens</span>'+
+    SVG('text-gray-500','<path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path>')+'<span class="text-green-400 font-bold">'+after.toLocaleString()+' tokens</span></div>';
+  chat().appendChild(c); down();
+}
+function initCard(path){
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-3 rounded-xl flex items-center justify-between max-w-[90%]"></div>');
+  const left=el('<div class="flex items-center gap-3"></div>'); const ic=el('<span></span>'); ic.innerHTML=IC_FILE;
+  const tx=document.createElement('div'); tx.innerHTML='<h4 class="text-sm font-semibold text-gray-200">'+path+'</h4><p class="text-[10px] text-gray-400">Reglas del proyecto inicializadas</p>';
+  left.appendChild(ic); left.appendChild(tx);
+  const btn=el('<button class="bg-gray-700 hover:bg-gray-600 text-xs px-3 py-1.5 rounded border border-gray-600 text-white">Editar</button>');
+  btn.onclick=()=>openEd(path); c.appendChild(left); c.appendChild(btn); chat().appendChild(c); down();
+}
+function clearDivider(){
+  const d=el('<div class="relative flex py-2 items-center"><div class="flex-grow border-t border-gray-700"></div><span class="mx-4 text-gray-500 text-[10px] uppercase tracking-widest font-semibold flex items-center gap-1"></span><div class="flex-grow border-t border-gray-700"></div></div>');
+  d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
+}
+function helpCard(){
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
+  const g=c.querySelector('.chc');
+  cmds.forEach(([cm,ds])=>{ const b=el('<button class="flex flex-col text-left p-2 rounded bg-gray-900 border border-gray-700 hover:border-gray-500"></button>');
+    b.innerHTML='<span class="text-blue-400 font-mono text-xs"></span><span class="text-[10px] text-gray-400 mt-0.5"></span>';
+    b.children[0].textContent=cm; b.children[1].textContent=ds; b.onclick=()=>runCmd(cm);
+    g.appendChild(b); });
+  chat().appendChild(c); down();
+}
+async function compactNow(){
+  const before=ctxTokens();
+  if(convo.length>2){ const keep=convo.slice(-2); const summary=convo.slice(0,-2).map(m=>m.role+': '+m.content).join(' | ').slice(0,1200);
+    convo.length=0; convo.push({role:'system',content:'Resumen previo: '+summary}); convo.push(...keep); }
+  saveSession(); lastCtxWarn=0;
+  compactCard(before, ctxTokens());
+}
+
+/* ===== skills: named instruction sets (disk skills/*.md + built-ins) ===== */
+const BUILTIN_SKILLS={
+  reviewer:{desc:'Revisar ficheros (bugs, mejoras)',prompt:'Actúa como revisor de código. Revisa los ficheros relevantes del disco (list_files/read_file) y reporta conciso: bugs, riesgos y mejoras priorizadas.'},
+  summarizer:{desc:'Resumir contenido',prompt:'Resume en bullets claros el contenido de los ficheros indicados (o de todo el disco si no se indica).'},
+  refactor:{desc:'Refactorizar un fichero',prompt:'Refactoriza el fichero indicado para legibilidad y simplicidad. Escribe el resultado con write_file (se verá el diff).'},
+  documenter:{desc:'Generar README',prompt:'Genera o actualiza README.md describiendo el propósito y los ficheros del disco. Guárdalo con write_file.'},
+  tester:{desc:'Proponer tests',prompt:'Propón y escribe tests para el código del disco. Crea ficheros de test con write_file.'}
+};
+async function listSkills(){
+  const disk=(await fsList()).filter(f=>/^skills\/.+\.md$/i.test(f.path)).map(f=>({name:f.path.replace(/^skills\//,'').replace(/\.md$/i,''),desc:'(skill del disco)',disk:true}));
+  const names=new Set(disk.map(d=>d.name));
+  const built=Object.keys(BUILTIN_SKILLS).filter(k=>!names.has(k)).map(k=>({name:k,desc:BUILTIN_SKILLS[k].desc}));
+  return disk.concat(built);
+}
+async function skillPrompt(name){ const f=await fsGet('skills/'+name+'.md'); if(f) return f.content; if(BUILTIN_SKILLS[name]) return BUILTIN_SKILLS[name].prompt; return null; }
+let skillsOn=(()=>{ try{ return new Set(JSON.parse(localStorage.getItem('skillson')||'[]')); }catch(e){ return new Set(); } })();
+function toggleSkill(name){ if(skillsOn.has(name)) skillsOn.delete(name); else skillsOn.add(name); try{localStorage.setItem('skillson',JSON.stringify([...skillsOn]));}catch(e){} }
+async function activeSkillsPrompt(){ if(!skillsOn.size) return ''; const out=[]; for(const n of skillsOn){ const p=await skillPrompt(n); if(p) out.push('Skill '+n+': '+p); } return out.length? '\n\nSkills activas (síguelas siempre):\n'+out.join('\n') : ''; }
+/* small toggle switch */
+function setToggle(t,on){ t.className='relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors '+(on?'bg-pink-500':'bg-gray-600'); t.firstChild.className='inline-block h-3 w-3 rounded-full bg-white transition-transform '+(on?'translate-x-3.5':'translate-x-0.5'); }
+function toggleEl(on,onClick){ const t=document.createElement('div'); t.appendChild(document.createElement('span')); setToggle(t,on); t.onclick=onClick; return t; }
+
+// /skill card — "Habilidades Activas" with per-skill on/off toggle (active skills feed the system prompt)
+function skillCard(skills){
+  const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  const head=el('<div class="flex items-center justify-between mb-4 border-b border-gray-700 pb-3"></div>');
+  head.innerHTML='<h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+SVG('text-pink-400','<path d="M12 2v20"></path><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>')+'Habilidades Activas (Skills)</h4>';
+  const nw=el('<button class="text-[10px] text-gray-400 hover:text-white bg-gray-900 border border-gray-600 px-2 py-1 rounded">+ Nueva</button>'); nw.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/skill new '; p.focus(); }; head.appendChild(nw); c.appendChild(head);
+  const body=el('<div class="space-y-3"></div>');
+  skills.forEach(s=>{ const on=skillsOn.has(s.name);
+    const row=el('<div class="flex items-start justify-between"></div>'); if(!on) row.classList.add('opacity-60');
+    const left=el('<div class="flex gap-2.5"></div>'); const ic=document.createElement('div'); ic.className='mt-0.5 '+(on?'text-pink-400':'text-gray-500'); ic.innerHTML=SVG('','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
+    const tx=document.createElement('div'); const nm=document.createElement('div'); nm.className='text-xs font-medium '+(on?'text-gray-200':'text-gray-400'); nm.textContent=s.name; const ds=document.createElement('div'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(on?'text-gray-400':'text-gray-500'); ds.textContent=s.desc; tx.appendChild(nm); tx.appendChild(ds); left.appendChild(ic); left.appendChild(tx);
+    const tg=toggleEl(on,()=>{ toggleSkill(s.name); const nv=skillsOn.has(s.name); setToggle(tg,nv); row.classList.toggle('opacity-60',!nv); ic.className='mt-0.5 '+(nv?'text-pink-400':'text-gray-500'); nm.className='text-xs font-medium '+(nv?'text-gray-200':'text-gray-400'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(nv?'text-gray-400':'text-gray-500'); });
+    tg.classList.add('mt-0.5');
+    row.appendChild(left); row.appendChild(tg); body.appendChild(row); });
+  c.appendChild(body); chat().appendChild(c); down();
+}
+async function runSkill(name,task){
+  const p=await skillPrompt(name); if(p==null){ tool(T('skill no existe: ','skill not found: ')+name+'. '+T('Escribe /skill para listar.','Type /skill to list.')); return; }
+  tool('▸ skill: '+name);
+  await agent('Sigue esta SKILL "'+name+'":\n'+p+'\n\nTarea: '+(task||'aplícala al contexto actual del disco.'));
+}
+/* ===== /tool: list the agent tools, or run one directly for testing ===== */
+function toolSafety(name){ return ['write_file','delete_file','git','dispatch_agents','shell','python','cc'].includes(name)?'warn':'safe'; }
+function toolsCard(){
+  const c=el('<div class="bg-[#1a1d24] border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
+  const head=el('<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700/50"></div>');
+  head.innerHTML='<h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+SVG('text-yellow-500','<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>')+'Registro de Herramientas</h4><span class="text-[10px] font-mono bg-gray-800 border border-gray-600 text-gray-300 px-1.5 py-0.5 rounded">'+TOOLS.length+' Disponibles</span>';
+  c.appendChild(head);
+  const grid=el('<div class="grid grid-cols-2 gap-2"></div>');
+  TOOLS.forEach(t=>{ const warn=toolSafety(t.function.name)==='warn';
+    const cell=el('<div class="bg-gray-800 border rounded p-2.5 flex flex-col cursor-pointer transition-colors '+(warn?'border-yellow-900/30 hover:border-yellow-700/50':'border-gray-700 hover:border-gray-500')+'"></div>');
+    const top=el('<div class="flex justify-between items-start mb-1.5"></div>'); const nm=document.createElement('span'); nm.className='text-xs font-mono '+(warn?'text-yellow-100':'text-gray-200'); nm.textContent=t.function.name;
+    const dot=document.createElement('span'); dot.className='h-2 w-2 rounded-full shrink-0 '+(warn?'bg-yellow-500':'bg-green-500'); dot.title=warn?'Muta estado':'Solo lectura'; top.appendChild(nm); top.appendChild(dot);
+    const ds=document.createElement('span'); ds.className='text-[10px] text-gray-400 leading-tight'; ds.textContent=t.function.description;
+    cell.appendChild(top); cell.appendChild(ds); cell.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/tool '+t.function.name+' {}'; p.focus(); }; grid.appendChild(cell); });
+  const red=el('<div class="col-span-2 bg-red-950/20 border border-red-900/40 rounded p-2.5 flex items-center justify-between"></div>');
+  const info=document.createElement('div'); info.innerHTML='<div class="flex items-center gap-2 mb-0.5"><span class="text-xs font-mono text-red-200">escritura / borrado</span><span class="text-[9px] uppercase font-bold tracking-wider text-red-400 bg-red-900/50 px-1 rounded">Requiere permiso</span></div><span class="text-[10px] text-gray-400">Mutan el disco. Piden confirmación salvo Auto-Aprobar.</span>';
+  const ap=document.createElement('div'); ap.className='flex flex-col items-center shrink-0 ml-2'; const apl=document.createElement('span'); apl.className='text-[8px] text-gray-500 mb-1 uppercase'; apl.textContent='Auto-Aprobar'; ap.appendChild(apl);
+  const tg=toggleEl(autoApprove,()=>{ autoApprove=!autoApprove; setToggle(tg,autoApprove); tool('Auto-aprobar: '+(autoApprove?'ON':'OFF')); }); ap.appendChild(tg);
+  red.appendChild(info); red.appendChild(ap); grid.appendChild(red);
+  c.appendChild(grid); chat().appendChild(c); down();
+}
+async function toolCmd(arg){
+  if(!arg){ toolsCard(); return; }
+  const sp=arg.indexOf(' '); const name=sp<0?arg:arg.slice(0,sp); const js=sp<0?'{}':arg.slice(sp+1).trim();
+  if(!TOOLS.some(t=>t.function.name===name)){ tool(T('herramienta desconocida: ','unknown tool: ')+name+'. /tool '+T('para listar.','to list.')); return; }
+  tool('▸ '+name+' '+js); const out=await execTool(name, js); tool(String(out));
+}
+async function skillCmd(arg){
+  if(!arg){ skillCard(await listSkills()); return; }
+  const sp=arg.indexOf(' '); const sub=sp<0?arg:arg.slice(0,sp); const rest=sp<0?'':arg.slice(sp+1).trim();
+  if(sub==='new'){ if(!rest){ tool('Uso: /skill new <nombre>'); return; } const path='skills/'+rest+'.md';
+    if(!(await fsGet(path))) await fsPut(path,'# Skill: '+rest+'\n\nInstrucciones para el agente…\n'); refreshDisk(); openEd(path); return; }
+  await runSkill(sub, rest);
+}
+
+async function planReal(task){
+  const key=getKey(); if(!key){ tool('Sin API key para /plan (usa /key).'); return; }
+  // task priority: explicit arg -> stored /goal -> invent from the recent conversation
+  let userContent;
+  if(task){ userContent='Tarea: '+task; }
+  else if(localStorage.getItem('goal')){ userContent='Objetivo: '+localStorage.getItem('goal'); }
+  else if(convo.length){ userContent='Basandote en esta conversacion, propon un plan para avanzar:\n'+
+        convo.slice(-8).map(m=>m.role+': '+m.content).join('\n'); }
+  else {
+    // no task, no goal, no conversation -> base the plan on the virtual disk
+    const files=await fsList();
+    if(files.length){
+      userContent='No hay objetivo definido. En el disco virtual hay estos ficheros:\n'+
+        files.map(f=>'- '+f.path+' ('+(f.content||'').length+' B)').join('\n')+
+        '\n\nPropon un plan corto y util para trabajar con estos ficheros (revisar, mejorar, organizar, generar, etc.).';
+    } else {
+      userContent='No hay objetivo, conversacion ni ficheros en el disco virtual. Propon un plan corto para arrancar algo util (crear una estructura de proyecto de ejemplo, un README, un primer fichero, etc.).';
+    }
+  }
+
+  const wait=bot('<span class="text-gray-400">generando plan…</span>'); agentAbort=new AbortController();
+  setWorking(true);
+  try{
+    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key}, signal:agentAbort.signal,
+      body:JSON.stringify({model:MODEL,messages:[
+        {role:'system',content:'You are a planner. Break the request into 3 to 6 short concrete steps. Reply ONLY with compact JSON: {"steps":[{"title":"...","state":"active|pending"}]}. First step active, the rest pending. No prose.'},
+        {role:'user',content:userContent}]})});
+    const j=await r.json(); const txt=(j.choices&&j.choices[0].message.content)||'';
+    const m=txt.match(/\{[\s\S]*\}/); let steps=[];
+    try{ steps=(JSON.parse(m?m[0]:txt).steps)||[]; }catch(e){}
+    wait.remove(); lastPlan=steps.length?steps:lastPlan; planCard(steps);
+  }catch(e){ if(e.name==='AbortError') wait.innerHTML='(detenido)'; else wait.innerHTML='Error: '+e+' (posible CORS de DeepSeek)'; }
+  finally{ setWorking(false); }
+}
+
+function toggleDisk(){ const d=document.getElementById('disk'), b=document.getElementById('backdrop');
+  const open=d.classList.contains('-translate-x-full');
+  d.classList.toggle('-translate-x-full',!open); d.classList.toggle('translate-x-0',open);
+  b.classList.toggle('hidden',!open); }
+
+// multi-line paste of COMMANDS -> run line by line (a single-line input would
+// otherwise collapse newlines into spaces and feed the shell one giant line).
+// Only when every non-empty line looks like a command; prose/code pastes stay intact.
+document.getElementById('prompt').addEventListener('paste',(e)=>{
+  const txt=(e.clipboardData||window.clipboardData).getData('text')||'';
+  const lines=txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  if(lines.length<2) return;
+  const isCmd=s=>s.startsWith('/')||s.startsWith('./')||SHELL_CMDS.has(s.split(/\s+/)[0]);
+  if(!lines.every(isCmd)) return;
+  e.preventDefault();
+  (async()=>{ const i=document.getElementById('prompt');
+    for(const ln of lines){ i.value=ln; await run(); } })();
+});
+document.getElementById('fileinp').addEventListener('change', async (e)=>{
+  for(const f of e.target.files){ const txt=await f.text(); await fsPut(f.name,txt); tool('📎 Adjuntado al disco: '+f.name+' ('+txt.length+' B)'); }
+  refreshDisk(); e.target.value=''; });
+document.addEventListener('keydown',(e)=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); clearChat(); clearDivider(); }
+  else if(e.key==='Escape'){ stopAgent(); } });
+
+buildLangMenu(); renderLangBtn();
+{ const tb=document.getElementById('thinkbtn'); if(tb&&THINK) tb.classList.add('bg-purple-700'); }
+refreshDisk();
+loadShared().then(shared=>{   // ?session= / #s= -> read-only view; otherwise restore the local session
+  if(!shared && !restoreSession()) bot(T('Bienvenido a <b>Agents Web</b>. El panel izquierdo es un <b>disco virtual</b> (IndexedDB), persistente en este navegador. Sincronizable con el repo de GitHub. Escribe <code>/help</code>... o <code>ls</code>.','Welcome to <b>Agents Web</b>. The left panel is a <b>virtual disk</b> (IndexedDB), persistent in this browser. Syncable with the GitHub repo. Type <code>/help</code>... or <code>ls</code>.'));
+});
