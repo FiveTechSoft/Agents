@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u53';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u54';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -167,7 +167,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u53';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u54';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -2332,12 +2332,12 @@ function skillCard(skills){
   skills.forEach(s=>{ const on=skillsOn.has(s.name); const isDisk=s.disk;
     const row=el('<div class="flex items-start justify-between"></div>'); if(!on) row.classList.add('opacity-60');
     const left=el('<div class="flex gap-2.5"></div>'); const ic=document.createElement('div');
-    const iconColor=isDisk?(on?'text-cyan-400':'text-gray-500'):(on?'text-pink-400':'text-gray-500');
+    const iconColor=isDisk?(on?'text-purple-400':'text-gray-500'):(on?'text-pink-400':'text-gray-500');
     ic.className='mt-0.5 '+iconColor; ic.innerHTML=SVG('','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
     const tx=document.createElement('div'); const nm=document.createElement('div'); nm.className='text-xs font-medium '+(on?'text-gray-200':'text-gray-400');
-    nm.innerHTML=(isDisk?'<span class=\"text-cyan-400\">📄</span> ':'')+s.name+(isDisk?' <span class=\"text-[8px] text-cyan-400 bg-cyan-900/40 px-1 rounded\">disco</span>':' <span class=\"text-[8px] text-pink-400 bg-pink-900/40 px-1 rounded\">built-in</span>');
+    nm.innerHTML=(isDisk?'<span class=\"text-purple-400\">📄</span> ':'')+s.name+(isDisk?' <span class=\"text-[8px] text-purple-400 bg-purple-900/40 px-1 rounded\">disco</span>':' <span class=\"text-[8px] text-pink-400 bg-pink-900/40 px-1 rounded\">built-in</span>');
     const ds=document.createElement('div'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(on?'text-gray-400':'text-gray-500'); ds.textContent=s.desc; tx.appendChild(nm); tx.appendChild(ds); left.appendChild(ic); left.appendChild(tx);
-    const tg=toggleEl(on,()=>{ toggleSkill(s.name); const nv=skillsOn.has(s.name); setToggle(tg,nv); row.classList.toggle('opacity-60',!nv); const nc=isDisk?(nv?'text-cyan-400':'text-gray-500'):(nv?'text-pink-400':'text-gray-500'); ic.className='mt-0.5 '+nc; nm.className='text-xs font-medium '+(nv?'text-gray-200':'text-gray-400'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(nv?'text-gray-400':'text-gray-500'); });
+    const tg=toggleEl(on,()=>{ toggleSkill(s.name); const nv=skillsOn.has(s.name); setToggle(tg,nv); row.classList.toggle('opacity-60',!nv); const nc=isDisk?(nv?'text-purple-400':'text-gray-500'):(nv?'text-pink-400':'text-gray-500'); ic.className='mt-0.5 '+nc; nm.className='text-xs font-medium '+(nv?'text-gray-200':'text-gray-400'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(nv?'text-gray-400':'text-gray-500'); });
     tg.classList.add('mt-0.5');
     row.appendChild(left); row.appendChild(tg); body.appendChild(row); });
   c.appendChild(body); chat().appendChild(c); down();
