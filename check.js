@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u50';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u51';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -1460,6 +1460,22 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
     if(a==='pull'){ await gitPull(); return 'pull hecho'; }
     if(a==='log'){ await gitLog(); return 'log mostrado'; }
     await gitStatus(); return 'status mostrado'; }
+  // user-registered tool
+  if(USER_TOOLS.has(name)){
+    const ut=USER_TOOLS.get(name);
+    if(ut.type==='python'){
+      const fc=await fsGet(shResolve(ut.path));
+      if(!fc) return 'Error: script '+ut.path+' no encontrado';
+      const pyArgs=args.args?"import sys;sys.argv=['"+ut.path+"'"+args.args.split(/\s+/).map(x=>",'"+x+"'").join('')+"]\n":'';
+      return await runPython(pyArgs+fc.content);
+    }
+    // shell tool
+    const fc=await fsGet(shResolve(ut.path));
+    if(!fc) return 'Error: script '+ut.path+' no encontrado';
+    const shArgs=(args.args||'').split(/\s+/).map((x,i)=>'ARG'+(i+1)+'='+x.replace(/"/g,'\\"')).join(';');
+    const shCmd=(shArgs?shArgs+';':'')+fc.content;
+    return await shRun(shCmd);
+  }
   return 'unknown tool'; }
 
 /* ===== multi-agent: concurrent async sub-agents (Promise.all) + delegation card ===== */
@@ -1706,7 +1722,12 @@ function clearChat(){ chat().innerHTML=''; convo.length=0; lastPlan=null; flowCl
 // Streamed chat completion (SSE). Updates `wait` live with the text as it arrives;
 // assembles tool_calls across deltas. Returns {content, tool_calls, usage}.
 async function streamChat(msgs, wait){
-  const body={model:MODEL,messages:msgs,tools:TOOLS,stream:true};   // V4 thinking supports tools
+  // merge user-registered tools into the tool list so the LLM knows about them
+  const allTools=[...TOOLS];
+  for(const [name,ut] of USER_TOOLS){
+    allTools.push({type:'function',function:{name,description:ut.desc||'User tool ('+ut.type+')',parameters:{type:'object',properties:{args:{type:'string',description:'Arguments to pass to the script (command-line style)'}},required:[]}}});
+  }
+  const body={model:MODEL,messages:msgs,tools:allTools,stream:true};   // V4 thinking supports tools
   if(THINK) body.thinking={type:'enabled'};
   const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},
