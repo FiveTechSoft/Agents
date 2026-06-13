@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u47';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u48';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -299,15 +299,16 @@ async function shOne(cmd, stdin){
       return shFormatTable(result.columns, result.rows);
     }
     case 'ssh': {
-      // ssh [user@]host [-p port]
+      // ssh [user@]host [port|-p port]
       let host='', user='', port=22;
       for(let i=0;i<a0.length;i++){
         const a=a0[i];
         if(a==='-p'){ port=parseInt(a0[++i])||22; continue; }
         if(a.includes('@')){ const p2=a.split('@'); user=p2[0]; host=p2[1]; continue; }
         if(!host) host=a;
+        else if(/^\d+$/.test(a)) port=parseInt(a)||22;   // trailing number = port
       }
-      if(!host){ SH_EXIT=1; return 'ssh: '+T('falta hostname','missing hostname')+'\nUso: ssh [user@]host [-p puerto]'; }
+      if(!host){ SH_EXIT=1; return 'ssh: '+T('falta hostname','missing hostname')+'\nUso: ssh [user@]host [puerto]'; }
       const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'');
       sshConnect(wsUrl, host+(port!==22?':'+port:''), user, false).catch(e=>tool('SSH: '+e));
       return ''; // terminal card shown in chat
@@ -1846,8 +1847,8 @@ async function slashCmd(v){
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
     case '/cc': { setWorking(true); const isFiles=/\.(c|cpp|cc|cxx)(\s|$)/i.test(arg); const out = isFiles? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(isFiles?arg:'‹code›'), out, SHCWD); break; }
     case '/ssh': {
-      if(!arg.trim()){ tool('Uso: /ssh [user@]host [-p puerto]'); break; }
-      // parse: [user@]host [-p port]
+      if(!arg.trim()){ tool('Uso: /ssh [user@]host [puerto]'); break; }
+      // parse: [user@]host [port|-p port]
       let host='', user='', port=22;
       const parts=arg.trim().split(/\s+/);
       for(let i=0;i<parts.length;i++){
@@ -1855,8 +1856,9 @@ async function slashCmd(v){
         if(a==='-p'){ port=parseInt(parts[++i])||22; continue; }
         if(a.includes('@')){ const p2=a.split('@'); user=p2[0]; host=p2[1]; continue; }
         if(!host) host=a;
+        else if(/^\d+$/.test(a)) port=parseInt(a)||22;   // trailing number = port
       }
-      if(!host){ tool('Uso: /ssh [user@]host [-p puerto]'); break; }
+      if(!host){ tool('Uso: /ssh [user@]host [puerto]'); break; }
       const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'');
       tool('🔒 Conectando a '+(user?user+'@':'')+host+':'+port+' via '+SSH_PROXY);
       sshConnect(wsUrl, host+(port!==22?':'+port:''), user, true);
