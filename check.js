@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u52';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u53';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -2167,11 +2167,15 @@ function skillCard(skills){
   head.innerHTML='<h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+SVG('text-pink-400','<path d="M12 2v20"></path><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>')+'Habilidades Activas (Skills)</h4>';
   const nw=el('<button class="text-[10px] text-gray-400 hover:text-white bg-gray-900 border border-gray-600 px-2 py-1 rounded">+ Nueva</button>'); nw.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/skill new '; p.focus(); }; head.appendChild(nw); c.appendChild(head);
   const body=el('<div class="space-y-3"></div>');
-  skills.forEach(s=>{ const on=skillsOn.has(s.name);
+  skills.forEach(s=>{ const on=skillsOn.has(s.name); const isDisk=s.disk;
     const row=el('<div class="flex items-start justify-between"></div>'); if(!on) row.classList.add('opacity-60');
-    const left=el('<div class="flex gap-2.5"></div>'); const ic=document.createElement('div'); ic.className='mt-0.5 '+(on?'text-pink-400':'text-gray-500'); ic.innerHTML=SVG('','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
-    const tx=document.createElement('div'); const nm=document.createElement('div'); nm.className='text-xs font-medium '+(on?'text-gray-200':'text-gray-400'); nm.textContent=s.name; const ds=document.createElement('div'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(on?'text-gray-400':'text-gray-500'); ds.textContent=s.desc; tx.appendChild(nm); tx.appendChild(ds); left.appendChild(ic); left.appendChild(tx);
-    const tg=toggleEl(on,()=>{ toggleSkill(s.name); const nv=skillsOn.has(s.name); setToggle(tg,nv); row.classList.toggle('opacity-60',!nv); ic.className='mt-0.5 '+(nv?'text-pink-400':'text-gray-500'); nm.className='text-xs font-medium '+(nv?'text-gray-200':'text-gray-400'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(nv?'text-gray-400':'text-gray-500'); });
+    const left=el('<div class="flex gap-2.5"></div>'); const ic=document.createElement('div');
+    const iconColor=isDisk?(on?'text-cyan-400':'text-gray-500'):(on?'text-pink-400':'text-gray-500');
+    ic.className='mt-0.5 '+iconColor; ic.innerHTML=SVG('','<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline>');
+    const tx=document.createElement('div'); const nm=document.createElement('div'); nm.className='text-xs font-medium '+(on?'text-gray-200':'text-gray-400');
+    nm.innerHTML=(isDisk?'<span class=\"text-cyan-400\">📄</span> ':'')+s.name+(isDisk?' <span class=\"text-[8px] text-cyan-400 bg-cyan-900/40 px-1 rounded\">disco</span>':' <span class=\"text-[8px] text-pink-400 bg-pink-900/40 px-1 rounded\">built-in</span>');
+    const ds=document.createElement('div'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(on?'text-gray-400':'text-gray-500'); ds.textContent=s.desc; tx.appendChild(nm); tx.appendChild(ds); left.appendChild(ic); left.appendChild(tx);
+    const tg=toggleEl(on,()=>{ toggleSkill(s.name); const nv=skillsOn.has(s.name); setToggle(tg,nv); row.classList.toggle('opacity-60',!nv); const nc=isDisk?(nv?'text-cyan-400':'text-gray-500'):(nv?'text-pink-400':'text-gray-500'); ic.className='mt-0.5 '+nc; nm.className='text-xs font-medium '+(nv?'text-gray-200':'text-gray-400'); ds.className='text-[10px] mt-0.5 leading-tight pr-2 '+(nv?'text-gray-400':'text-gray-500'); });
     tg.classList.add('mt-0.5');
     row.appendChild(left); row.appendChild(tg); body.appendChild(row); });
   c.appendChild(body); chat().appendChild(c); down();
@@ -2186,15 +2190,29 @@ function toolSafety(name){ return ['write_file','delete_file','git','dispatch_ag
 function toolsCard(){
   const c=el('<div class="bg-[#1a1d24] border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   const head=el('<div class="flex items-center justify-between mb-4 pb-2 border-b border-gray-700/50"></div>');
-  head.innerHTML='<h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+SVG('text-yellow-500','<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>')+'Registro de Herramientas</h4><span class="text-[10px] font-mono bg-gray-800 border border-gray-600 text-gray-300 px-1.5 py-0.5 rounded">'+TOOLS.length+' Disponibles</span>';
+  head.innerHTML='<h4 class="text-sm font-semibold text-gray-200 flex items-center gap-2">'+SVG('text-yellow-500','<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>')+'Registro de Herramientas</h4><span class="text-[10px] font-mono bg-gray-800 border border-gray-600 text-gray-300 px-1.5 py-0.5 rounded">'+(TOOLS.length+USER_TOOLS.size)+' Disponibles</span>';
   c.appendChild(head);
   const grid=el('<div class="grid grid-cols-2 gap-2"></div>');
-  TOOLS.forEach(t=>{ const warn=toolSafety(t.function.name)==='warn';
-    const cell=el('<div class="bg-gray-800 border rounded p-2.5 flex flex-col cursor-pointer transition-colors '+(warn?'border-yellow-900/30 hover:border-yellow-700/50':'border-gray-700 hover:border-gray-500')+'"></div>');
-    const top=el('<div class="flex justify-between items-start mb-1.5"></div>'); const nm=document.createElement('span'); nm.className='text-xs font-mono '+(warn?'text-yellow-100':'text-gray-200'); nm.textContent=t.function.name;
-    const dot=document.createElement('span'); dot.className='h-2 w-2 rounded-full shrink-0 '+(warn?'bg-yellow-500':'bg-green-500'); dot.title=warn?'Muta estado':'Solo lectura'; top.appendChild(nm); top.appendChild(dot);
+  TOOLS.forEach(t=>{ const isUser=USER_TOOLS.has(t.function.name); const warn=toolSafety(t.function.name)==='warn';
+    let border, dotColor, nameColor, tag='';
+    if(isUser){ border='border-purple-900/50 hover:border-purple-700/50'; dotColor='bg-purple-500'; nameColor='text-purple-200'; tag='<span class=\"text-[8px] text-purple-400 bg-purple-900/40 px-1 rounded ml-1\">user</span>'; }
+    else if(warn){ border='border-yellow-900/30 hover:border-yellow-700/50'; dotColor='bg-yellow-500'; nameColor='text-yellow-100'; }
+    else { border='border-gray-700 hover:border-gray-500'; dotColor='bg-green-500'; nameColor='text-gray-200'; }
+    const cell=el('<div class="bg-gray-800 border rounded p-2.5 flex flex-col cursor-pointer transition-colors '+border+'"></div>');
+    const top=el('<div class="flex justify-between items-start mb-1.5"></div>'); const nm=document.createElement('span'); nm.className='text-xs font-mono '+nameColor; nm.innerHTML=t.function.name+tag;
+    const dot=document.createElement('span'); dot.className='h-2 w-2 rounded-full shrink-0 '+dotColor; dot.title=isUser?'Creada por usuario':(warn?'Muta estado':'Solo lectura'); top.appendChild(nm); top.appendChild(dot);
     const ds=document.createElement('span'); ds.className='text-[10px] text-gray-400 leading-tight'; ds.textContent=t.function.description;
     cell.appendChild(top); cell.appendChild(ds); cell.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/tool '+t.function.name+' {}'; p.focus(); }; grid.appendChild(cell); });
+  // user-registered tools
+  for(const [name,ut] of USER_TOOLS){
+    const cell=el('<div class="bg-gray-800 border rounded p-2.5 flex flex-col cursor-pointer transition-colors border-purple-900/50 hover:border-purple-700/50"></div>');
+    const top=el('<div class="flex justify-between items-start mb-1.5"></div>');
+    const nm=document.createElement('span'); nm.className='text-xs font-mono text-purple-200'; nm.innerHTML=name+'<span class=\"text-[8px] text-purple-400 bg-purple-900/40 px-1 rounded ml-1\">user</span>';
+    const dot=document.createElement('span'); dot.className='h-2 w-2 rounded-full shrink-0 bg-purple-500'; dot.title='Creada por usuario';
+    top.appendChild(nm); top.appendChild(dot);
+    const ds=document.createElement('span'); ds.className='text-[10px] text-gray-400 leading-tight'; ds.textContent=ut.desc;
+    cell.appendChild(top); cell.appendChild(ds); cell.onclick=()=>{ const p=document.getElementById('prompt'); p.value='/tool '+name+' {}'; p.focus(); }; grid.appendChild(cell);
+  }
   const red=el('<div class="col-span-2 bg-red-950/20 border border-red-900/40 rounded p-2.5 flex items-center justify-between"></div>');
   const info=document.createElement('div'); info.innerHTML='<div class="flex items-center gap-2 mb-0.5"><span class="text-xs font-mono text-red-200">escritura / borrado</span><span class="text-[9px] uppercase font-bold tracking-wider text-red-400 bg-red-900/50 px-1 rounded">Requiere permiso</span></div><span class="text-[10px] text-gray-400">Mutan el disco. Piden confirmación salvo Auto-Aprobar.</span>';
   const ap=document.createElement('div'); ap.className='flex flex-col items-center shrink-0 ml-2'; const apl=document.createElement('span'); apl.className='text-[8px] text-gray-500 mb-1 uppercase'; apl.textContent='Auto-Aprobar'; ap.appendChild(apl);
@@ -2205,7 +2223,7 @@ function toolsCard(){
 async function toolCmd(arg){
   if(!arg){ toolsCard(); return; }
   const sp=arg.indexOf(' '); const name=sp<0?arg:arg.slice(0,sp); const js=sp<0?'{}':arg.slice(sp+1).trim();
-  if(!TOOLS.some(t=>t.function.name===name)){ tool(T('herramienta desconocida: ','unknown tool: ')+name+'. /tool '+T('para listar.','to list.')); return; }
+  if(!TOOLS.some(t=>t.function.name===name) && !USER_TOOLS.has(name)){ tool(T('herramienta desconocida: ','unknown tool: ')+name+'. /tool '+T('para listar.','to list.')); return; }
   tool('▸ '+name+' '+js); const out=await execTool(name, js); tool(String(out));
 }
 async function skillCmd(arg){
