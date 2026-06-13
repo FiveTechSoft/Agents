@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u44';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u45';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -309,9 +309,8 @@ async function shOne(cmd, stdin){
       }
       if(!host){ SH_EXIT=1; return 'ssh: '+T('falta hostname','missing hostname')+'\nUso: ssh [user@]host [-p puerto]'; }
       const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'');
-      tool('🔒 Conectando SSH a '+(user?user+'@':'')+host+':'+port+' via '+SSH_PROXY);
-      sshTerminal(wsUrl, host+(port!==22?':'+port:''), user).catch(e=>tool('SSH: '+e));
-      return ''; // terminal takes over, no shell output
+      sshConnect(wsUrl, host+(port!==22?':'+port:''), user, false).catch(e=>tool('SSH: '+e));
+      return ''; // terminal card shown in chat
     }
     case 'sshproxy': {
       if(a0[0]){ SSH_PROXY=a0[0]; try{ localStorage.setItem('ssh_proxy',SSH_PROXY); }catch(e){} return 'SSH_PROXY='+SSH_PROXY; }
@@ -437,6 +436,7 @@ function termLine(cmd, out, cwd){
    Gateway: Node.js ssh-proxy.js (WebSocket ↔ TCP socket).
    ===================================================================== */
 let SSH_PROXY = (()=>{ try{ return localStorage.getItem('ssh_proxy')||'ws://localhost:8080'; }catch(e){ return 'ws://localhost:8080'; } })();
+let activeSsh = null; // { ws, term, card, infoEl, target, user } — persistent SSH session
 let xtermReady = null;
 async function ensureXterm(){
   if(xtermReady) return xtermReady;
@@ -450,52 +450,73 @@ async function ensureXterm(){
   })();
   try{ return await xtermReady; }catch(e){ xtermReady=null; throw e; }
 }
-async function sshTerminal(wsUrl, target, user){
+function closeSsh(){
+  if(!activeSsh) return;
+  try{ activeSsh.ws.close(); }catch(e){}
+  try{ activeSsh.term.dispose(); }catch(e){}
+  activeSsh.card.classList.add('opacity-50');
+  activeSsh.card.querySelector('.ssh-status').textContent='Desconectado';
+  activeSsh.infoEl.innerHTML='<span class="text-gray-500">🔒</span> SSH: '+(activeSsh.user?activeSsh.user+'@':'')+activeSsh.target+' (desconectado)';
+  activeSsh=null;
+}
+async function sshConnect(wsUrl, target, user, fromPrompt){
+  if(activeSsh){ closeSsh(); } // one active session at a time
   const {Terminal, FitAddon} = await ensureXterm();
-  const card=el('<div class="bg-gray-800 border border-green-900/50 rounded-xl overflow-hidden max-w-full"></div>');
-  // header
-  const head=el('<div class="flex items-center justify-between px-3 py-1.5 bg-gray-900 border-b border-gray-700 shrink-0"></div>');
-  const info=document.createElement('span'); info.className='text-xs text-gray-300';
-  info.innerHTML='<span class="text-green-400">🔒</span> SSH: '+(user?user+'@':'')+target;
+
+  // compact connection card
+  const card=el('<div class="bg-gray-800 border border-green-800/60 rounded-xl overflow-hidden max-w-full"></div>');
+  const head=el('<div class="flex items-center justify-between px-3 py-2 bg-gray-900 border-b border-gray-700 shrink-0"></div>');
+  const info=document.createElement('span'); info.className='text-xs text-gray-300 flex items-center gap-2';
+  info.innerHTML='<span class="text-green-400">🔒</span> <span class="text-green-300 font-medium">SSH: '+(user?user+'@':'')+target+'</span> <span class="ssh-status text-[10px] text-yellow-400">conectando…</span>';
   head.appendChild(info);
-  const btns=el('<div class="flex gap-2"></div>');
-  const fsBtn=el('<button class="text-gray-400 hover:text-white text-xs px-2 py-1 border border-gray-600 rounded" title="Pantalla completa">⛶</button>');
-  const clsBtn=el('<button class="text-gray-400 hover:text-red-400 text-xs px-2 py-1 border border-gray-600 rounded">✕ Cerrar</button>');
+  const btns=el('<div class="flex gap-1"></div>');
+  const fsBtn=el('<button class="text-gray-400 hover:text-white text-xs px-1.5 py-0.5 border border-gray-600 rounded" title="Pantalla completa">⛶</button>');
+  const clsBtn=el('<button class="text-gray-400 hover:text-red-400 text-xs px-1.5 py-0.5 border border-gray-600 rounded" title="Desconectar">✕</button>');
   btns.appendChild(fsBtn); btns.appendChild(clsBtn); head.appendChild(btns);
   card.appendChild(head);
-  // terminal body — fixed height, resizable via ResizeObserver
   const body=el('<div class="relative"></div>');
-  const termC=el('<div class="overflow-hidden" style="height:320px"></div>');
-  // resize handle
-  const handle=el('<div class="flex items-center justify-center h-2 bg-gray-700 hover:bg-green-800 cursor-ns-resize group" title="Redimensionar"></div>');
-  const hDot=el('<span class="w-8 h-0.5 bg-gray-500 group-hover:bg-green-400 rounded"></span>'); handle.appendChild(hDot);
+  const termC=el('<div class="overflow-hidden" style="height:240px"></div>');
+  const handle=el('<div class="flex items-center justify-center h-1.5 bg-gray-700 hover:bg-green-800 cursor-ns-resize group" title="Redimensionar"></div>');
+  handle.innerHTML='<span class="w-6 h-0.5 bg-gray-500 group-hover:bg-green-400 rounded"></span>';
   body.appendChild(termC); body.appendChild(handle); card.appendChild(body);
+
+  // hint: prompt routing
+  const hint=el('<div class="px-3 py-1.5 bg-green-950/30 border-t border-green-900/30 text-[10px] text-gray-400">💡 Escribe comandos en el prompt (sin /) para ejecutarlos en '+target+'. <code>/exit</code> para desconectar.</div>');
+  card.appendChild(hint);
 
   chat().appendChild(card); down();
 
   const term=new Terminal({cursorBlink:true,fontSize:13,
     fontFamily:'Menlo, Monaco, "Courier New", monospace',
     theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#667eea'},
-    rows:18, cols:80});
+    rows:12, cols:80});
   const fit=new FitAddon(); term.loadAddon(fit);
   term.open(termC); fit.fit();
   term.writeln('\x1b[1;32mConectando a '+target+'...\x1b[0m');
 
   const ws=new WebSocket(wsUrl); ws.binaryType='arraybuffer';
-  ws.onopen=()=>{ term.focus(); };
+  ws.onopen=()=>{
+    card.querySelector('.ssh-status').textContent='conectado';
+    card.querySelector('.ssh-status').className='ssh-status text-[10px] text-green-400';
+    term.focus();
+    if(fromPrompt){ term.writeln(''); } // fresh line after prompt
+  };
   ws.onmessage=(ev)=>{
     if(ev.data instanceof ArrayBuffer){ term.write(new Uint8Array(ev.data)); }
     else { term.write(ev.data); }
   };
-  ws.onerror=()=>{ term.writeln('\r\n\x1b[1;31m⚠️ Error de conexión WebSocket\x1b[0m'); };
-  ws.onclose=(ev)=>{ term.writeln('\r\n\x1b[1;33m🔌 Desconectado'+(ev.code>1000?' (código '+ev.code+')':'')+'\x1b[0m'); };
+  ws.onerror=()=>{ term.writeln('\r\n\x1b[1;31m⚠️ Error WebSocket\x1b[0m'); };
+  ws.onclose=(ev)=>{
+    term.writeln('\r\n\x1b[1;33m🔌 Desconectado'+(ev.code>1000?' (código '+ev.code+')':'')+'\x1b[0m');
+    if(activeSsh) closeSsh();
+  };
 
   term.onData((data)=>{ if(ws.readyState===WebSocket.OPEN) ws.send(data); });
 
   const ro=new ResizeObserver(()=>{ try{fit.fit();}catch(e){} });
   ro.observe(termC);
 
-  // resize: drag handle vertically
+  // resize
   let dragging=false, startY=0, startH=0;
   handle.addEventListener('mousedown',(e)=>{
     dragging=true; startY=e.clientY; startH=termC.offsetHeight;
@@ -504,30 +525,27 @@ async function sshTerminal(wsUrl, target, user){
   });
   const onDrag=(e)=>{
     if(!dragging) return;
-    const nh=Math.max(120, Math.min(800, startH+(e.clientY-startY)));
-    termC.style.height=nh+'px'; fit.fit();
+    termC.style.height=Math.max(100, Math.min(800, startH+(e.clientY-startY)))+'px'; fit.fit();
   };
   const onDrop=()=>{ dragging=false; document.removeEventListener('mousemove',onDrag); document.removeEventListener('mouseup',onDrop); };
 
-  // fullscreen: expand card to fill viewport
+  // fullscreen
   let fullscreen=false;
   fsBtn.onclick=()=>{
     fullscreen=!fullscreen;
-    if(fullscreen){
-      card.style.position='fixed'; card.style.inset='4px'; card.style.zIndex='50';
-      termC.style.height='calc(100vh - 40px)'; fsBtn.textContent='⛶'; fsBtn.title='Salir pantalla completa';
-    } else {
-      card.style.position=''; card.style.inset=''; card.style.zIndex='';
-      termC.style.height='320px'; fsBtn.textContent='⛶'; fsBtn.title='Pantalla completa';
-    }
-    setTimeout(()=>fit.fit(), 100);
+    if(fullscreen){ card.style.position='fixed'; card.style.inset='4px'; card.style.zIndex='50'; termC.style.height='calc(100vh - 60px)'; }
+    else { card.style.position=''; card.style.inset=''; card.style.zIndex=''; termC.style.height='240px'; }
+    setTimeout(()=>fit.fit(),100);
   };
 
-  const close=()=>{ ws.close(); ro.disconnect(); term.dispose(); card.remove(); };
+  const close=()=>{ closeSsh(); };
   clsBtn.onclick=close;
   term.onKey((e)=>{
     if(e.domEvent.ctrlKey&&e.domEvent.shiftKey&&e.domEvent.key==='W'){ close(); }
   });
+
+  // store session
+  activeSsh={ ws, term, card, infoEl:info, target, user, close };
   return card;
 }
 
@@ -1292,6 +1310,14 @@ async function run(){
   const i=document.getElementById('prompt'); const v=i.value.trim(); if(!v)return; i.value=''; user(v);
   hist.push(v); histI=hist.length; saveHist();
   if(v[0]==='/'){ flowAdd('slash',v); await slashCmd(v); nextHint(); return; }
+  // route to active SSH session
+  if(activeSsh && activeSsh.ws.readyState===WebSocket.OPEN){
+    activeSsh.ws.send(v+"
+");
+    termLine(v, "", SHCWD);
+    nextHint();
+    return;
+  }
   const cmd0=v.split(/\s+/)[0];
   if(SHELL_CMDS.has(cmd0) || cmd0.startsWith('./')){ const cwd=SHCWD; const out=await shRun(v); flowAdd('cmd',v,(out||'').slice(0,200)); termLine(v, out, cwd); nextHint(); return; }
   // otherwise: send to the LLM agent
@@ -1818,8 +1844,24 @@ async function slashCmd(v){
     case '/cc': { setWorking(true); const isFiles=/\.(c|cpp|cc|cxx)(\s|$)/i.test(arg); const out = isFiles? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(isFiles?arg:'‹code›'), out, SHCWD); break; }
     case '/ssh': {
       if(!arg.trim()){ tool('Uso: /ssh [user@]host [-p puerto]'); break; }
-      const cwd=SHCWD; const out=await shRun('ssh '+arg.trim());
-      if(out) termLine('ssh '+arg.trim(), out, cwd);
+      // parse: [user@]host [-p port]
+      let host='', user='', port=22;
+      const parts=arg.trim().split(/\s+/);
+      for(let i=0;i<parts.length;i++){
+        const a=parts[i];
+        if(a==='-p'){ port=parseInt(parts[++i])||22; continue; }
+        if(a.includes('@')){ const p2=a.split('@'); user=p2[0]; host=p2[1]; continue; }
+        if(!host) host=a;
+      }
+      if(!host){ tool('Uso: /ssh [user@]host [-p puerto]'); break; }
+      const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'');
+      tool('🔒 Conectando a '+(user?user+'@':'')+host+':'+port+' via '+SSH_PROXY);
+      sshConnect(wsUrl, host+(port!==22?':'+port:''), user, true);
+      break;
+    }
+    case '/exit': {
+      if(activeSsh){ closeSsh(); tool('🔌 Sesión SSH cerrada.'); }
+      else { tool('No hay sesión SSH activa.'); }
       break;
     }
     default: tool(T('Comando desconocido: ','Unknown command: ')+cmd+'. '+T('Prueba /help.','Try /help.'));
@@ -1993,7 +2035,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/ssh','SSH a servidor remoto'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
