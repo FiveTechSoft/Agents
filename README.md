@@ -14,7 +14,30 @@ streaming chat, real tool-calling, and multiple agents running in parallel.*
 
 ---
 
-## What is this?
+## Agents Web
+
+Un **entorno de desarrollo autónomo** que corre íntegro en el navegador.
+Escribes lo que necesitas en lenguaje natural y el agente lo construye:
+crea archivos, ejecuta código, consulta bases de datos, sincroniza con GitHub.
+
+**Disco virtual persistente.** Tus archivos sobreviven entre sesiones (IndexedDB).
+Editor con preview Markdown/HTML/PHP, visor SQLite, árbol de carpetas.
+
+**Runtimes reales.** Python (Pyodide), C (clang/Wasmer), PHP (@php-wasm con
+formularios y sesiones), SQLite. Todo en el navegador, sin backend.
+
+**Agente IA.** Conectado a DeepSeek. 15 herramientas: leer, escribir, borrar,
+ejecutar shell, Python, SQL, PHP, C, buscar en internet, git. Razonamiento
+en streaming. Se desdobla en sub-agentes paralelos para tareas grandes.
+
+**Terminal SSH.** Embebida en el chat. Túnel WebSocket→TCP vía proxy local
+o Deno Deploy. Conéctate a cualquier servidor sin salir de la aplicación.
+
+**Sin instalar nada.** Todo lo que necesitas es un navegador y una API key.
+
+---
+
+## What is this? (Android)
 
 **Agents** is a native Android application that runs an autonomous **AI coding
 agent** — it chats, reasons, and **executes real tools** (read/write/edit files,
@@ -215,7 +238,7 @@ or type `/key <your-api-key>` inside the app.
 ### 🌐 Web Agents
 
 La demo web tiene su propio roadmap con valoración de completitud:
-→ **[docs/roadmap.md](docs/roadmap.md)** (build u42, ~60% global, ~70% ponderado)
+→ **[docs/roadmap.md](docs/roadmap.md)** (build u48, ~60% global, ~70% ponderado)
 
 ---
 
