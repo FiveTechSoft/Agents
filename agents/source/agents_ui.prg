@@ -882,13 +882,14 @@ FUNCTION CCUI_Banner( cModel, cCwd, cUser )
    cV := CCUI_Color( CCUI_Glyph( "v" ), CCUI_Pal( "dim" ) )
 
    // the "AG" logo, six rows of block-drawing glyphs
+   // "AG" block-art logo — 6 rows, all exactly 16 chars wide, centred.
    aLogo := { ;
-      "  █████╗   ██████╗  ███████╗ ███╗  ██╗ ████████╗ ███████╗ ", ;
-      " ██╔══██╗ ██╔════╝  ██╔════╝ ████╗ ██║ ╚══██╔══╝ ██╔════╝  ", ;
-      " ███████║ ██║  ███╗ █████╗   ██╔██╗██║    ██║    ███████╗ ", ;
-      " ██╔══██║ ██║   ██║ ██╔══╝   ██║╚████║    ██║    ╚════██║ ", ;
-      " ██║  ██║ ╚██████╔╝ ███████╗ ██║ ╚███║    ██║    ███████║ ", ;
-      " ╚═╝  ╚═╝  ╚═════╝  ╚══════╝ ╚═╝  ╚══╝    ╚═╝    ╚══════╝ " }
+      "  █████╗  ██████╗ ", ;
+      " ██╔══██╗ ██╔════╝ ", ;
+      " ███████║ ██║  ███╗", ;
+      " ██╔══██║ ██║   ██║", ;
+      " ██║  ██║ ╚██████╔╝", ;
+      " ╚═╝  ╚═╝  ╚═════╝ " }
 
    // left panel: welcome, logo (6, per-char magenta->violet gradient),
    // name+version, model
