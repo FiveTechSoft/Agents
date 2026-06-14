@@ -882,14 +882,14 @@ FUNCTION CCUI_Banner( cModel, cCwd, cUser )
    cV := CCUI_Color( CCUI_Glyph( "v" ), CCUI_Pal( "dim" ) )
 
    // the "AG" logo, six rows of block-drawing glyphs
-   // "AG" block-art logo — 6 rows, all exactly 16 chars wide, centred.
+   // Gradient-text logo — 6 identical rows, centred, per-char magenta-violet.
    aLogo := { ;
-      "  █████╗  ██████╗ ", ;
-      " ██╔══██╗ ██╔════╝ ", ;
-      " ███████║ ██║  ███╗", ;
-      " ██╔══██║ ██║   ██║", ;
-      " ██║  ██║ ╚██████╔╝", ;
-      " ╚═╝  ╚═╝  ╚═════╝ " }
+      "A g e n t s", ;
+      "A g e n t s", ;
+      "A g e n t s", ;
+      "A g e n t s", ;
+      "A g e n t s", ;
+      "A g e n t s" }
 
    // left panel: welcome, logo (6, per-char magenta->violet gradient),
    // name+version, model
