@@ -1,7 +1,7 @@
 -occ
 -mt
 -gtnul
--oagents
+-o../agents
 agents_repl.prg
 agents.prg
 agents_api.prg
