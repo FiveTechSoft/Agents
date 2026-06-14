@@ -1022,7 +1022,7 @@ METHOD ResolveApiKey() CLASS Agent
 
    LOCAL hRes := { "ok" => .F., "api_key" => "", ;
                    "error_type" => NIL, "message" => NIL }
-   LOCAL aEnvs := { "DEEPSEEK_API_KEY", "CCHARBOUR_API_KEY", ;
+   LOCAL aEnvs := { "DEEPSEEK_API_KEY", "AGENTS_API_KEY", ;
                     "GLM_API_KEY", "ZHIPU_API_KEY", ;
                     "MOONSHOT_API_KEY", "OPENAI_API_KEY" }
    LOCAL cEnv, cKey := ""

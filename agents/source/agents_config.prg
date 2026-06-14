@@ -23,7 +23,7 @@ FUNCTION CCCFG_Resolve( hOpts )
    IF hb_HHasKey( hOpts, "api_key" ) .AND. !Empty( hOpts[ "api_key" ] )
       cKey := hOpts[ "api_key" ]
    ELSE
-      aEnvs := { "DEEPSEEK_API_KEY", "AGENTS_API_KEY", "CCHARBOUR_API_KEY", ;
+      aEnvs := { "DEEPSEEK_API_KEY", "AGENTS_API_KEY", ;
                  "GLM_API_KEY", "ZHIPU_API_KEY", ;
                  "MOONSHOT_API_KEY", "OPENAI_API_KEY" }
       FOR EACH cEnvName IN aEnvs
