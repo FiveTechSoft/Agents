@@ -1,7 +1,7 @@
 // Resolves API key + base URL. Precedence for the key:
 //   hOpts["api_key"]
 //     -> env DEEPSEEK_API_KEY    (default DeepSeek backend)
-//     -> env CCHARBOUR_API_KEY   (generic, any OpenAI-compatible provider)
+//     -> env AGENTS_API_KEY   (generic, any OpenAI-compatible provider)
 //     -> env GLM_API_KEY         (Zhipu / GLM)
 //     -> env MOONSHOT_API_KEY    (Moonshot Kimi)
 //     -> env OPENAI_API_KEY      (OpenAI)
@@ -23,7 +23,7 @@ FUNCTION CCCFG_Resolve( hOpts )
    IF hb_HHasKey( hOpts, "api_key" ) .AND. !Empty( hOpts[ "api_key" ] )
       cKey := hOpts[ "api_key" ]
    ELSE
-      aEnvs := { "DEEPSEEK_API_KEY", "CCHARBOUR_API_KEY", ;
+      aEnvs := { "DEEPSEEK_API_KEY", "AGENTS_API_KEY", "CCHARBOUR_API_KEY", ;
                  "GLM_API_KEY", "ZHIPU_API_KEY", ;
                  "MOONSHOT_API_KEY", "OPENAI_API_KEY" }
       FOR EACH cEnvName IN aEnvs
@@ -43,12 +43,12 @@ FUNCTION CCCFG_Resolve( hOpts )
       ENDIF
       // Fall back to settings.json so a key saved via /provider key
       // <secret> is picked up on the next turn without rebuilding the
-      // client. Honour CCHARBOUR_CONFIG first (same precedence as
-      // CCSETTINGS_Load), then the default .ccharbour/settings.json.
+      // client. Honour AGENTS_CONFIG first (same precedence as
+      // CCSETTINGS_Load), then the default .agents/settings.json.
       IF Empty( cKey )
-         cFileKey := hb_GetEnv( "CCHARBOUR_CONFIG" )
+         cFileKey := hb_GetEnv( "AGENTS_CONFIG" )
          IF Empty( cFileKey )
-            cFileKey := ".ccharbour" + hb_ps() + "settings.json"
+            cFileKey := ".agents" + hb_ps() + "settings.json"
          ENDIF
          cFileKey := CCCFG_FromFile( cFileKey )
          IF !Empty( cFileKey )
@@ -60,7 +60,7 @@ FUNCTION CCCFG_Resolve( hOpts )
    IF Empty( cKey )
       hRes[ "error_type" ] := "config"
       hRes[ "message" ]    := "No API key. Set DEEPSEEK_API_KEY (or " + ;
-                              "CCHARBOUR_API_KEY / GLM_API_KEY / " + ;
+                              "AGENTS_API_KEY / GLM_API_KEY / " + ;
                               "MOONSHOT_API_KEY / OPENAI_API_KEY), put " + ;
                               "api_key in settings.json, or pass " + ;
                               "hOpts api_key directly."

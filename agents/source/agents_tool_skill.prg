@@ -24,7 +24,7 @@ STATIC FUNCTION CCTool_UseSkillRun( hArgs )
    ENDIF
    cBody := CCSKILL_Load( cName )
    IF cBody == NIL
-      RETURN "Error: skill '" + cName + "' not found in .ccharbour/skills/"
+      RETURN "Error: skill '" + cName + "' not found in .agents/skills/"
    ENDIF
    CCSKILL_Activate( cName )
    RETURN "Skill '" + cName + "' activated. Follow these instructions:" + ;

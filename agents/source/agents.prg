@@ -1042,7 +1042,7 @@ METHOD ResolveApiKey() CLASS Agent
 
    // 3. settings.json
    IF Empty( cKey )
-      cKey := AGENT_KeyFromFile( ".ccharbour" + hb_ps() + "settings.json" )
+      cKey := AGENT_KeyFromFile( ".agents" + hb_ps() + "settings.json" )
    ENDIF
 
    IF Empty( cKey )

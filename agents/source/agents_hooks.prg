@@ -69,10 +69,10 @@ FUNCTION CCHOOKS_Edit( hSet, cEvent, nIdx, cCmd )
    RETURN .T.
 
 // Path to the hooks log file, relative to the CCHarbour cwd. Matches
-// the location convention used by .ccharbour/settings.json so the log
+// the location convention used by .agents/settings.json so the log
 // sits next to the config that opted into it.
 FUNCTION CCHOOKS_LogPath()
-   RETURN ".ccharbour" + hb_ps() + "hooks.log"
+   RETURN ".agents" + hb_ps() + "hooks.log"
 
 // Appends cLine + LF to CCHOOKS_LogPath() iff settings have hooks_log
 // set to .T.. Best-effort, single-writer: writes are wrapped so a
@@ -267,7 +267,7 @@ FUNCTION CCHOOKS_Render( cArg )
    CASE cSub == "log"
       IF !hb_HGetDef( hSet, "hooks_log", .F. )
          RETURN "[hooks_log disabled -- set " + Chr(34) + "hooks_log" + ;
-                Chr(34) + ": true in " + ".ccharbour" + hb_ps() + ;
+                Chr(34) + ": true in " + ".agents" + hb_ps() + ;
                 "settings.json]" + Chr(10)
       ENDIF
       cOut := "[log: " + CCHOOKS_LogPath() + "]" + Chr(10)

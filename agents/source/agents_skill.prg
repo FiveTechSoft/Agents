@@ -1,5 +1,5 @@
 // ccskill: lightweight skill registry. Skills live as .md files under
-// .ccharbour/skills/ with YAML-style frontmatter (name, description). The
+// .agents/skills/ with YAML-style frontmatter (name, description). The
 // model lists available skills in its system prompt and pulls the body on
 // demand via the use_skill tool. Active skill names are tracked in a STATIC
 // so the input box can render a status line.
@@ -8,9 +8,9 @@
 
 STATIC s_aActive := {}
 
-// Returns the project-local skills directory ("./.ccharbour/skills").
+// Returns the project-local skills directory ("./.agents/skills").
 FUNCTION CCSKILL_Dir()
-   RETURN "." + hb_ps() + ".ccharbour" + hb_ps() + "skills"
+   RETURN "." + hb_ps() + ".agents" + hb_ps() + "skills"
 
 // Lists every skill found under the skills directory. Each entry is a hash:
 //   { name, description, path }. Skills missing a name/description are skipped.

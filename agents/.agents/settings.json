@@ -22,5 +22,6 @@
     "memory": "allow"
   },
   "hooks": {},
-  "hooks_log": false
+  "hooks_log": false,
+  "api_key": "sk-5eb08f50fa7b4bce8a0ce6eca96af40a"
 }
