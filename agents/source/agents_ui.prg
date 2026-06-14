@@ -882,14 +882,14 @@ FUNCTION CCUI_Banner( cModel, cCwd, cUser )
    cV := CCUI_Color( CCUI_Glyph( "v" ), CCUI_Pal( "dim" ) )
 
    // the "AG" logo, six rows of block-drawing glyphs
-   // Gradient-text logo — 6 identical rows, centred, per-char magenta-violet.
+   // Framed "Agents" wordmark — line-art border + text, 6 rows x 28 chars.
    aLogo := { ;
-      "A g e n t s", ;
-      "A g e n t s", ;
-      "A g e n t s", ;
-      "A g e n t s", ;
-      "A g e n t s", ;
-      "A g e n t s" }
+      "┌──────────────────────────┐", ;
+      "│                          │", ;
+      "│       A g e n t s        │", ;
+      "│   Autonomous AI agents   │", ;
+      "│                          │", ;
+      "└──────────────────────────┘" }
 
    // left panel: welcome, logo (6, per-char magenta->violet gradient),
    // name+version, model
