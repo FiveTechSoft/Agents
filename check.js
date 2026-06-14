@@ -5,7 +5,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u58';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u59';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -1764,7 +1764,48 @@ function buildLangMenu(){ const m=document.getElementById('langmenu'); if(!m) re
     b.appendChild(img); b.appendChild(sp); b.onclick=()=>{ setLang(code); m.classList.add('hidden'); }; m.appendChild(b); }); }
 function toggleLangMenu(e){ if(e)e.stopPropagation(); const m=document.getElementById('langmenu'); if(m) m.classList.toggle('hidden'); }
 document.addEventListener('click',()=>{ const m=document.getElementById('langmenu'); if(m) m.classList.add('hidden'); });
-function setLang(v){ curLang=v; try{ localStorage.setItem('lang',v); }catch(e){} renderLangBtn(); tool('Idioma: '+(LANGS[v]||v)); }
+function setLang(v){ curLang=v; try{ localStorage.setItem('lang',v); }catch(e){} renderLangBtn(); refreshUI(); tool('Idioma: '+(LANGS[v]||v)); }
+// i18n: update all visible UI text when language changes
+const UI18={
+  demoTitle:['Demo automática','Auto Demo','Démo auto','Auto-Demo','Demo automática','Demo automatica'],
+  stopTitle:['Detener','Stop','Arrêter','Stopp','Parar','Ferma'],
+  flowTitle:['Flow: secuencia de lo que hizo el agente (didáctico)','Flow: what the agent did (didactic)','Flow: séquence didactique','Flow: didaktische Übersicht','Flow: sequência didática','Flow: sequenza didattica'],
+  shareTitle:['Compartir sesión (URL de solo lectura)','Share session (read-only URL)','Partager la session (URL lecture seule)','Sitzung teilen (nur-Lese-URL)','Compartilhar sessão (URL somente leitura)','Condividi sessione (URL sola lettura)'],
+  copyTitle:['Copiar conversación','Copy conversation','Copier la conversation','Konversation kopieren','Copiar conversa','Copia conversazione'],
+  clearTitle:['Limpiar (/clear)','Clear (/clear)','Effacer (/clear)','Leeren (/clear)','Limpar (/clear)','Pulisci (/clear)'],
+  helpTitle:['Comandos disponibles','Available commands','Commandes disponibles','Verfügbare Befehle','Comandos disponíveis','Comandi disponibili'],
+  diskLabel:['💾 Disco virtual','💾 Virtual Disk','💾 Disque virtuel','💾 Virtuelle Festplatte','💾 Disco Virtual','💾 Disco Virtuale'],
+  zipTitle:['Descargar todo el disco como ZIP','Download entire disk as ZIP','Télécharger tout le disque en ZIP','Gesamte Festplatte als ZIP herunterladen','Baixar disco inteiro como ZIP','Scarica intero disco come ZIP'],
+  eraseTitle:['Borrar todo el disco virtual','Erase entire virtual disk','Effacer tout le disque virtuel','Gesamte virtuelle Festplatte löschen','Apagar todo o disco virtual','Cancella intero disco virtuale'],
+  promptPlaceholder:['comando: ls · write a.txt Hola · read a.txt · del a.txt · (o pregunta al LLM)','command: ls · write a.txt Hello · read a.txt · del a.txt · (or ask the LLM)','commande: ls · write a.txt Bonjour · read a.txt · del a.txt · (ou demander au LLM)','Befehl: ls · write a.txt Hallo · read a.txt · del a.txt · (oder LLM fragen)','comando: ls · write a.txt Olá · read a.txt · del a.txt · (ou pergunte ao LLM)','comando: ls · write a.txt Ciao · read a.txt · del a.txt · (o chiedi al LLM)'],
+  sendBtn:['Enviar','Send','Envoyer','Senden','Enviar','Invia'],
+  kbdClear:['limpiar','clear','effacer','leeren','limpar','pulisci'],
+  kbdStop:['parar','stop','arrêter','stopp','parar','ferma'],
+  kbdHistory:['historial','history','historique','Verlauf','histórico','cronologia'],
+  pullRepo:['⬇ Pull repo','⬇ Pull repo','⬇ Pull repo','⬇ Pull repo','⬇ Pull repo','⬇ Pull repo'],
+  pushRepo:['⬆ Push repo','⬆ Push repo','⬆ Push repo','⬆ Push repo','⬆ Push repo','⬆ Push repo'],
+  langTitle:['Idioma','Language','Langue','Sprache','Idioma','Lingua'],
+};
+function refreshUI(){
+  const i=LORD.indexOf(curLang); if(i<0) return;
+  const s=(arr)=>arr[i]||arr[1]||arr[0];
+  const set=(id,arr)=>document.getElementById(id)?.setAttribute('title',s(arr));
+  const txt=(id,arr)=>{ const e=document.getElementById(id); if(e) e.textContent=s(arr); };
+  const ph=(id,arr)=>{ const e=document.getElementById(id); if(e) e.placeholder=s(arr); };
+  const qs=(sel,arr)=>{ const e=document.querySelector(sel); if(e) e.title=s(arr); };
+  set('demobtn',UI18.demoTitle); set('stopbtn',UI18.stopTitle);
+  qs('button[onclick="flowCard()"]',UI18.flowTitle); qs('button[onclick="shareSession()"]',UI18.shareTitle);
+  qs('button[onclick="copyChat()"]',UI18.copyTitle); qs('button[onclick="runCmd(\'/clear\')"]',UI18.clearTitle);
+  qs('button[onclick="runCmd(\'/help\')"]',UI18.helpTitle);
+  txt('disklabel',UI18.diskLabel); qs('button[onclick="downloadDiskAsZip()"]',UI18.zipTitle);
+  qs('button[onclick="eraseDisk()"]',UI18.eraseTitle); qs('button[onclick="ghPull()"]',UI18.pullRepo);
+  qs('button[onclick="ghPush()"]',UI18.pushRepo);
+  ph('prompt',UI18.promptPlaceholder); txt('sendbtn',UI18.sendBtn);
+  qs('#langbtn',UI18.langTitle);
+  // keyboard shortcuts
+  const kbds=document.querySelectorAll('.text-\\[10px\\].text-gray-500 span');
+  if(kbds.length>=3){ kbds[0].lastChild.textContent=' '+s(UI18.kbdClear); kbds[1].lastChild.textContent=' '+s(UI18.kbdStop); kbds[2].lastChild.textContent=' '+s(UI18.kbdHistory); }
+}
 function saveSession(){ try{ localStorage.setItem('convo',JSON.stringify(convo)); localStorage.setItem('usage',JSON.stringify(usage)); }catch(e){} }
 function restoreSession(){ try{
   const su=JSON.parse(localStorage.getItem('usage')||'null'); if(su) usage={pin:su.pin||0,pout:su.pout||0,phit:su.phit||0};
