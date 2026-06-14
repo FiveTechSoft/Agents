@@ -2991,6 +2991,11 @@ STATIC FUNCTION CCREPL_AskPerm( cName, cArgsJson )
       HB_SYMBOL_UNUSED( oErr )
       cLine := "n"
    END SEQUENCE
+   // Clear answer from prompt box so it does not linger
+   IF s_oBoxPrompt != NIL
+      s_oBoxPrompt[ "editor" ] := CCIN_New( "" )
+      CCPROMPT_Redraw( s_oBoxPrompt )
+   ENDIF
    RETURN cLine
 
 // Like CCREPL_ReadLine but returns NIL after nSeconds with no input.
