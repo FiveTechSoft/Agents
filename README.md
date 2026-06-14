@@ -1,246 +1,212 @@
 <div align="center">
 
-# 😎 Agents
+# Agents
 
-### An autonomous AI coding agent for Android — written 100% in Harbour
+### Autonomous AI coding agent — Web, Windows/Linux/macOS console, and Android
 
-*The same agentic engine that powers the `cc` console, on your phone:
-streaming chat, real tool-calling, and multiple agents running in parallel.*
+*Streaming chat, 17 built-in tools, skills system, multi-agent dispatch.
+One engine, three platforms. Written 100% in Harbour.*
 
-**🌐 Live web demo (simulated disk on IndexedDB + GitHub sync):**
-**https://fivetechsoft.github.io/Agents/**
+**🌐 Web:** https://fivetechsoft.github.io/Agents/
+
+**🖥️ Console:** `agents.exe` (1.27 MB, zero dependencies)
+
+**📱 Android:** `agents.apk` (native ARM, WebView UI)
 
 </div>
+
+---
+
+## What is Agents?
+
+Agents is an autonomous AI coding assistant — you describe what you need in natural language, and the agent uses its tools to accomplish it: read/write/edit files, run shell commands, search the web, query GitHub, and more.
+
+The core agent engine (ReAct loop + tool-calling + streaming SSE) is shared across all three platforms. Only the UI host and HTTP transport differ per platform.
+
+### Three platforms, one engine
+
+| | Web | Console (EXE) | Android (APK) |
+|---|---|---|---|
+| **UI** | HTML5 browser / WebView2 | Terminal TUI (VT100) | Android WebView |
+| **Transport** | `fetch()` (browser) | curl subprocess | Java `HttpsURLConnection` |
+| **Storage** | IndexedDB + GitHub sync | Local filesystem | App private storage |
+| **Concurrency** | Web Workers | Single-thread | Harbour MT threads |
+| **Size** | ~500 KB (HTML+JS+Wasm) | 1.27 MB (single .exe) | 773 KB (.apk) |
+| **Runtimes** | Python, PHP, C, SQLite | Native shell | Shell via `/sh` |
+
+---
+
+## Features (all platforms)
+
+- **17 Built-in Tools:** `read`, `write`, `edit`, `glob`, `grep`, `shell`, `web_search`, `web_fetch`, `github_read`, `github_write`, `memory`, `ask_user`, `todo_write`, `use_skill`, `dispatch_agent`, `dispatch_agent_background`, `propose_agents`
+- **Streaming SSE:** Real-time token-by-token responses
+- **Skills System:** Markdown-based skills with YAML frontmatter, auto-activation via trigger regex
+- **Multi-Agent Dispatch:** Spawn subagents (blocking or background) for parallel task execution
+- **Permission Gate:** `allow` / `deny` / `ask` per tool + plan-mode lock
+- **Session Management:** Save/load conversations as JSON
+- **Multi-Backend:** DeepSeek, OpenAI, GLM, Moonshot, Ollama
+- **Slash Commands:** `/help`, `/model`, `/plan`, `/goal`, `/run`, `/key`, `/provider`, `/clear`, `/save`, `/load`, `/lean`, `/compact`, `/rewind`, `/loop`, `/tasks`, `/btw`, `/hook`
+
+---
+
+## Agents Console (Windows/Linux/macOS)
+
+Native terminal app with full TUI:
+
+```
+┌─────────────────────────────────────┐
+│  █████╗   █████╗  ...  (AG logo)   │
+│       A g e n t s                   │
+│   Autonomous AI agents              │
+└─────────────────────────────────────┘
+│  > Write a script that...           │
+└─────────────────────────────────────┘
+```
+
+### Build
+
+```bash
+cd agents/source
+hbmk2 -comp=msvc64 agents.hbp    # Windows (MSVC)
+# or
+hbmk2 agents_linux.hbp           # Linux (gcc)
+hbmk2 agents_mac.hbp             # macOS (clang)
+```
+
+Requires: Harbour 3.2+, curl (included in Windows 10+/macOS/Linux).
+
+### Quick Start
+
+```bash
+set DEEPSEEK_API_KEY=sk-...
+agents.exe
+```
+
+### Download
+
+Latest release: https://github.com/FiveTechSoft/Agents/releases/latest
 
 ---
 
 ## Agents Web
 
-Un **entorno de desarrollo autónomo** que corre íntegro en el navegador.
-Escribes lo que necesitas en lenguaje natural y el agente lo construye:
-crea archivos, ejecuta código, consulta bases de datos, sincroniza con GitHub.
+Runs entirely in the browser. No install, no server.
 
-**Disco virtual persistente.** Tus archivos sobreviven entre sesiones (IndexedDB).
-Editor con preview Markdown/HTML/PHP, visor SQLite, árbol de carpetas.
+- **Virtual disk** in IndexedDB — files persist between sessions
+- **Real runtimes** — Python (Pyodide), C (clang/Wasmer), PHP (@php-wasm), SQLite
+- **SSH Terminal** embedded in chat — WebSocket→TCP tunnel
+- **GitHub Sync** — push/pull to any repo
+- **AI Disk Classifier** — classify files with transformers.js (local, no cloud)
 
-**Runtimes reales.** Python (Pyodide), C (clang/Wasmer), PHP (@php-wasm con
-formularios y sesiones), SQLite. Todo en el navegador, sin backend.
-
-**Agente IA.** Conectado a DeepSeek. 18 herramientas: leer, escribir, borrar,
-ejecutar shell, Python, SQL, PHP, C, buscar en internet, git, y `register_tool`
-para crear **nuevas herramientas en tiempo de ejecución**. El agente puede escribir
-un script, registrarlo como tool, y reutilizarlo después. Razonamiento en streaming.
-Se desdobla en sub-agentes paralelos para tareas grandes.
-
-**Terminal SSH.** Embebida en el chat. Túnel WebSocket→TCP vía proxy local
-o Deno Deploy. Conéctate a cualquier servidor sin salir de la aplicación.
-
-**Sin instalar nada.** Todo lo que necesitas es un navegador y una API key.
+Live demo: https://fivetechsoft.github.io/Agents/
 
 ---
 
-## What is this? (Android)
+## Agents Android
 
-**Agents** is a native Android application that runs an autonomous **AI coding
-agent** — it chats, reasons, and **executes real tools** (read/write/edit files,
-run shell commands, search the web, remember things) to accomplish tasks you give
-it in natural language.
+Native Android application. Harbour cross-compiled to ARM64, packaged as APK.
 
-What makes it unusual: the entire application — the agent loop, the tool engine,
-the HTTP plumbing, the multi-threading — is written in **[Harbour](https://harbour.github.io/)**
-(the open-source xBase compiler), cross-compiled to an Android `.so`. The UI is a
-modern HTML chat panel hosted in a system WebView. There is no Kotlin/Java app
-logic beyond a thin bridge.
-
-It reuses the **[ccharbour](https://github.com/FiveTechSoft)** agentic core
-(`CC_Client` / `CC_AgentRun`) unchanged — the very same code that drives the
-desktop FiveWin app and the `cc.exe` console agent.
-
-<div align="center">
-<em>Built with FiveWin / Harbour &nbsp;·&nbsp; powered by the ccharbour API</em>
-</div>
-
----
-
-## Features
-
-- 🤖 **Real agentic loop** — streaming chat + tool-calling (OpenAI-style function
-  calling) via the ccharbour engine.
-- 🧰 **Full tool set** — `read`, `write`, `edit`, `glob`, `grep`, `shell`,
-  `web_search`, `web_fetch`, `memory`, and an interactive `ask_user` multiple-choice tool.
-- 🧵 **Multiple agents in parallel** — each agent runs on its **own Harbour OS
-  thread** (Harbour MT VM). Open as many as you need with the `+` tab; they work
-  concurrently and independently.
-- 🤝 **Synchronized orchestration** — the `dispatch_team` tool fans a task into
-  2–4 parallel sub-agents (each in its own tab) and **joins** them
-  (`hb_threadJoin`) before returning the combined result.
-- 🎨 **Rich chat UI** — Markdown rendering (tables, code, lists), syntax-aware
-  bubbles, and **colored diffs** (green `+` / red `−`) for every write/edit.
-- 🔐 **Permission gate** — with *Auto-approve* off, every mutating tool
-  (`shell`/`write`/`edit`) shows a permit / reject card and blocks until you decide.
-- 🐙 **GitHub over the REST API** — `github_read` / `github_list` / `github_write`
-  tools talk to api.github.com over HTTPS (no git or ssh binary). Token via
-  `/ghtoken <token>` or a local file; the agent proposes setup when it is missing.
-- 🗣️ **Voice dictation** — a mic button feeds speech-to-text into the prompt
-  (where the WebView supports it).
-- ⚙️ **In-app settings** — text size, new agent, clear chat, and an *About* dialog,
-  from a top-right kebab menu. No Android system settings required.
-- 🔑 **Bring your own key** — reads the LLM key from a local file on the device, or
-  set it at runtime with `/key <api-key>`.
-
----
-
-## How it works
+### How it works
 
 ```
- ┌──────────────────────────── Android process ────────────────────────────┐
- │                                                                          │
- │   Android WebView  ◀── HTML chat panel (Tailwind, marked.js) ── tabs     │
- │        │  ▲                                                              │
- │  evaluateJavascript │ @JavascriptInterface  (== Eval / SendToFWH)        │
- │        ▼  │                                                              │
- │   JNI bridge  (android_webview.c)                                        │
- │        │  ▲                                                              │
- │        ▼  │   per-agent event queues (pthread mutex + condvar)           │
- │   libharbour (MT VM) + ccharbour                                         │
- │     • dispatcher thread  — spawns agents with hb_threadStart             │
- │     • agent thread #1..N — CC_AgentRun, own client + history             │
- │        │                                                                │
- │        ▼  transport codeblock                                           │
- │   Java HttpsURLConnection (JNI)  ──▶  LLM API (SSE)                       │
- │                                                                          │
- └──────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────── Android process ───────────────────────┐
+│  Android WebView  ◀── HTML chat panel ── tabs                 │
+│       │  ▲                                                     │
+│  evaluateJavascript │ @JavascriptInterface                     │
+│       ▼  │                                                     │
+│  JNI bridge (android_webview.c)                                │
+│       │  ▲                                                     │
+│       ▼  │   per-agent event queues (pthread mutex + condvar)  │
+│  libharbour (MT VM) + Agents core                              │
+│    • dispatcher thread — spawns agents with hb_threadStart    │
+│    • agent thread #1..N — AG_AgentRun, own client + history   │
+│       │                                                        │
+│       ▼  transport codeblock                                   │
+│  Java HttpsURLConnection (JNI) ──▶ LLM API (SSE)              │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-| Concern        | Desktop (FiveWin)                | Android (this app)                         |
-|----------------|----------------------------------|--------------------------------------------|
-| UI host        | `TWebView2` (Edge WebView2)      | Android system `WebView`                   |
-| PRG → page     | `oWeb:Eval(js)`                  | `WebView.evaluateJavascript` (JNI)         |
-| page → PRG     | `SendToFWH(...)` → `bOnBind`     | `@JavascriptInterface` → JNI → event queue |
-| HTTP transport | in-process libcurl (hbcurl)      | Java `HttpsURLConnection` over JNI         |
-| Concurrency    | one GUI thread                   | one Harbour **MT** thread per agent        |
-
-The LLM HTTP is injected into ccharbour through its pluggable
-`hOpts["transport"]` codeblock, so **no curl or OpenSSL is cross-compiled** — the
-request rides Android's own TLS stack via a tiny Java method.
-
----
-
-## How the app was built
-
-Agents was built by **reusing the desktop FiveWin agent and swapping only the two
-platform-specific layers** — the UI host and the HTTP transport — so the entire
-ccharbour brain travels to Android untouched.
-
-1. **Start from the engine, not the UI.** The desktop `samples/AgenticAI` already
-   wraps the ccharbour loop (`CC_Client` / `CC_AgentRun`) behind an injectable
-   transport codeblock and a tool registry. Those same `.prg` modules compile for
-   Android — only the glue changes.
-
-2. **Cross-compile Harbour for arm64.** The app `.prg` + the ccharbour core are
-   compiled to C by the host `harbour.exe`, then the C is cross-compiled with the
-   Android NDK clang and linked against prebuilt `libharbour` static libs. The app
-   links the **multi-thread VM** (`libhbvmmt`) so several agents can run at once.
-
-3. **Host the same HTML in an Android WebView.** Instead of `TWebView2` (Edge),
-   the chat panel lives in the system `WebView`. `evaluateJavascript` replaces
-   `oWeb:Eval`, and an `@JavascriptInterface` replaces `SendToFWH` — a one-to-one
-   mapping, so the HTML/JS chat panel (Tailwind + marked.js) is essentially shared.
-
-4. **Bridge JS ⇄ Harbour over JNI.** `android_webview.c` exposes `AWV_Eval`,
-   `AWV_SetHtml`, `AWV_WaitEvent` and `AWV_Http` to Harbour, and routes JS calls
-   into per-agent event queues (pthread mutex + condvar) that the Harbour threads
-   block on. No callback re-entrancy: a turn never runs inside a JS→native call.
-
-5. **Borrow Android's TLS for the LLM call.** Rather than cross-compiling
-   libcurl + OpenSSL, the transport codeblock calls a Java `HttpsURLConnection`
-   through JNI. Smaller binary, native certificate handling.
-
-6. **Make the filesystem writable.** Android's process CWD is `/` (read-only), so
-   on startup the JNI layer `chdir`s into the app's private `getFilesDir()` — now
-   `read`/`write`/`edit`/`memory` work with relative paths.
-
-7. **Multiple agents, synchronized.** Each agent is an independent Harbour thread
-   (`hb_threadStart`) with its own client, history and tab. The `dispatch_team`
-   tool lets the model fan a task into 2–4 parallel sub-agents and **join**
-   (`hb_threadJoin`) them before returning the combined answer.
-
-The whole thing was developed and verified **on a physical device**, iterating
-through the real failure modes — an `hb_threadStart` no-op on the single-thread
-VM, a `const` symbol table crashing `hb_vmProcessSymbols`, `TEXT INTO` eating
-backslashes in the embedded JS, codepage mojibake through `evaluateJavascript` —
-each captured in *Engineering notes* below.
-
-## Build from source
-
-### Prerequisites
-
-| Tool                 | Default path (override with env)                 |
-|----------------------|--------------------------------------------------|
-| Android NDK r26+     | `C:\Android\android-ndk-r26d` (`NDK_ROOT`)       |
-| Android SDK + bt 34  | `C:\Android\Sdk`                                 |
-| JDK 17               | `C:\Android\jdk17\...` (`JDK_ROOT`)              |
-| Harbour for Android  | prebuilt libs in `C:\HarbourAndroid` (MT VM)     |
-| Host Harbour         | `C:\harbour` (hbmk2/hbpp bootstrap)              |
-| ccharbour sources    | `C:\ccharbour\src`                               |
-
-### Compile + sign the APK
+### Build
 
 ```bash
-cd samples/AgenticAI/Android
-bash build-apk.sh          # -> build/agents.apk
+cd agents
+bash build-apk.sh
 ```
 
-The script: compiles the app PRG + the ccharbour core with the host `harbour.exe`,
-cross-compiles the generated C with NDK clang for `arm64-v8a`, links against the
-**multi-thread** Harbour VM (`libhbvmmt`), packages with `aapt2`/`d8`, and signs
-with a debug keystore.
+Requires: Android NDK r26+, Android SDK 34, JDK 17, Harbour for Android (prebuilt static libs).
 
-### Install + run
+### Install
 
 ```bash
 adb install -r build/agents.apk
-adb shell am start -n com.harbour.agenticai/.MainActivity
 ```
 
-Provide an API key — either:
-
+Set API key: `/key sk-...` inside the app, or push a key file:
 ```bash
-adb push deepseek.key /data/local/tmp/deepseek.key   # read on startup
+adb push deepseek.key /data/local/tmp/deepseek.key
 ```
 
-or type `/key <your-api-key>` inside the app.
+---
+
+## CLASS Agent API
+
+The agent engine is exposed as a reusable Harbour class:
+
+```harbour
+oAgent := Agent():New( cApiKey, cModel, hOpts )
+hResult := oAgent:Run( "Find all .prg files and summarize them" )
+? hResult[ "content" ]
+? "Cost: $", oAgent:UsageReport()
+```
+
+Full API reference: https://github.com/FiveTechSoft/Agents/wiki/Class-Agent
 
 ---
 
-## Engineering notes (gotchas solved)
+## Source Structure
 
-- **`hb_threadStart` did nothing** until the app was linked against `libhbvmmt`
-  (the MT VM); the single-thread VM ships a no-op stub. Multi-agent needs the MT VM.
-- **`hb_vmProcessSymbols` crashed** registering the C functions — the `HB_SYMB`
-  table must **not** be `const` (the VM writes back resolved dynsym pointers).
-- **WebView2/WebView bound calls are not re-entrant** — a turn cannot run inside a
-  JS→native callback, so prompts are queued and launched from a separate context.
-- **`TEXT INTO` is C-escape-processed** — the embedded JS must stay backslash-free
-  (`String.fromCharCode(10)` instead of `\n`, character-class regexes).
-- **Non-ASCII via `evaluateJavascript`** is `\uXXXX`-escaped to survive codepage
-  conversion (avoids mojibake).
-- **Android process CWD is `/` (read-only)** — the app `chdir`s to its private
-  files dir so the `memory`/`write`/`edit` tools work.
+```
+agents/source/
+  agents.hbp              Build file
+  agents_repl.prg         Main() entry, REPL loop (3328 lines)
+  agents.prg              CLASS Agent (2794 lines, 64 methods)
+  agents_ui.prg           TUI: banner, cards, cost report
+  agents_prompt.prg       Persistent input box
+  agents_input.prg        Multi-line line editor
+  agents_markdown.prg     Markdown-to-ANSI renderer
+  agents_http.prg         API client
+  agents_sse.prg          SSE parser
+  agents_curl.prg         curl subprocess transport
+  agents_tool_*.prg       11 tool handler files
+  agents_settings.prg     .agents/settings.json
+  agents_perm.prg         Permission gate
+  agents_skill.prg        Skills registry
+  agents_diff.prg         Line-level diff engine
+  agents_console.c        Win32 console backend
+```
 
 ---
 
-## Roadmap
+## Environment Variables
 
-- Token-by-token streaming over the Java transport (currently the answer arrives
-  in one piece).
-- Synchronized agent orchestration (dispatch sub-tasks across agents and join).
-- Persistent key storage in the app's private storage + an in-app key screen.
+| Variable | Description |
+|----------|------------|
+| `DEEPSEEK_API_KEY` | API key (primary) |
+| `AGENTS_API_KEY` | API key (alternative) |
+| `OPENAI_API_KEY` | OpenAI key |
+| `AGENTS_CONFIG` | Override settings.json path |
+| `AGENTS_ASK_TIMEOUT` | Permission prompt timeout (seconds) |
 
-### 🌐 Web Agents
+---
 
-La demo web tiene su propio roadmap con valoración de completitud:
-→ **[docs/roadmap.md](docs/roadmap.md)** (build u48, ~60% global, ~70% ponderado)
+## Wiki
+
+Full documentation: https://github.com/FiveTechSoft/Agents/wiki
+
+- [Web Agents](https://github.com/FiveTechSoft/Agents/wiki/Web-Agents)
+- [Agents EXE](https://github.com/FiveTechSoft/Agents/wiki/Agents-EXE)
+- [Agents APK](https://github.com/FiveTechSoft/Agents/wiki/Agents-APK)
+- [Class Agent API](https://github.com/FiveTechSoft/Agents/wiki/Class-Agent)
 
 ---
 
@@ -249,7 +215,4 @@ La demo web tiene su propio roadmap con valoración de completitud:
 Developed by **© FiveTech Software 2026**.
 Contact: [antonio.fivetech@gmail.com](mailto:antonio.fivetech@gmail.com)
 
-Built with [Harbour](https://harbour.github.io/) ·
-[FiveWin (FWH)](https://www.fivetechsoft.com/) ·
-the **ccharbour** agentic engine ·
-[Tailwind CSS](https://tailwindcss.com/) · [marked.js](https://marked.js.org/).
+Built with [Harbour](https://harbour.github.io/) · [FiveWin](https://www.fivetechsoft.com/) · [Tailwind CSS](https://tailwindcss.com/) · [marked.js](https://marked.js.org/).
