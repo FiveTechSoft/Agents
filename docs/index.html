@@ -31,7 +31,7 @@
 </head>
 <body class="bg-gray-900 text-gray-100 h-[100dvh] overflow-hidden font-sans text-sm">
 <!-- auto-updater: if the cached page is stale, force a truly-fresh navigation (bypasses any SW/CDN cache) -->
-<script>(function(){var BUILD='u56';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
+<script>(function(){var BUILD='u57';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();</script>
 
 <div class="flex h-full relative">
 
@@ -167,7 +167,7 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u56';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+(function(){var BUILD='u57';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
 ;
 
 /* =====================================================================
@@ -739,6 +739,57 @@ async function sshConnect(wsUrl, target, user, fromPrompt){
   // store session
   activeSsh={ ws, term, card, infoEl:info, target, user, close };
   return card;
+}
+
+/* =====================================================================
+   AI Disk Classifier — transformers.js zero-shot (Xenova/mobilebert-xnli).
+   Auto-tags every file on the disk: codigo, test, config, docs, etc.
+   Lazy-loaded on first use (~100MB ONNX model, cached by browser).
+   ===================================================================== */
+let classifierReady = null;
+async function ensureClassifier(){
+  if(classifierReady) return classifierReady;
+  tool('🤖 Cargando clasificador IA (transformers.js ~100MB, primera vez)…');
+  classifierReady = (async()=>{
+    const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2/dist/transformers.min.js');
+    return await pipeline('zero-shot-classification', 'Xenova/mobilebert-xnli');
+  })();
+  try{ return await classifierReady; }catch(e){ classifierReady=null; throw e; }
+}
+const DISK_LABELS=['código','test','configuración','documentación','datos','script shell','otro'];
+async function classifyDisk(){
+  const classifier = await ensureClassifier();
+  const items = await fsList();
+  const files = items.filter(f => !f.path.endsWith('/.keep') && !f.path.startsWith('_labels/') && !f.path.startsWith('skills/'));
+  if(!files.length) return 'Disco vacío.';
+  const results = [];
+  for(const f of files){
+    const text = (f.content||'').slice(0, 2000); // first 2KB is enough for classification
+    if(!text.trim()){ results.push({path:f.path,label:'vacío',score:1}); continue; }
+    const out = await classifier(text, DISK_LABELS);
+    const label = out.labels[0];
+    const score = out.scores[0];
+    results.push({path:f.path, label, score});
+    // persist label
+    await fsPut('_labels/'+f.path+'.label', JSON.stringify({label,score,at:Date.now()}));
+  }
+  return results;
+}
+async function classifyCard(){
+  tool('🤖 Clasificando archivos del disco…');
+  const results = await classifyDisk();
+  if(typeof results==='string'){ tool(results); return; }
+  const c=el('<div class="bg-gray-800 border border-purple-900/50 rounded-xl overflow-hidden max-w-[90%]"></div>');
+  c.innerHTML='<div class="p-3 border-b border-gray-700 flex items-center gap-2"><span class="text-purple-400 text-lg">🤖</span><div><h4 class="text-sm font-semibold text-gray-200">Disco Clasificado</h4><p class="text-[10px] text-gray-400">'+results.length+' archivos etiquetados con IA</p></div></div><div class="p-3 bg-gray-900/50 space-y-1.5"></div>';
+  const body=c.querySelector('.p-3.bg-gray-900\\/50');
+  results.sort((a,b)=>a.label.localeCompare(b.label)||b.score-a.score);
+  results.forEach(r=>{
+    const row=el('<div class="flex items-center justify-between text-xs"></div>');
+    const colormap={código:'text-blue-400',test:'text-green-400',configuración:'text-yellow-400',documentación:'text-gray-400',datos:'text-orange-400','script shell':'text-cyan-400',otro:'text-gray-500',vacío:'text-gray-600'};
+    row.innerHTML='<span class="truncate flex-1">📄 '+r.path+'</span><span class="'+((colormap[r.label])||'text-gray-500')+' bg-gray-800 px-1.5 py-0.5 rounded text-[10px] shrink-0 ml-2">'+r.label+' '+(r.score>0.5?'✅':'🤔')+'</span>';
+    body.appendChild(row);
+  });
+  chat().appendChild(c); down();
 }
 
 /* =====================================================================
@@ -1534,7 +1585,8 @@ const TOOLS=[
  {type:'function',function:{name:'user_tools',description:'List all user-registered tools (names and descriptions).',parameters:{type:'object',properties:{}}}},
  {type:'function',function:{name:'unregister_tool',description:'Remove a user-registered tool from the registry. Does NOT delete the script file — only removes the registration from localStorage. The script stays on disk. Use this instead of deleting the script.',parameters:{type:'object',properties:{name:{type:'string',description:'Tool name to unregister'}},required:['name']}}},
  {type:'function',function:{name:'create_skill',description:'Create or update a skill — a reusable instruction set that gets injected into the system prompt whenever it is active. Skills shape HOW the agent thinks and works (e.g. \"always write tests first\", \"respond in bullet points\"). Write clear, specific instructions in the content parameter. The skill is NOT auto-activated; use toggle_skill to activate it.',parameters:{type:'object',properties:{name:{type:'string',description:'Skill name (lowercase, no spaces). Becomes skills/name.md on disk.'},content:{type:'string',description:'The skill instructions (Markdown). Write what the agent should ALWAYS do when this skill is active. Be specific and actionable.'}},required:['name','content']}}},
- {type:'function',function:{name:'toggle_skill',description:'Activate or deactivate a skill. Active skills are injected into the system prompt. Deactivating does NOT delete the skill file — it stays on disk and can be reactivated later. Use this instead of deleting skill files.',parameters:{type:'object',properties:{name:{type:'string',description:'Skill name to toggle'},active:{type:'boolean',description:'true to activate, false to deactivate'}},required:['name','active']}}}
+ {type:'function',function:{name:'toggle_skill',description:'Activate or deactivate a skill. Active skills are injected into the system prompt. Deactivating does NOT delete the skill file — it stays on disk and can be reactivated later. Use this instead of deleting skill files.',parameters:{type:'object',properties:{name:{type:'string',description:'Skill name to toggle'},active:{type:'boolean',description:'true to activate, false to deactivate'}},required:['name','active']}}},
+ {type:'function',function:{name:'classify_disk',description:'Auto-classify all files on the disk using AI (transformers.js zero-shot). Returns a table of file → category. Categories: codigo, test, configuracion, documentacion, datos, script, otro. Useful to understand the project structure without reading every file.',parameters:{type:'object',properties:{}}}}
 ];
 // sub-agents get the disk tools but NOT dispatch/ask/git (avoid recursion / blocking)
 const SUBTOOLS=TOOLS.filter(t=>!['dispatch_agents','ask_user','git'].includes(t.function.name));
@@ -1624,6 +1676,10 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
     USER_TOOLS.delete(un);
     saveUserTools();
     return 'Tool '+un+' eliminada del registro. El script no se ha borrado del disco.';
+  }
+  if(name==='classify_disk'){
+    classifyCard();
+    return 'Clasificación del disco iniciada.';
   }
   if(name==='sql'){ const dbPath = args.db ? shResolve(args.db) : 'database.db'; const result = await pyDbExec(dbPath, args.query||''); return typeof result === 'string' ? result : JSON.stringify(result, null, 2); }
   if(name==='git'){ const a=(args.action||'').toLowerCase();
@@ -2121,6 +2177,10 @@ async function slashCmd(v){
       const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'');
       tool('🔒 Conectando a '+(user?user+'@':'')+host+':'+port+' via '+SSH_PROXY);
       sshConnect(wsUrl, host+(port!==22?':'+port:''), user, true);
+      break;
+    }
+    case '/classify': {
+      classifyCard();
       break;
     }
     case '/exit': {
