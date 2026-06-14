@@ -3,13 +3,13 @@
 // hPermissions : { toolName => "allow"|"deny"|"ask" }.
 // bAsk         : optional {|cName,cArgsJson| -> "y"|"n"|"a"}.
 // Returns a gated executor with the same {|cName,cArgsJson| -> cString} contract.
-FUNCTION CCPERM_Gate( bInner, hPermissions, bAsk )
-   LOCAL hPerm := CCPERM_CloneModes( hPermissions )
+FUNCTION AGPERM_Gate( bInner, hPermissions, bAsk )
+   LOCAL hPerm := AGPERM_CloneModes( hPermissions )
    RETURN {| cName, cArgsJson | ;
-      CCPERM_Decide( hPerm, bInner, bAsk, cName, cArgsJson ) }
+      AGPERM_Decide( hPerm, bInner, bAsk, cName, cArgsJson ) }
 
 // Copies the caller's permission hash so an "a" upgrade never mutates it.
-STATIC FUNCTION CCPERM_CloneModes( hPermissions )
+STATIC FUNCTION AGPERM_CloneModes( hPermissions )
    LOCAL hOut := {=>}, cKey
    IF ValType( hPermissions ) == "H"
       FOR EACH cKey IN hb_HKeys( hPermissions )
@@ -19,7 +19,7 @@ STATIC FUNCTION CCPERM_CloneModes( hPermissions )
    RETURN hOut
 
 // Decides allow/deny for one call; "a" upgrades the tool to allow for the session.
-STATIC FUNCTION CCPERM_Decide( hPerm, bInner, bAsk, cName, cArgsJson )
+STATIC FUNCTION AGPERM_Decide( hPerm, bInner, bAsk, cName, cArgsJson )
    LOCAL cMode, cAns
    // ask_user / todo_write only drive the UI; use_skill and dispatch_agent
    // are dispatchers of work the user already requested -- inherently
@@ -33,7 +33,7 @@ STATIC FUNCTION CCPERM_Decide( hPerm, bInner, bAsk, cName, cArgsJson )
    // user types /plan accept. Read-only tools (read, glob, grep, github_read,
    // memory, web_fetch, web_search, use_skill) are unaffected so the agent
    // can still gather context while planning.
-   IF CCREPL_PlanMode() .AND. ;
+   IF AGREPL_PlanMode() .AND. ;
       ( cName == "write" .OR. cName == "edit" .OR. cName == "shell" .OR. ;
         cName == "github_write" )
       RETURN "Error: plan mode is active. '" + cName + "' is locked until " + ;
@@ -50,7 +50,7 @@ STATIC FUNCTION CCPERM_Decide( hPerm, bInner, bAsk, cName, cArgsJson )
       RETURN "Error: tool '" + hb_CStr( cName ) + "' denied by policy"
    ENDCASE
    // cMode == "ask"
-   cAns := iif( bAsk == NIL, "n", CCPERM_Norm( Eval( bAsk, cName, cArgsJson ) ) )
+   cAns := iif( bAsk == NIL, "n", AGPERM_Norm( Eval( bAsk, cName, cArgsJson ) ) )
    DO CASE
    CASE cAns == "y"
       RETURN Eval( bInner, cName, cArgsJson )
@@ -61,7 +61,7 @@ STATIC FUNCTION CCPERM_Decide( hPerm, bInner, bAsk, cName, cArgsJson )
    RETURN "Error: tool '" + hb_CStr( cName ) + "' denied by user"
 
 // Normalises an ask answer to a single lowercase character; non-strings -> "n".
-STATIC FUNCTION CCPERM_Norm( xAns )
+STATIC FUNCTION AGPERM_Norm( xAns )
    LOCAL cAns
    IF ValType( xAns ) != "C"
       RETURN "n"

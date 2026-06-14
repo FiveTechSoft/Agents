@@ -12,22 +12,22 @@
 #include "fileio.ch"
 
 // Module-level test transport. When set (and no per-request transport is
-// given), CCHTTP_Fetch routes through it instead of curl. Tests only.
+// given), AGHTTP_Fetch routes through it instead of curl. Tests only.
 STATIC s_bTestTransport := NIL
 
 // Performs a streaming POST. hReq: { url, headers (array of "K: V"), body, timeout }.
 // bOnChunk is called with each received raw text chunk.
 // bTransport (optional codeblock {|hReq,bOnChunk| -> hResult }) overrides curl;
-// when NIL the real curl transport (CCHTTP_CurlPost) is used.
+// when NIL the real curl transport (AGHTTP_CurlPost) is used.
 // Returns: { ok, status, curl_code, error }
-FUNCTION CCHTTP_Post( hReq, bOnChunk, bTransport )
+FUNCTION AGHTTP_Post( hReq, bOnChunk, bTransport )
    IF bTransport != NIL
       RETURN Eval( bTransport, hReq, bOnChunk )
    ENDIF
-   RETURN CCHTTP_CurlPost( hReq, bOnChunk )
+   RETURN AGHTTP_CurlPost( hReq, bOnChunk )
 
 // Real transport: spawns curl and streams its stdout to bOnChunk.
-FUNCTION CCHTTP_CurlPost( hReq, bOnChunk )
+FUNCTION AGHTTP_CurlPost( hReq, bOnChunk )
    LOCAL hProc, hIn, hOut, hErr, hTmp
    LOCAL cHdrFile := "", cCmd, cHdr, nTimeout
    LOCAL cBuf := Space( 16384 ), nRead
@@ -69,7 +69,7 @@ FUNCTION CCHTTP_CurlPost( hReq, bOnChunk )
    // check for Ctrl+C between chunks to allow cancellation
    DO WHILE ( nRead := FRead( hOut, @cBuf, hb_BLen( cBuf ) ) ) > 0
       Eval( bOnChunk, hb_BLeft( cBuf, nRead ) )
-      IF CCCON_PeekCtrlC()
+      IF AGCON_PeekCtrlC()
          hb_processClose( hProc )
          FClose( hOut )
          FClose( hErr )
@@ -90,7 +90,7 @@ FUNCTION CCHTTP_CurlPost( hReq, bOnChunk )
    FClose( hErr )
    nExit := hb_processValue( hProc )
 
-   nStatus := CCHTTP_ParseStatus( cHdrFile )
+   nStatus := AGHTTP_ParseStatus( cHdrFile )
    FErase( cHdrFile )
 
    RETURN { "ok" => ( nExit == 0 ), ;
@@ -101,7 +101,7 @@ FUNCTION CCHTTP_CurlPost( hReq, bOnChunk )
                     AllTrim( cErr ) ) ) }
 
 // Installs (or clears, with NIL) the module-level test transport.
-FUNCTION CCHTTP_SetTestTransport( bBlock )
+FUNCTION AGHTTP_SetTestTransport( bBlock )
    s_bTestTransport := bBlock
    RETURN NIL
 
@@ -111,18 +111,18 @@ FUNCTION CCHTTP_SetTestTransport( bBlock )
 //         default 60), transport (optional {|hReq| -> hResult} override) }.
 // Returns: { ok, status, body, error }.
 // ok indicates the transport succeeded (curl ran); check status for the HTTP result.
-FUNCTION CCHTTP_Fetch( hReq )
+FUNCTION AGHTTP_Fetch( hReq )
    IF hb_HHasKey( hReq, "transport" ) .AND. hReq[ "transport" ] != NIL
       RETURN Eval( hReq[ "transport" ], hReq )
    ENDIF
    IF s_bTestTransport != NIL
       RETURN Eval( s_bTestTransport, hReq )
    ENDIF
-   RETURN CCHTTP_CurlFetch( hReq )
+   RETURN AGHTTP_CurlFetch( hReq )
 
 // True when a URL contains characters unsafe on the curl command line:
 // a double-quote, whitespace, or any control character (byte <= 32).
-STATIC FUNCTION CCHTTP_UnsafeUrl( cUrl )
+STATIC FUNCTION AGHTTP_UnsafeUrl( cUrl )
    LOCAL i, nByte
    FOR i := 1 TO hb_BLen( cUrl )
       nByte := hb_BCode( hb_BSubStr( cUrl, i, 1 ) )
@@ -133,7 +133,7 @@ STATIC FUNCTION CCHTTP_UnsafeUrl( cUrl )
    RETURN .F.
 
 // Real transport: spawns curl and accumulates its whole stdout.
-STATIC FUNCTION CCHTTP_CurlFetch( hReq )
+STATIC FUNCTION AGHTTP_CurlFetch( hReq )
    LOCAL hProc, hIn, hOut, hErr, hTmp
    LOCAL cHdrFile := "", cCmd, cHdr, nTimeout, cMethod
    LOCAL cBuf := Space( 16384 ), nRead
@@ -145,7 +145,7 @@ STATIC FUNCTION CCHTTP_CurlFetch( hReq )
                "error" => "missing url" }
    ENDIF
 
-   IF CCHTTP_UnsafeUrl( hb_CStr( hReq[ "url" ] ) )
+   IF AGHTTP_UnsafeUrl( hb_CStr( hReq[ "url" ] ) )
       RETURN { "ok" => .F., "status" => 0, "body" => "", ;
                "error" => "invalid url" }
    ENDIF
@@ -200,7 +200,7 @@ STATIC FUNCTION CCHTTP_CurlFetch( hReq )
    FClose( hErr )
    nExit := hb_processValue( hProc )
 
-   nStatus := CCHTTP_ParseStatus( cHdrFile )
+   nStatus := AGHTTP_ParseStatus( cHdrFile )
    FErase( cHdrFile )
 
    RETURN { "ok" => ( nExit == 0 ), "status" => nStatus, "body" => cBody, ;
@@ -209,7 +209,7 @@ STATIC FUNCTION CCHTTP_CurlFetch( hReq )
                     AllTrim( cErr ) ) ) }
 
 // Reads the curl -D header dump and returns the last HTTP status line code.
-STATIC FUNCTION CCHTTP_ParseStatus( cHdrFile )
+STATIC FUNCTION AGHTTP_ParseStatus( cHdrFile )
    LOCAL cText, cLine, nStatus := 0, aTok
    IF Empty( cHdrFile ) .OR. !hb_FileExists( cHdrFile )
       RETURN 0

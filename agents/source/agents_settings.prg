@@ -1,8 +1,8 @@
 // Returns the built-in default settings hash.
 // compact_threshold: 0..1 fraction of the model's context window that the
-// last turn's prompt_tokens must exceed for CCREPL_Out to print a one-shot
+// last turn's prompt_tokens must exceed for AGREPL_Out to print a one-shot
 // "/compact" hint (warn-only, never auto-runs).
-FUNCTION CCSETTINGS_Defaults()
+FUNCTION AGSETTINGS_Defaults()
    RETURN { "model"             => "deepseek-v4-flash", ;
             "base_url"          => "https://api.deepseek.com", ;
             "max_iterations"    => 25, ;
@@ -25,8 +25,8 @@ FUNCTION CCSETTINGS_Defaults()
 // When the default file is missing it is auto-created with the defaults so
 // the user has something to edit. Missing (after that) or malformed file ->
 // the pure defaults. Never throws.
-FUNCTION CCSETTINGS_Load( cPath )
-   LOCAL hSet := CCSETTINGS_Defaults(), cText, xJson, cKey, cTool
+FUNCTION AGSETTINGS_Load( cPath )
+   LOCAL hSet := AGSETTINGS_Defaults(), cText, xJson, cKey, cTool
    LOCAL lDefaultPath := .F.
    IF Empty( cPath )
       cPath := hb_GetEnv( "AGENTS_CONFIG" )
@@ -39,7 +39,7 @@ FUNCTION CCSETTINGS_Load( cPath )
       // Only auto-create at the default location; an explicit
       // AGENTS_CONFIG path is left untouched.
       IF lDefaultPath
-         CCSETTINGS_Create( cPath, hSet )
+         AGSETTINGS_Create( cPath, hSet )
       ENDIF
       RETURN hSet
    ENDIF
@@ -68,7 +68,7 @@ FUNCTION CCSETTINGS_Load( cPath )
 // Writes hSet to cPath as human-readable JSON, creating the parent
 // directory when needed. Best-effort: any failure is ignored, since the
 // in-memory defaults still apply when no file can be written.
-STATIC FUNCTION CCSETTINGS_Create( cPath, hSet )
+STATIC FUNCTION AGSETTINGS_Create( cPath, hSet )
    LOCAL cDir := hb_FNameDir( cPath )
    IF !Empty( cDir ) .AND. !hb_DirExists( cDir )
       hb_DirBuild( cDir )
@@ -76,15 +76,15 @@ STATIC FUNCTION CCSETTINGS_Create( cPath, hSet )
    hb_MemoWrit( cPath, hb_jsonEncode( hSet, .T. ) )
    RETURN NIL
 
-// Persists hSet to the same path CCSETTINGS_Load would read from. Public
-// wrapper around CCSETTINGS_Create for handlers that need to update the
+// Persists hSet to the same path AGSETTINGS_Load would read from. Public
+// wrapper around AGSETTINGS_Create for handlers that need to update the
 // file at runtime (notably the /provider command).
-FUNCTION CCSETTINGS_Save( hSet, cPath )
+FUNCTION AGSETTINGS_Save( hSet, cPath )
    IF Empty( cPath )
       cPath := hb_GetEnv( "AGENTS_CONFIG" )
    ENDIF
    IF Empty( cPath )
       cPath := ".agents" + hb_ps() + "settings.json"
    ENDIF
-   CCSETTINGS_Create( cPath, hSet )
+   AGSETTINGS_Create( cPath, hSet )
    RETURN NIL

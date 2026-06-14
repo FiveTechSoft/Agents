@@ -40,6 +40,7 @@ PRGS="$APP/src/prg/agents.prg /c/fwteam/samples/AgenticAI/ccguistub.prg \
   $AGENTS_SRC/agents_tool_github.prg $AGENTS_SRC/agents_tool_memory.prg \
   $AGENTS_SRC/agents_tool_ask.prg $AGENTS_SRC/agents_tool_todo.prg \
   $AGENTS_SRC/agents_tool_skill.prg $AGENTS_SRC/agents_tool_dispatch.prg \
+  $AGENTS_SRC/agents_todo.prg $AGENTS_SRC/agents_propose.prg \
   $AGENTS_SRC/agents_tool_propose.prg \
   $AGENTS_SRC/agents_diff.prg $AGENTS_SRC/agents_perm.prg \
   $AGENTS_SRC/agents_skill.prg $AGENTS_SRC/agents_bg.prg \
@@ -60,11 +61,11 @@ for p in $PRGS; do
 done
 "$CLANG" $CFLAGS -c "$APP/src/cpp/android_webview.c" -o "$OUT/obj/android_webview.o"
 
-# ---- 3. link libagents.so ----
-echo ">>> [3/8] link libagents.so"
+# ---- 3. link libagenticai.so ----
+echo ">>> [3/8] link libagenticai.so"
 "$CLANG" --target=$TARGET -shared -fPIC \
-  -Wl,-soname,libagents.so \
-  -o "$OUT/jni-libs/arm64-v8a/libagents.so" \
+  -Wl,-soname,libagenticai.so \
+  -o "$OUT/jni-libs/arm64-v8a/libagenticai.so" \
   "$OUT/obj/android_webview.o" \
   -Wl,--whole-archive $OBJS -Wl,--no-whole-archive \
   -L"$HB_LIB" -Wl,--start-group \
@@ -73,7 +74,7 @@ echo ">>> [3/8] link libagents.so"
   -lrddntx -lrddcdx -lrddfpt -lrddnsx \
   -lgtstd -lgttrm -lgtcgi -lgtpca -lhbsix -lhbhsx \
   -Wl,--end-group -ldl -lm -llog
-ls -lh "$OUT/jni-libs/arm64-v8a/libagents.so"
+ls -lh "$OUT/jni-libs/arm64-v8a/libagenticai.so"
 
 # ---- 4-5. resources ----
 echo ">>> [4/8] aapt2 compile"; aapt2 compile --dir "$APP/src/res" -o "$OUT/res-compiled"
@@ -94,8 +95,8 @@ cd "$OUT/classes"; d8.bat --lib "$ANDROID_JAR" --min-api 24 --output "$OUT/apk/"
 echo ">>> [8/8] package & sign"
 cp "$OUT/apk/base.apk" "$OUT/apk/unsigned.apk"
 cp "$OUT/apk/classes.dex" "$OUT/payload/classes.dex"
-cp "$OUT/jni-libs/arm64-v8a/libagents.so" "$OUT/payload/lib/arm64-v8a/libagents.so"
-cd "$OUT/payload"; "$JDK/bin/jar.exe" uf "$OUT/apk/unsigned.apk" classes.dex lib/arm64-v8a/libagents.so
+cp "$OUT/jni-libs/arm64-v8a/libagenticai.so" "$OUT/payload/lib/arm64-v8a/libagenticai.so"
+cd "$OUT/payload"; "$JDK/bin/jar.exe" uf "$OUT/apk/unsigned.apk" classes.dex lib/arm64-v8a/libagenticai.so
 cd "$OUT"; zipalign.exe -f -p 4 "$OUT/apk/unsigned.apk" "$OUT/apk/aligned.apk"
 
 KS="$APP/debug.keystore"

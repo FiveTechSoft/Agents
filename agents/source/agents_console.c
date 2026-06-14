@@ -4,21 +4,21 @@
 #include "hbapiitm.h"
 #include <windows.h>
 
-/* CCCON_HasConsole() -> .T. when stdin is a real interactive console. */
-HB_FUNC( CCCON_HASCONSOLE )
+/* AGCON_HasConsole() -> .T. when stdin is a real interactive console. */
+HB_FUNC( AGCON_HASCONSOLE )
 {
    DWORD mode;
    HANDLE h = GetStdHandle( STD_INPUT_HANDLE );
    hb_retl( h != INVALID_HANDLE_VALUE && h != NULL && GetConsoleMode( h, &mode ) );
 }
 
-static DWORD    s_CCCON_savedMode = 0;
-static HB_BOOL  s_CCCON_modeSaved = HB_FALSE;
+static DWORD    s_AGCON_savedMode = 0;
+static HB_BOOL  s_AGCON_modeSaved = HB_FALSE;
 
-/* CCCON_RawMode( lOn ) -- lOn .T. disables line-input/echo/processed-input on
+/* AGCON_RawMode( lOn ) -- lOn .T. disables line-input/echo/processed-input on
  * the console (so keystrokes and Ctrl+C arrive as raw events); .F. restores
  * the previously saved mode. Returns .T. on success, .F. on any failure. */
-HB_FUNC( CCCON_RAWMODE )
+HB_FUNC( AGCON_RAWMODE )
 {
    HB_BOOL fOn = hb_parl( 1 );
    HANDLE  h   = GetStdHandle( STD_INPUT_HANDLE );
@@ -31,16 +31,16 @@ HB_FUNC( CCCON_RAWMODE )
          DWORD mode;
          if( GetConsoleMode( h, &mode ) )
          {
-            s_CCCON_savedMode = mode;
-            s_CCCON_modeSaved = HB_TRUE;
+            s_AGCON_savedMode = mode;
+            s_AGCON_modeSaved = HB_TRUE;
             mode &= ~( ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT );
             if( SetConsoleMode( h, mode ) )
                fOk = HB_TRUE;
          }
       }
-      else if( s_CCCON_modeSaved )
+      else if( s_AGCON_modeSaved )
       {
-         if( SetConsoleMode( h, s_CCCON_modeSaved ) )
+         if( SetConsoleMode( h, s_AGCON_modeSaved ) )
             fOk = HB_TRUE;
       }
    }
@@ -48,14 +48,14 @@ HB_FUNC( CCCON_RAWMODE )
    hb_retl( fOk );
 }
 
-/* CCCON_ReadKey() -- blocks for one key-down event and returns an int:
+/* AGCON_ReadKey() -- blocks for one key-down event and returns an int:
  *   > 0  the Unicode codepoint of a printable character
  *     0  end of input
  *    -1 Enter      -2 Backspace  -3 Left    -4 Right   -5 Home  -6 End
  *    -7 Delete     -8 Ctrl+C     -9 Up      -10 Down   -11 Shift+Enter
  *   -12 Tab        -13 Esc       -14 Ctrl+E
  *   -99 an unmapped key (caller ignores it). */
-HB_FUNC( CCCON_READKEY )
+HB_FUNC( AGCON_READKEY )
 {
    HANDLE       h = GetStdHandle( STD_INPUT_HANDLE );
    INPUT_RECORD rec;
@@ -108,10 +108,10 @@ HB_FUNC( CCCON_READKEY )
    hb_retni( result );
 }
 
-/* CCCON_PeekCtrlC() -> .T. when a Ctrl+C key event is pending in the
+/* AGCON_PeekCtrlC() -> .T. when a Ctrl+C key event is pending in the
  * console input buffer. The event is consumed and discarded, so a
- * subsequent CCCON_ReadKey will not see it. Non-blocking. */
-HB_FUNC( CCCON_PEEKCTRLC )
+ * subsequent AGCON_ReadKey will not see it. Non-blocking. */
+HB_FUNC( AGCON_PEEKCTRLC )
 {
    HANDLE h = GetStdHandle( STD_INPUT_HANDLE );
    DWORD nEvents = 0;
@@ -155,10 +155,10 @@ HB_FUNC( CCCON_PEEKCTRLC )
    hb_retl( 0 );
 }
 
-/* CCCON_PeekEsc() -> .T. when an Escape key press is pending in the
+/* AGCON_PeekEsc() -> .T. when an Escape key press is pending in the
  * console input buffer. The event IS consumed and discarded, so a later
- * ReadLine / CCCON_ReadKey will not see it. Non-blocking. */
-HB_FUNC( CCCON_PEEKESC )
+ * ReadLine / AGCON_ReadKey will not see it. Non-blocking. */
+HB_FUNC( AGCON_PEEKESC )
 {
    HANDLE h = GetStdHandle( STD_INPUT_HANDLE );
    DWORD nEvents = 0;
@@ -193,9 +193,9 @@ HB_FUNC( CCCON_PEEKESC )
    hb_retl( 0 );
 }
 
-/* CCCON_Size() -> { "rows" => <n>, "cols" => <n> } : the visible console
+/* AGCON_Size() -> { "rows" => <n>, "cols" => <n> } : the visible console
  * window size. Falls back to 24x80 when there is no console. */
-HB_FUNC( CCCON_SIZE )
+HB_FUNC( AGCON_SIZE )
 {
    HANDLE h = GetStdHandle( STD_OUTPUT_HANDLE );
    CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -223,13 +223,13 @@ HB_FUNC( CCCON_SIZE )
    hb_itemReturnRelease( pHash );
 }
 
-/* CCCON_StdInWait( nMs ) -> .T. when stdin signals readiness within nMs
+/* AGCON_StdInWait( nMs ) -> .T. when stdin signals readiness within nMs
  * milliseconds. Used by the permission prompt (and any other reader that
  * wants a non-blocking timed wait on stdin). Returns .F. on timeout or
  * error. Console handles signal on any input event so the caller may
  * still see a 0-byte FRead and loop; redirected/piped stdin signals on
  * actual data. */
-HB_FUNC( CCCON_STDINWAIT )
+HB_FUNC( AGCON_STDINWAIT )
 {
    int    nMs = hb_parni( 1 );
    HANDLE h   = GetStdHandle( STD_INPUT_HANDLE );
@@ -244,9 +244,9 @@ HB_FUNC( CCCON_STDINWAIT )
    hb_retl( r == WAIT_OBJECT_0 );
 }
 
-/* CCCON_KeyPending() -> .T. when a key-down event is waiting in the console
+/* AGCON_KeyPending() -> .T. when a key-down event is waiting in the console
  * input queue. Non-blocking; does NOT consume the event. */
-HB_FUNC( CCCON_KEYPENDING )
+HB_FUNC( AGCON_KEYPENDING )
 {
    HANDLE h = GetStdHandle( STD_INPUT_HANDLE );
    DWORD  nEvents = 0, nRead, i;

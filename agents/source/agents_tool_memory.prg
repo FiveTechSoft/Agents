@@ -2,7 +2,7 @@
 // sessions. cMemPath (the path to memory.md) is captured at registry-build
 // time, so it is injectable for tests.
 
-FUNCTION CCTool_Memory( cMemPath )
+FUNCTION AGTOOL_Memory( cMemPath )
    RETURN { "name" => "memory", ;
             "description" => "Your persistent memory across sessions. " + ;
                "operation 'append' adds a fact, 'read' returns the whole " + ;
@@ -14,9 +14,9 @@ FUNCTION CCTool_Memory( cMemPath )
                   "text" => { "type" => "string", ;
                      "description" => "The memory entry to add (operation append)" } }, ;
                "required" => { "operation" } }, ;
-            "handler" => {| hArgs | CCTool_MemoryRun( hArgs, cMemPath ) } }
+            "handler" => {| hArgs | AGTOOL_MemoryRun( hArgs, cMemPath ) } }
 
-STATIC FUNCTION CCTool_MemoryRun( hArgs, cMemPath )
+STATIC FUNCTION AGTOOL_MemoryRun( hArgs, cMemPath )
    LOCAL cOp, cCur
    cOp := Lower( hb_CStr( hArgs[ "operation" ] ) )
    DO CASE

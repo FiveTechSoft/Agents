@@ -5,8 +5,8 @@
 // timeout caps wall-clock time, and Esc on the parent box cancels the
 // subagent.
 //
-// Per-turn invocation counter -- reset by CCTool_DispatchResetCount at
-// the start of every CCREPL_RunTurn. The second consecutive dispatch
+// Per-turn invocation counter -- reset by AGTOOL_DispatchResetCount at
+// the start of every AGREPL_RunTurn. The second consecutive dispatch
 // inside the same turn is rejected with a redirect to propose_agents,
 // forcing the model to batch its plan and route through the user gate
 // instead of dispatching a flurry of subagents without confirmation.
@@ -18,18 +18,18 @@
 STATIC s_nDispatchInTurn := 0
 STATIC s_nDispatchAllowance := 0
 
-FUNCTION CCTool_DispatchResetCount()
+FUNCTION AGTOOL_DispatchResetCount()
    s_nDispatchInTurn := 0
    s_nDispatchAllowance := 0
    RETURN NIL
 
 // Called by propose_agents when the user approves a batch. Adds N to the
 // allowance so the next N dispatch_agent calls go through.
-FUNCTION CCTool_DispatchGrantAllowance( nN )
+FUNCTION AGTOOL_DispatchGrantAllowance( nN )
    s_nDispatchAllowance += Max( 0, Int( nN ) )
    RETURN NIL
 
-FUNCTION CCTool_DispatchAgent()
+FUNCTION AGTOOL_DispatchAgent()
    RETURN { "name" => "dispatch_agent", ;
             "description" => "Launch an isolated subagent on a specific " + ;
                "task. The subagent has its own conversation and its own " + ;
@@ -59,9 +59,9 @@ FUNCTION CCTool_DispatchAgent()
                                    "description" => "Max wall-clock seconds " + ;
                                       "(default 120, max 600)" } }, ;
                "required" => { "prompt" } }, ;
-            "handler" => {| hArgs | CCTool_DispatchRun( hArgs ) } }
+            "handler" => {| hArgs | AGTOOL_DispatchRun( hArgs ) } }
 
-STATIC FUNCTION CCTool_DispatchRun( hArgs )
+STATIC FUNCTION AGTOOL_DispatchRun( hArgs )
    LOCAL cPrompt, cType, hSet, hCfg, oClient, oReg, aMsgs, hRes
    LOCAL cReply, hMsg, hKeys
    LOCAL nTimeout, nStartMs, oPrompt, bInterrupt, cStopReason
@@ -100,19 +100,19 @@ STATIC FUNCTION CCTool_DispatchRun( hArgs )
                     hArgs[ "timeout_s" ], 120 )
    IF nTimeout < 5  ; nTimeout := 5    ; ENDIF
    IF nTimeout > 600 ; nTimeout := 600 ; ENDIF
-   hSet := CCSETTINGS_Load()
-   hCfg := CCCFG_Resolve( {=>} )
+   hSet := AGSETTINGS_Load()
+   hCfg := AGCFG_Resolve( {=>} )
    IF !hCfg[ "ok" ]
       RETURN "Error: dispatch_agent: no API key configured"
    ENDIF
-   oClient := CC_Client( { "model" => hSet[ "model" ], ;
+   oClient := AG_Client( { "model" => hSet[ "model" ], ;
                            "base_url" => hSet[ "base_url" ] } )
-   hKeys := { "github"        => CCCFG_ResolveKey( "GITHUB_TOKEN", ;
+   hKeys := { "github"        => AGCFG_ResolveKey( "GITHUB_TOKEN", ;
                                                    "github_token", hSet ), ;
               "co_author"     => hb_HGetDef( hSet, "co_author", "" ), ;
               "shell_timeout" => hb_HGetDef( hSet, "shell_timeout", 30 ) }
-   oReg := CCTOOLS_Registry( hKeys )
-   CCTOOLS_FilterForAgent( oReg, cType )
+   oReg := AGTOOLS_Registry( hKeys )
+   AGTOOLS_FilterForAgent( oReg, cType )
    aMsgs := { ;
       { "role" => "system", ;
         "content" => "You are a Agents subagent of type '" + cType + "'. " + ;
@@ -140,82 +140,82 @@ STATIC FUNCTION CCTool_DispatchRun( hArgs )
       { "role" => "user", "content" => cPrompt } }
    // Render the opening Agent block above the input box: separator, header,
    // and the prompt summary. The timeout/elapsed line is printed in-place
-   // below via CCREPL_OverwriteAtAnchor so it can tick down without
+   // below via AGREPL_OverwriteAtAnchor so it can tick down without
    // pushing the box down on every update.
-   nCols := CCREPL_Cols()
+   nCols := AGREPL_Cols()
    cSummary := iif( hb_UTF8Len( cPrompt ) > 80, ;
                     hb_UTF8SubStr( cPrompt, 1, 77 ) + "...", cPrompt )
-   CCREPL_Out( Chr(10) + ;
-      CCUI_Color( Replicate( Chr(226)+Chr(148)+Chr(128), nCols - 1 ), ;
-                  CCUI_Pal( "bash_header" ) ) + Chr(10) + ;
-      CCUI_Color( " Agent " + cType + " working", ;
-                  CCUI_Pal( "bash_header" ) ) + Chr(10) + Chr(10) + ;
-      CCUI_Color( "   " + cSummary, CCUI_Pal( "bash_command" ) ) + Chr(10) )
+   AGREPL_Out( Chr(10) + ;
+      AGUI_Color( Replicate( Chr(226)+Chr(148)+Chr(128), nCols - 1 ), ;
+                  AGUI_Pal( "bash_header" ) ) + Chr(10) + ;
+      AGUI_Color( " Agent " + cType + " working", ;
+                  AGUI_Pal( "bash_header" ) ) + Chr(10) + Chr(10) + ;
+      AGUI_Color( "   " + cSummary, AGUI_Pal( "bash_command" ) ) + Chr(10) )
    nStartMs := hb_milliseconds()
    nLastTick := nStartMs
-   CCREPL_OverwriteAtAnchor( CCUI_Color( ;
+   AGREPL_OverwriteAtAnchor( AGUI_Color( ;
       "   0s elapsed / " + LTrim( Str( nTimeout ) ) + "s timeout " + ;
       Chr(194)+Chr(183) + " press Esc on the input box to cancel", ;
-      CCUI_Pal( "bash_explain" ) ) )
-   // Interrupt check fires from inside CC_AgentRun's polling loop. We
+      AGUI_Pal( "bash_explain" ) ) )
+   // Interrupt check fires from inside AG_AgentRun's polling loop. We
    // piggy-back on it to refresh the elapsed-time line at ~2 Hz: too slow
    // and the counter looks frozen; too fast and we burn cycles repainting.
-   oPrompt := CCREPL_BoxPrompt()
+   oPrompt := AGREPL_BoxPrompt()
    bInterrupt := {|| ;
       iif( hb_milliseconds() - nLastTick >= 500, ;
            ( nLastTick := hb_milliseconds(), ;
-             CCREPL_OverwriteAtAnchor( CCUI_Color( ;
+             AGREPL_OverwriteAtAnchor( AGUI_Color( ;
                 "   " + LTrim( Str( Int( ( hb_milliseconds() - nStartMs ) / 1000 ) ) ) + ;
                 "s elapsed / " + LTrim( Str( nTimeout ) ) + "s timeout " + ;
                 Chr(194)+Chr(183) + " press Esc on the input box to cancel", ;
-                CCUI_Pal( "bash_explain" ) ) ) ), ;
+                AGUI_Pal( "bash_explain" ) ) ) ), ;
            NIL ), ;
-      ( oPrompt != NIL .AND. CCPROMPT_Interrupted( oPrompt ) ) .OR. ;
+      ( oPrompt != NIL .AND. AGPROMPT_Interrupted( oPrompt ) ) .OR. ;
       ( ( hb_milliseconds() - nStartMs ) / 1000.0 > nTimeout ) }
-   hRes := CC_AgentRun( oClient, aMsgs, ;
+   hRes := AG_AgentRun( oClient, aMsgs, ;
       { "model"           => hSet[ "model" ], ;
-        "tools"           => CCTOOLS_Schemas( oReg ), ;
-        "tool_executor"   => CCTOOLS_Executor( oReg ), ;
+        "tools"           => AGTOOLS_Schemas( oReg ), ;
+        "tool_executor"   => AGTOOLS_Executor( oReg ), ;
         "max_iterations"  => 10, ;
         "interrupt_check" => bInterrupt }, ;
       {| hEv | HB_SYMBOL_UNUSED( hEv ) } )
    nElapsedMs := hb_milliseconds() - nStartMs
-   // Replace the in-place timer with a final-elapsed line via CCREPL_Out so
+   // Replace the in-place timer with a final-elapsed line via AGREPL_Out so
    // the row is baked in and content_row advances past it -- the subsequent
    // "Agent done / failed / cancelled" message lands on the next row instead
    // of overwriting the timer.
-   CCREPL_Out( CCUI_Color( ;
+   AGREPL_Out( AGUI_Color( ;
       "   " + LTrim( Str( nElapsedMs / 1000.0, 10, 1 ) ) + "s elapsed / " + ;
       LTrim( Str( nTimeout ) ) + "s timeout", ;
-      CCUI_Pal( "bash_explain" ) ) + Chr(10) )
+      AGUI_Pal( "bash_explain" ) ) + Chr(10) )
    // Drain the parent's Esc interrupt if we caused it so the parent loop
    // does not see a stale interrupt after the tool returns
-   IF oPrompt != NIL .AND. CCPROMPT_Interrupted( oPrompt )
+   IF oPrompt != NIL .AND. AGPROMPT_Interrupted( oPrompt )
       oPrompt[ "interrupt" ] := NIL
    ENDIF
    cStopReason := hb_HGetDef( hRes, "stop_reason", "" )
    IF cStopReason == "interrupted"
       IF ( nElapsedMs / 1000.0 ) >= nTimeout - 0.5
-         CCREPL_Out( CCUI_Color( " Agent timed out after " + ;
-            LTrim( Str( nTimeout ) ) + "s", CCUI_Pal( "warn" ) ) + Chr(10) )
+         AGREPL_Out( AGUI_Color( " Agent timed out after " + ;
+            LTrim( Str( nTimeout ) ) + "s", AGUI_Pal( "warn" ) ) + Chr(10) )
          RETURN "[subagent timed out after " + LTrim( Str( nTimeout ) ) + "s]"
       ENDIF
-      CCREPL_Out( CCUI_Color( " Agent cancelled by user", ;
-                              CCUI_Pal( "warn" ) ) + Chr(10) )
+      AGREPL_Out( AGUI_Color( " Agent cancelled by user", ;
+                              AGUI_Pal( "warn" ) ) + Chr(10) )
       RETURN "[subagent cancelled by user]"
    ENDIF
    IF !hRes[ "success" ]
-      CCREPL_Out( CCUI_Color( " Agent failed: " + ;
+      AGREPL_Out( AGUI_Color( " Agent failed: " + ;
          hb_CStr( hb_HGetDef( hRes, "error_type", "?" ) ), ;
-         CCUI_Pal( "error" ) ) + Chr(10) )
+         AGUI_Pal( "error" ) ) + Chr(10) )
       RETURN "Subagent failed: " + ;
              hb_CStr( hb_HGetDef( hRes, "error_type", "?" ) ) + ": " + ;
              hb_CStr( hb_HGetDef( hRes, "message", "" ) )
    ENDIF
-   CCREPL_Out( CCUI_Color( " Agent done in " + ;
+   AGREPL_Out( AGUI_Color( " Agent done in " + ;
       LTrim( Str( nElapsedMs / 1000.0, 10, 1 ) ) + "s (" + ;
       LTrim( Str( hb_HGetDef( hRes, "iterations", 0 ) ) ) + " iterations)", ;
-      CCUI_Pal( "bash_header" ) ) + Chr(10) )
+      AGUI_Pal( "bash_header" ) ) + Chr(10) )
    cReply := ""
    FOR EACH hMsg IN hRes[ "messages" ]
       IF hMsg[ "role" ] == "assistant" .AND. ;
@@ -229,12 +229,12 @@ STATIC FUNCTION CCTool_DispatchRun( hArgs )
 
 // dispatch_agent_background -- fire-and-forget variant of dispatch_agent.
 // Returns IMMEDIATELY with a task-id ("bg1", "bg2", ...) so the parent
-// agent does not block. A worker thread runs CC_AgentRun in the
+// agent does not block. A worker thread runs AG_AgentRun in the
 // background and writes status / reply / error into the ccbg.prg
 // registry as it progresses. The user inspects, attaches or kills via
 // the /tasks slash command. No UI is painted by the worker -- terminal
 // I/O from a thread would corrupt the dynamic input box.
-FUNCTION CCTool_DispatchAgentBackground()
+FUNCTION AGTOOL_DispatchAgentBackground()
    RETURN { "name" => "dispatch_agent_background", ;
             "description" => "Spawn a subagent in the BACKGROUND and " + ;
                "return a task-id IMMEDIATELY. The agent loop does not " + ;
@@ -255,9 +255,9 @@ FUNCTION CCTool_DispatchAgentBackground()
                   "timeout_s" => { "type" => "number", ;
                                    "description" => "Max wall-clock seconds (default 120, max 600)" } }, ;
                "required" => { "prompt" } }, ;
-            "handler" => {| hArgs | CCTool_DispatchBackgroundRun( hArgs ) } }
+            "handler" => {| hArgs | AGTOOL_DispatchBackgroundRun( hArgs ) } }
 
-STATIC FUNCTION CCTool_DispatchBackgroundRun( hArgs )
+STATIC FUNCTION AGTOOL_DispatchBackgroundRun( hArgs )
    LOCAL cPrompt, cType, nTimeout, cId
    cPrompt := hb_CStr( hArgs[ "prompt" ] )
    IF Empty( cPrompt )
@@ -274,11 +274,11 @@ STATIC FUNCTION CCTool_DispatchBackgroundRun( hArgs )
                     hArgs[ "timeout_s" ], 120 )
    IF nTimeout < 5  ; nTimeout := 5    ; ENDIF
    IF nTimeout > 600 ; nTimeout := 600 ; ENDIF
-   cId := CCBG_NextId()
-   CCBG_Add( cId, cType, cPrompt, nTimeout )
+   cId := AGBG_NextId()
+   AGBG_Add( cId, cType, cPrompt, nTimeout )
    // hb_threadStart copies the arguments by value, so the worker gets
    // an independent snapshot of the prompt / type / timeout.
-   hb_threadStart( @CCTool_BackgroundWorker(), cId, cType, cPrompt, nTimeout )
+   hb_threadStart( @AGTOOL_BackgroundWorker(), cId, cType, cPrompt, nTimeout )
    RETURN "[background task started: " + cId + " -- inspect with /tasks " + ;
           "view " + cId + " when it finishes]"
 
@@ -287,27 +287,27 @@ STATIC FUNCTION CCTool_DispatchBackgroundRun( hArgs )
 // painting to the terminal. interrupt_check checks the cancel-request
 // flag and the per-task timeout. The final status / reply / error /
 // ended_ms is committed before the thread exits.
-STATIC FUNCTION CCTool_BackgroundWorker( cId, cType, cPrompt, nTimeout )
+STATIC FUNCTION AGTOOL_BackgroundWorker( cId, cType, cPrompt, nTimeout )
    LOCAL hSet, hCfg, oClient, oReg, hKeys, aMsgs, hRes, cReply, hMsg
    LOCAL nStartMs, bInterrupt, cStopReason, nElapsedMs
    nStartMs := hb_milliseconds()
-   CCBG_Update( cId, { "status" => "running", "started_ms" => nStartMs } )
-   hSet := CCSETTINGS_Load()
-   hCfg := CCCFG_Resolve( {=>} )
+   AGBG_Update( cId, { "status" => "running", "started_ms" => nStartMs } )
+   hSet := AGSETTINGS_Load()
+   hCfg := AGCFG_Resolve( {=>} )
    IF !hCfg[ "ok" ]
-      CCBG_Update( cId, { "status" => "failed", ;
+      AGBG_Update( cId, { "status" => "failed", ;
                           "error" => "no API key configured", ;
                           "ended_ms" => hb_milliseconds() } )
       RETURN NIL
    ENDIF
-   oClient := CC_Client( { "model" => hSet[ "model" ], ;
+   oClient := AG_Client( { "model" => hSet[ "model" ], ;
                            "base_url" => hSet[ "base_url" ] } )
-   hKeys := { "github"        => CCCFG_ResolveKey( "GITHUB_TOKEN", ;
+   hKeys := { "github"        => AGCFG_ResolveKey( "GITHUB_TOKEN", ;
                                                    "github_token", hSet ), ;
               "co_author"     => hb_HGetDef( hSet, "co_author", "" ), ;
               "shell_timeout" => hb_HGetDef( hSet, "shell_timeout", 30 ) }
-   oReg := CCTOOLS_Registry( hKeys )
-   CCTOOLS_FilterForAgent( oReg, cType )
+   oReg := AGTOOLS_Registry( hKeys )
+   AGTOOLS_FilterForAgent( oReg, cType )
    aMsgs := { ;
       { "role" => "system", ;
         "content" => "You are a Agents background subagent of type '" + ;
@@ -317,14 +317,14 @@ STATIC FUNCTION CCTool_BackgroundWorker( cId, cType, cPrompt, nTimeout )
            "'Suggested next' line. Start with the answer." }, ;
       { "role" => "user", "content" => cPrompt } }
    // Cancel on user request OR on per-task timeout. The body runs in
-   // its own thread, so it CANNOT touch CCPROMPT state.
+   // its own thread, so it CANNOT touch AGPROMPT state.
    bInterrupt := {|| ;
-      CCBG_CancelRequested( cId ) .OR. ;
+      AGBG_CancelRequested( cId ) .OR. ;
       ( ( hb_milliseconds() - nStartMs ) / 1000.0 > nTimeout ) }
-   hRes := CC_AgentRun( oClient, aMsgs, ;
+   hRes := AG_AgentRun( oClient, aMsgs, ;
       { "model"           => hSet[ "model" ], ;
-        "tools"           => CCTOOLS_Schemas( oReg ), ;
-        "tool_executor"   => CCTOOLS_Executor( oReg ), ;
+        "tools"           => AGTOOLS_Schemas( oReg ), ;
+        "tool_executor"   => AGTOOLS_Executor( oReg ), ;
         "max_iterations"  => 10, ;
         "interrupt_check" => bInterrupt }, ;
       {| hEv | HB_SYMBOL_UNUSED( hEv ) } )
@@ -332,18 +332,18 @@ STATIC FUNCTION CCTool_BackgroundWorker( cId, cType, cPrompt, nTimeout )
    cStopReason := hb_HGetDef( hRes, "stop_reason", "" )
    IF cStopReason == "interrupted"
       IF ( nElapsedMs / 1000.0 ) >= nTimeout - 0.5
-         CCBG_Update( cId, { "status" => "timed_out", ;
+         AGBG_Update( cId, { "status" => "timed_out", ;
                              "ended_ms" => hb_milliseconds(), ;
                              "error" => "wall-clock timeout (" + ;
                                 LTrim( Str( Int( nTimeout ) ) ) + "s)" } )
       ELSE
-         CCBG_Update( cId, { "status" => "cancelled", ;
+         AGBG_Update( cId, { "status" => "cancelled", ;
                              "ended_ms" => hb_milliseconds() } )
       ENDIF
       RETURN NIL
    ENDIF
    IF !hRes[ "success" ]
-      CCBG_Update( cId, { "status" => "failed", ;
+      AGBG_Update( cId, { "status" => "failed", ;
                           "ended_ms" => hb_milliseconds(), ;
                           "error" => hb_CStr( hb_HGetDef( hRes, "error_type", "?" ) ) + ;
                              ": " + hb_CStr( hb_HGetDef( hRes, "message", "" ) ) } )
@@ -358,7 +358,7 @@ STATIC FUNCTION CCTool_BackgroundWorker( cId, cType, cPrompt, nTimeout )
          cReply := hMsg[ "content" ]
       ENDIF
    NEXT
-   CCBG_Update( cId, { "status" => "done", ;
+   AGBG_Update( cId, { "status" => "done", ;
                        "ended_ms" => hb_milliseconds(), ;
                        "iterations" => hb_HGetDef( hRes, "iterations", 0 ), ;
                        "reply" => iif( Empty( cReply ), ;

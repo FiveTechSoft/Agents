@@ -10,9 +10,9 @@
 // nTimeout: max seconds the command may run (0 = no limit, auto-estimate).
 //           Configurable via "shell_timeout" in settings (default 30).
 // The model can also pass an optional "timeout" parameter per-call (A).
-// When no explicit timeout is given, CCTool_EstimateTimeout() guesses
+// When no explicit timeout is given, AGTOOL_EstimateTimeout() guesses
 // a sensible value based on the command type (B).
-FUNCTION CCTool_Shell( cCoAuthor, nTimeout )
+FUNCTION AGTOOL_Shell( cCoAuthor, nTimeout )
    IF ValType( nTimeout ) != "N" .OR. nTimeout < 0
       nTimeout := 0
    ENDIF
@@ -27,9 +27,9 @@ FUNCTION CCTool_Shell( cCoAuthor, nTimeout )
                                                    "If not supplied, the setting shell_timeout or " + ;
                                                    "an automatic estimate is used." } }, ;
                "required" => { "command" } }, ;
-            "handler" => {| hArgs | CCTool_ShellRun( hArgs, cCoAuthor, nTimeout ) } }
+            "handler" => {| hArgs | AGTOOL_ShellRun( hArgs, cCoAuthor, nTimeout ) } }
 
-STATIC FUNCTION CCTool_ShellRun( hArgs, cCoAuthor, nTimeout )
+STATIC FUNCTION AGTOOL_ShellRun( hArgs, cCoAuthor, nTimeout )
    LOCAL cCommand, cCmdLine, cOut := "", cErr := "", nExit, cResult
    LOCAL cOutFile, cScriptFile := "", hProc, hIn, hOut, hErr, nStart, lTimedOut := .F.
    LOCAL nActualTimeout, lShow, nLeft, nShown := -1
@@ -37,7 +37,7 @@ STATIC FUNCTION CCTool_ShellRun( hArgs, cCoAuthor, nTimeout )
    cCommand := hb_CStr( hArgs[ "command" ] )
 
    // auto-inject co-author trailer on git commit commands
-   IF !Empty( cCoAuthor ) .AND. CCTool_IsGitCommit( cCommand )
+   IF !Empty( cCoAuthor ) .AND. AGTOOL_IsGitCommit( cCommand )
       cCommand += ' --trailer "Co-authored-by: ' + cCoAuthor + '"'
    ENDIF
 
@@ -53,7 +53,7 @@ STATIC FUNCTION CCTool_ShellRun( hArgs, cCoAuthor, nTimeout )
       nActualTimeout := nTimeout
    ELSE
       // 3) Auto-estimate based on command type (approach B)
-      nActualTimeout := CCTool_EstimateTimeout( cCommand )
+      nActualTimeout := AGTOOL_EstimateTimeout( cCommand )
    ENDIF
 
    IF nActualTimeout > 0
@@ -71,7 +71,7 @@ STATIC FUNCTION CCTool_ShellRun( hArgs, cCoAuthor, nTimeout )
 #else
       // POSIX: write the command to a temp script so it never needs argv-level
       // quoting; the script redirects its own output to the capture file.
-      cScriptFile := CCTool_ShellScript( "exec > '" + cOutFile + "' 2>&1" + ;
+      cScriptFile := AGTOOL_ShellScript( "exec > '" + cOutFile + "' 2>&1" + ;
                                          Chr( 10 ) + cCommand + Chr( 10 ) )
       cCmdLine := "/bin/sh '" + cScriptFile + "'"
 #endif
@@ -88,7 +88,7 @@ STATIC FUNCTION CCTool_ShellRun( hArgs, cCoAuthor, nTimeout )
       // Poll the process: hb_processValue( hProc, .F. ) returns -1 while the
       // process is still running, otherwise its real exit code. While it
       // runs, show a live countdown of the remaining timeout.
-      lShow  := CCUI_ColorOn()
+      lShow  := AGUI_ColorOn()
       nExit  := -1
       nStart := Seconds()
       DO WHILE .T.
@@ -103,14 +103,14 @@ STATIC FUNCTION CCTool_ShellRun( hArgs, cCoAuthor, nTimeout )
          ENDIF
          IF lShow .AND. Int( nLeft ) != nShown
             nShown := Int( nLeft )
-            CCTool_ShowCountdown( nActualTimeout, nShown )
+            AGTOOL_ShowCountdown( nActualTimeout, nShown )
          ENDIF
          hb_IdleSleep( 0.05 )
       ENDDO
 
       // erase the countdown line so the result summary prints cleanly
       IF lShow
-         CCTool_ClearCountdown()
+         AGTOOL_ClearCountdown()
       ENDIF
 
       // On timeout, release the process handle (the orphaned cmd.exe ends
@@ -134,7 +134,7 @@ STATIC FUNCTION CCTool_ShellRun( hArgs, cCoAuthor, nTimeout )
 #ifdef __PLATFORM__WINDOWS
       cCmdLine := "cmd.exe /c " + cCommand
 #else
-      cScriptFile := CCTool_ShellScript( cCommand + Chr( 10 ) )
+      cScriptFile := AGTOOL_ShellScript( cCommand + Chr( 10 ) )
       cCmdLine := "/bin/sh '" + cScriptFile + "'"
 #endif
       nExit := hb_processRun( cCmdLine, , @cOut, @cErr )
@@ -161,16 +161,16 @@ STATIC FUNCTION CCTool_ShellRun( hArgs, cCoAuthor, nTimeout )
    RETURN cResult
 
 // Renders the shell countdown line in place. In box mode it routes through
-// CCREPL_OverwriteAtAnchor so the line lands on the saved scroll-region
+// AGREPL_OverwriteAtAnchor so the line lands on the saved scroll-region
 // anchor (right under the tool block) instead of on the input box. The
 // plain-CR path is kept for the cooked / non-VT fallback.
-STATIC FUNCTION CCTool_ShowCountdown( nTotal, nLeft )
+STATIC FUNCTION AGTOOL_ShowCountdown( nTotal, nLeft )
    LOCAL cBr := Chr(226)+Chr(142)+Chr(191)   // the ⎿ result glyph
    LOCAL cLine := "  " + cBr + " " + Chr(27) + "[90m" + ;
       "timeout " + LTrim( Str( Int( nTotal ) ) ) + "s · " + ;
       LTrim( Str( Int( nLeft ) ) ) + "s left" + Chr(27) + "[0m"
-   IF CCREPL_BoxActive()
-      CCREPL_OverwriteAtAnchor( cLine )
+   IF AGREPL_BoxActive()
+      AGREPL_OverwriteAtAnchor( cLine )
    ELSE
       FWrite( hb_GetStdOut(), Chr(13) + cLine + Chr(27) + "[K" )
    ENDIF
@@ -179,12 +179,12 @@ STATIC FUNCTION CCTool_ShowCountdown( nTotal, nLeft )
 // Bakes the final countdown state into the scroll above the box (in box
 // mode) or erases the in-place line (cooked mode) so the result summary
 // prints on a fresh row.
-STATIC FUNCTION CCTool_ClearCountdown()
-   IF CCREPL_BoxActive()
+STATIC FUNCTION AGTOOL_ClearCountdown()
+   IF AGREPL_BoxActive()
       // Advance content_row past the in-place countdown row by writing a
-      // single LF through CCREPL_Out -- the last OverwriteAtAnchor value
-      // stays visible and the next CCREPL_Out lands below it.
-      CCREPL_Out( Chr(10) )
+      // single LF through AGREPL_Out -- the last OverwriteAtAnchor value
+      // stays visible and the next AGREPL_Out lands below it.
+      AGREPL_Out( Chr(10) )
    ELSE
       FWrite( hb_GetStdOut(), Chr(13) + Chr(27) + "[K" )
    ENDIF
@@ -194,7 +194,7 @@ STATIC FUNCTION CCTool_ClearCountdown()
 // POSIX so a shell command never needs argv-level quoting: the raw command
 // goes into the file, and only the (safe) temp path appears on the command
 // line.  Returns "" when the temp file cannot be created.
-STATIC FUNCTION CCTool_ShellScript( cBody )
+STATIC FUNCTION AGTOOL_ShellScript( cBody )
    LOCAL cFile := ""
    LOCAL hFile := hb_FTempCreateEx( @cFile, hb_DirTemp(), "ccsh", ".sh" )
    IF hFile != F_ERROR
@@ -206,7 +206,7 @@ STATIC FUNCTION CCTool_ShellScript( cBody )
 // Returns .T. when cCmd looks like a "git commit" invocation.
 // Checks that the command contains "git commit" and does not already have
 // a --trailer or Co-authored-by marker (to avoid double-injection).
-STATIC FUNCTION CCTool_IsGitCommit( cCmd )
+STATIC FUNCTION AGTOOL_IsGitCommit( cCmd )
    LOCAL cLow := Lower( AllTrim( cCmd ) )
    // bail if the user already included a trailer manually
    IF "co-authored-by" $ cLow .OR. "--trailer" $ cLow
@@ -217,7 +217,7 @@ STATIC FUNCTION CCTool_IsGitCommit( cCmd )
 
 // Estimates a sensible timeout (in seconds) for a shell command based on
 // its type.  Used when neither the model nor settings provided a timeout.
-STATIC FUNCTION CCTool_EstimateTimeout( cCommand )
+STATIC FUNCTION AGTOOL_EstimateTimeout( cCommand )
    LOCAL cLow := Lower( AllTrim( cCommand ) )
    LOCAL nPos, cRest, cNum, cCh, i
    LOCAL nDefault := 30

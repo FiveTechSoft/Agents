@@ -5,7 +5,7 @@
 STATIC s_aTodos := {}
 
 // True when cStatus is one of the three valid task statuses.
-STATIC FUNCTION CCTODO_ValidStatus( cStatus )
+STATIC FUNCTION AGTODO_ValidStatus( cStatus )
    RETURN cStatus == "pending" .OR. cStatus == "in_progress" .OR. ;
           cStatus == "completed"
 
@@ -15,7 +15,7 @@ STATIC FUNCTION CCTODO_ValidStatus( cStatus )
 // default ""), "active_form" (string, default "") and "blocked_by" (array
 // of id strings, default {}) are preserved as-is. Returns an array of
 // normalised hashes.
-FUNCTION CCTODO_Norm( aTodos )
+FUNCTION AGTODO_Norm( aTodos )
    LOCAL aOut := {}, hItem, cStatus, cId, cActive, aBlocked, aB, x
    IF ValType( aTodos ) != "A"
       RETURN aOut
@@ -28,7 +28,7 @@ FUNCTION CCTODO_Norm( aTodos )
       cStatus := iif( hb_HHasKey( hItem, "status" ) .AND. ;
                       ValType( hItem[ "status" ] ) == "C", ;
                       hItem[ "status" ], "pending" )
-      IF !CCTODO_ValidStatus( cStatus )
+      IF !AGTODO_ValidStatus( cStatus )
          cStatus := "pending"
       ENDIF
       cId := iif( hb_HHasKey( hItem, "id" ) .AND. ;
@@ -53,14 +53,14 @@ FUNCTION CCTODO_Norm( aTodos )
    RETURN aOut
 
 // Normalises aTodos and stores it as the session list. Returns the stored list.
-FUNCTION CCTODO_Set( aTodos )
-   s_aTodos := CCTODO_Norm( aTodos )
+FUNCTION AGTODO_Set( aTodos )
+   s_aTodos := AGTODO_Norm( aTodos )
    RETURN s_aTodos
 
 // Returns a fresh copy of the stored session list (an empty array before
 // the first Set). A copy, not the live STATIC, so a caller cannot mutate
-// the stored state without going through CCTODO_Set.
-FUNCTION CCTODO_Get()
+// the stored state without going through AGTODO_Set.
+FUNCTION AGTODO_Get()
    LOCAL aOut := {}, hItem
    FOR EACH hItem IN s_aTodos
       AAdd( aOut, { "text" => hItem[ "text" ], ;
@@ -74,7 +74,7 @@ FUNCTION CCTODO_Get()
 // True when hItem has a blocked_by id that matches another item in
 // aAll which is not yet completed. Empty/missing blocked_by -> not blocked.
 // Tolerant of items that came from older callers without the new keys.
-FUNCTION CCTODO_IsBlocked( hItem, aAll )
+FUNCTION AGTODO_IsBlocked( hItem, aAll )
    LOCAL cBlockId, hOther
    IF !hb_HHasKey( hItem, "blocked_by" ) .OR. ;
       ValType( hItem[ "blocked_by" ] ) != "A" .OR. ;
@@ -93,7 +93,7 @@ FUNCTION CCTODO_IsBlocked( hItem, aAll )
    RETURN .F.
 
 // True when the stored list is non-empty and at least one item is not done.
-FUNCTION CCTODO_HasOpen()
+FUNCTION AGTODO_HasOpen()
    LOCAL hItem
    FOR EACH hItem IN s_aTodos
       IF hItem[ "status" ] != "completed"

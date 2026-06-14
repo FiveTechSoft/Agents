@@ -9,20 +9,20 @@
 STATIC s_aActive := {}
 
 // Returns the project-local skills directory ("./.agents/skills").
-FUNCTION CCSKILL_Dir()
+FUNCTION AGSKILL_Dir()
    RETURN "." + hb_ps() + ".agents" + hb_ps() + "skills"
 
 // Lists every skill found under the skills directory. Each entry is a hash:
 //   { name, description, path }. Skills missing a name/description are skipped.
-FUNCTION CCSKILL_List()
-   LOCAL aOut := {}, cDir := CCSKILL_Dir(), aFiles, aRow, cFile, hMeta
+FUNCTION AGSKILL_List()
+   LOCAL aOut := {}, cDir := AGSKILL_Dir(), aFiles, aRow, cFile, hMeta
    IF !hb_DirExists( cDir )
       RETURN aOut
    ENDIF
    aFiles := Directory( cDir + hb_ps() + "*.md" )
    FOR EACH aRow IN aFiles
       cFile := cDir + hb_ps() + aRow[ 1 ]
-      hMeta := CCSKILL_ReadFrontmatter( cFile )
+      hMeta := AGSKILL_ReadFrontmatter( cFile )
       IF !Empty( hMeta[ "name" ] ) .AND. !Empty( hMeta[ "description" ] )
          AAdd( aOut, { "name"        => hMeta[ "name" ], ;
                        "description" => hMeta[ "description" ], ;
@@ -34,8 +34,8 @@ FUNCTION CCSKILL_List()
 
 // Loads the full body of a skill (frontmatter stripped). Returns NIL when the
 // skill is not found, so the caller can return an error to the model.
-FUNCTION CCSKILL_Load( cName )
-   LOCAL aSkills := CCSKILL_List(), hSkill, cText, nEnd
+FUNCTION AGSKILL_Load( cName )
+   LOCAL aSkills := AGSKILL_List(), hSkill, cText, nEnd
    FOR EACH hSkill IN aSkills
       IF hSkill[ "name" ] == hb_CStr( cName )
          cText := hb_MemoRead( hSkill[ "path" ] )
@@ -52,14 +52,14 @@ FUNCTION CCSKILL_Load( cName )
    RETURN NIL
 
 // Adds cName to the set of active skills (no-op if already active).
-FUNCTION CCSKILL_Activate( cName )
+FUNCTION AGSKILL_Activate( cName )
    IF AScan( s_aActive, {| c | c == hb_CStr( cName ) } ) == 0
       AAdd( s_aActive, hb_CStr( cName ) )
    ENDIF
    RETURN s_aActive
 
 // Removes cName from the active set (no-op if not active).
-FUNCTION CCSKILL_Deactivate( cName )
+FUNCTION AGSKILL_Deactivate( cName )
    LOCAL n := AScan( s_aActive, {| c | c == hb_CStr( cName ) } )
    IF n > 0
       hb_ADel( s_aActive, n, .T. )
@@ -67,12 +67,12 @@ FUNCTION CCSKILL_Deactivate( cName )
    RETURN s_aActive
 
 // Returns the array of active skill names (a copy, not the live STATIC).
-FUNCTION CCSKILL_Active()
+FUNCTION AGSKILL_Active()
    RETURN AClone( s_aActive )
 
 // Drops every active skill at once. Used by /load when restoring a saved
 // session: the loaded skill list takes over from whatever was active.
-FUNCTION CCSKILL_ClearAll()
+FUNCTION AGSKILL_ClearAll()
    s_aActive := {}
    RETURN NIL
 
@@ -80,8 +80,8 @@ FUNCTION CCSKILL_ClearAll()
 // against the user's input. Activates any matching skill that is not already
 // active, and returns the array of newly-activated names so the caller can
 // inject their bodies into the conversation and notify the user.
-FUNCTION CCSKILL_AutoActivate( cInput )
-   LOCAL aSkills := CCSKILL_List(), hSkill, aTriggers, cTrig, aNew := {}
+FUNCTION AGSKILL_AutoActivate( cInput )
+   LOCAL aSkills := AGSKILL_List(), hSkill, aTriggers, cTrig, aNew := {}
    LOCAL cLow := Lower( hb_CStr( cInput ) )
    FOR EACH hSkill IN aSkills
       IF AScan( s_aActive, {| c | c == hSkill[ "name" ] } ) > 0
@@ -107,7 +107,7 @@ FUNCTION CCSKILL_AutoActivate( cInput )
 // or malformed frontmatter; the caller filters incomplete records out.
 // Splits a comma-separated list of regex triggers into a trimmed array,
 // dropping empty entries.
-STATIC FUNCTION CCSKILL_SplitTriggers( cValue )
+STATIC FUNCTION AGSKILL_SplitTriggers( cValue )
    LOCAL aRaw := hb_ATokens( hb_CStr( cValue ), "," ), aOut := {}, cTok
    FOR EACH cTok IN aRaw
       cTok := AllTrim( cTok )
@@ -117,7 +117,7 @@ STATIC FUNCTION CCSKILL_SplitTriggers( cValue )
    NEXT
    RETURN aOut
 
-STATIC FUNCTION CCSKILL_ReadFrontmatter( cFile )
+STATIC FUNCTION AGSKILL_ReadFrontmatter( cFile )
    LOCAL cText, aLines, cLine, hOut, lIn := .F., cTrim
    hOut := { "name" => "", "description" => "", "triggers" => {} }
    IF !hb_FileExists( cFile )
@@ -139,7 +139,7 @@ STATIC FUNCTION CCSKILL_ReadFrontmatter( cFile )
          ELSEIF Left( cTrim, 12 ) == "description:"
             hOut[ "description" ] := AllTrim( SubStr( cTrim, 13 ) )
          ELSEIF Left( cTrim, 9 ) == "triggers:"
-            hOut[ "triggers" ] := CCSKILL_SplitTriggers( SubStr( cTrim, 10 ) )
+            hOut[ "triggers" ] := AGSKILL_SplitTriggers( SubStr( cTrim, 10 ) )
          ENDIF
       ENDIF
    NEXT

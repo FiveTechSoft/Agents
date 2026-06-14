@@ -1,16 +1,16 @@
 // Canonical list of events the hooks system supports.
 // Keep this small until a real use case justifies expansion.
-FUNCTION CCHOOKS_ValidEvents()
+FUNCTION AGHOOKS_ValidEvents()
    RETURN { "turn_complete" }
 
 // True if cEvent is in the canonical event list.
-FUNCTION CCHOOKS_IsValidEvent( cEvent )
-   RETURN AScan( CCHOOKS_ValidEvents(), {| c | c == cEvent } ) > 0
+FUNCTION AGHOOKS_IsValidEvent( cEvent )
+   RETURN AScan( AGHOOKS_ValidEvents(), {| c | c == cEvent } ) > 0
 
 // Returns the array of hook command strings registered for cEvent in
 // hSet, or an empty array if the event is absent or hSet has no hooks
 // key. Safe to call with arbitrary settings hashes.
-FUNCTION CCHOOKS_List( hSet, cEvent )
+FUNCTION AGHOOKS_List( hSet, cEvent )
    IF ValType( hSet ) != "H" .OR. !hb_HHasKey( hSet, "hooks" )
       RETURN {}
    ENDIF
@@ -22,9 +22,9 @@ FUNCTION CCHOOKS_List( hSet, cEvent )
 
 // Appends cCmd to hSet["hooks"][cEvent], creating intermediate keys as
 // needed. Returns .T. on success, .F. if cEvent is not a valid event.
-// Mutates hSet in place; caller is responsible for CCSETTINGS_Save.
-FUNCTION CCHOOKS_Add( hSet, cEvent, cCmd )
-   IF !CCHOOKS_IsValidEvent( cEvent )
+// Mutates hSet in place; caller is responsible for AGSETTINGS_Save.
+FUNCTION AGHOOKS_Add( hSet, cEvent, cCmd )
+   IF !AGHOOKS_IsValidEvent( cEvent )
       RETURN .F.
    ENDIF
    IF ValType( hSet ) != "H"
@@ -42,12 +42,12 @@ FUNCTION CCHOOKS_Add( hSet, cEvent, cCmd )
 // Removes the 1-based nIdx-th entry from hSet["hooks"][cEvent]. Returns
 // .F. (and leaves hSet untouched) if the event is missing or the index
 // is out of range. Mutates hSet on success.
-FUNCTION CCHOOKS_Remove( hSet, cEvent, nIdx )
+FUNCTION AGHOOKS_Remove( hSet, cEvent, nIdx )
    LOCAL aHooks
-   IF !CCHOOKS_IsValidEvent( cEvent ) .OR. ValType( hSet ) != "H"
+   IF !AGHOOKS_IsValidEvent( cEvent ) .OR. ValType( hSet ) != "H"
       RETURN .F.
    ENDIF
-   aHooks := CCHOOKS_List( hSet, cEvent )
+   aHooks := AGHOOKS_List( hSet, cEvent )
    IF nIdx < 1 .OR. nIdx > Len( aHooks )
       RETURN .F.
    ENDIF
@@ -55,13 +55,13 @@ FUNCTION CCHOOKS_Remove( hSet, cEvent, nIdx )
    RETURN .T.
 
 // Replaces the 1-based nIdx-th entry with cCmd. Same return-value
-// semantics as CCHOOKS_Remove.
-FUNCTION CCHOOKS_Edit( hSet, cEvent, nIdx, cCmd )
+// semantics as AGHOOKS_Remove.
+FUNCTION AGHOOKS_Edit( hSet, cEvent, nIdx, cCmd )
    LOCAL aHooks
-   IF !CCHOOKS_IsValidEvent( cEvent ) .OR. ValType( hSet ) != "H"
+   IF !AGHOOKS_IsValidEvent( cEvent ) .OR. ValType( hSet ) != "H"
       RETURN .F.
    ENDIF
-   aHooks := CCHOOKS_List( hSet, cEvent )
+   aHooks := AGHOOKS_List( hSet, cEvent )
    IF nIdx < 1 .OR. nIdx > Len( aHooks )
       RETURN .F.
    ENDIF
@@ -71,16 +71,16 @@ FUNCTION CCHOOKS_Edit( hSet, cEvent, nIdx, cCmd )
 // Path to the hooks log file, relative to the Agents cwd. Matches
 // the location convention used by .agents/settings.json so the log
 // sits next to the config that opted into it.
-FUNCTION CCHOOKS_LogPath()
+FUNCTION AGHOOKS_LogPath()
    RETURN ".agents" + hb_ps() + "hooks.log"
 
-// Appends cLine + LF to CCHOOKS_LogPath() iff settings have hooks_log
+// Appends cLine + LF to AGHOOKS_LogPath() iff settings have hooks_log
 // set to .T.. Best-effort, single-writer: writes are wrapped so a
 // missing directory or read-only filesystem cannot crash the REPL,
 // and concurrent Agents processes sharing a cwd can clobber each
 // other's log lines (acceptable for the per-turn fire rate).
-FUNCTION CCHOOKS_Log( cLine )
-   LOCAL hSet := CCSETTINGS_Load(), cTs, cPath, cDir
+FUNCTION AGHOOKS_Log( cLine )
+   LOCAL hSet := AGSETTINGS_Load(), cTs, cPath, cDir
    IF !hb_HGetDef( hSet, "hooks_log", .F. )
       RETURN NIL
    ENDIF
@@ -88,7 +88,7 @@ FUNCTION CCHOOKS_Log( cLine )
    // Normalise "20260527" -> "2026-05-27" for readability.
    cTs := SubStr( cTs, 1, 4 ) + "-" + SubStr( cTs, 5, 2 ) + "-" + ;
           SubStr( cTs, 7, 2 ) + " " + SubStr( cTs, 10 )
-   cPath := CCHOOKS_LogPath()
+   cPath := AGHOOKS_LogPath()
    cDir  := hb_FNameDir( cPath )
    IF !Empty( cDir ) .AND. !hb_DirExists( cDir )
       hb_DirBuild( cDir )
@@ -105,14 +105,14 @@ FUNCTION CCHOOKS_Log( cLine )
 // Each hook is spawned detached (fire-and-forget). Env vars are set on
 // the Agents process before each spawn; the child inherits them.
 // Failures are logged when hooks_log is on and otherwise silenced.
-FUNCTION CCHOOKS_Run( cEvent, hContext )
+FUNCTION AGHOOKS_Run( cEvent, hContext )
    LOCAL aHooks, cCmd, hSet, nProc, cStatus
-   IF !CCHOOKS_IsValidEvent( cEvent )
-      CCHOOKS_Log( "event=" + hb_CStr( cEvent ) + " WARN unknown-event skip" )
+   IF !AGHOOKS_IsValidEvent( cEvent )
+      AGHOOKS_Log( "event=" + hb_CStr( cEvent ) + " WARN unknown-event skip" )
       RETURN NIL
    ENDIF
-   hSet := CCSETTINGS_Load()
-   aHooks := CCHOOKS_List( hSet, cEvent )
+   hSet := AGSETTINGS_Load()
+   aHooks := AGHOOKS_List( hSet, cEvent )
    IF Len( aHooks ) == 0
       RETURN NIL
    ENDIF
@@ -133,12 +133,12 @@ FUNCTION CCHOOKS_Run( cEvent, hContext )
       BEGIN SEQUENCE WITH {| oErr | Break( oErr ) }
          nProc := hb_processOpen( cCmd, NIL, NIL, NIL, .T. /* detach */ )
          IF nProc == -1
-            CCHOOKS_Log( "event=" + cEvent + " ERROR spawn-failed cmd=" + cCmd )
+            AGHOOKS_Log( "event=" + cEvent + " ERROR spawn-failed cmd=" + cCmd )
          ELSE
-            CCHOOKS_Log( "event=" + cEvent + " status=" + cStatus + " cmd=" + cCmd )
+            AGHOOKS_Log( "event=" + cEvent + " status=" + cStatus + " cmd=" + cCmd )
          ENDIF
          RECOVER USING oErr
-         CCHOOKS_Log( "event=" + cEvent + " ERROR exception cmd=" + cCmd )
+         AGHOOKS_Log( "event=" + cEvent + " ERROR exception cmd=" + cCmd )
          HB_SYMBOL_UNUSED( oErr )
       END SEQUENCE
    NEXT
@@ -156,7 +156,7 @@ FUNCTION CCHOOKS_Run( cEvent, hContext )
 //   "edit <event> <idx> <cmd>"     replace the idx-th hook
 //   "test <event>"                 fire with dummy env
 //   "log"                          tail last 20 log lines or hint
-FUNCTION CCHOOKS_Render( cArg )
+FUNCTION AGHOOKS_Render( cArg )
    LOCAL cSub, cRest, cOut := "", hSet, aHooks, i, cEvent
    LOCAL nIdx, cCmd, nSpace, cLog, aLines, nStart
    cArg := AllTrim( hb_CStr( cArg ) )
@@ -171,15 +171,15 @@ FUNCTION CCHOOKS_Render( cArg )
    IF Empty( cSub )
       cSub := "list"
    ENDIF
-   hSet := CCSETTINGS_Load()
+   hSet := AGSETTINGS_Load()
    DO CASE
    CASE cSub == "list"
       cOut += "Hooks:" + Chr(10)
-      FOR EACH cEvent IN CCHOOKS_ValidEvents()
+      FOR EACH cEvent IN AGHOOKS_ValidEvents()
          IF !Empty( cRest ) .AND. cRest != cEvent
             LOOP
          ENDIF
-         aHooks := CCHOOKS_List( hSet, cEvent )
+         aHooks := AGHOOKS_List( hSet, cEvent )
          cOut += "  " + cEvent + ":" + Chr(10)
          IF Len( aHooks ) == 0
             cOut += "    (none)" + Chr(10)
@@ -199,12 +199,12 @@ FUNCTION CCHOOKS_Render( cArg )
       IF Empty( cCmd )
          RETURN "error: command empty" + Chr(10)
       ENDIF
-      IF !CCHOOKS_IsValidEvent( cEvent )
+      IF !AGHOOKS_IsValidEvent( cEvent )
          RETURN "error: unknown event '" + cEvent + ;
-                "'. Valid: " + CCHOOKS_EventList() + Chr(10)
+                "'. Valid: " + AGHOOKS_EventList() + Chr(10)
       ENDIF
-      CCHOOKS_Add( hSet, cEvent, cCmd )
-      CCSETTINGS_Save( hSet )
+      AGHOOKS_Add( hSet, cEvent, cCmd )
+      AGSETTINGS_Save( hSet )
       cOut := "[hook added -> " + cEvent + ": " + cCmd + "]" + Chr(10)
    CASE cSub == "remove"
       nSpace := At( " ", cRest )
@@ -213,17 +213,17 @@ FUNCTION CCHOOKS_Render( cArg )
       ENDIF
       cEvent := Lower( Left( cRest, nSpace - 1 ) )
       nIdx   := Val( AllTrim( SubStr( cRest, nSpace + 1 ) ) )
-      IF !CCHOOKS_IsValidEvent( cEvent )
+      IF !AGHOOKS_IsValidEvent( cEvent )
          RETURN "error: unknown event '" + cEvent + ;
-                "'. Valid: " + CCHOOKS_EventList() + Chr(10)
+                "'. Valid: " + AGHOOKS_EventList() + Chr(10)
       ENDIF
-      aHooks := CCHOOKS_List( hSet, cEvent )
+      aHooks := AGHOOKS_List( hSet, cEvent )
       IF nIdx < 1 .OR. nIdx > Len( aHooks )
          RETURN "error: index " + LTrim( Str( nIdx ) ) + ;
                 " out of range (1.." + LTrim( Str( Len( aHooks ) ) ) + ")" + Chr(10)
       ENDIF
-      CCHOOKS_Remove( hSet, cEvent, nIdx )
-      CCSETTINGS_Save( hSet )
+      AGHOOKS_Remove( hSet, cEvent, nIdx )
+      AGSETTINGS_Save( hSet )
       cOut := "[hook removed -> " + cEvent + " #" + LTrim( Str( nIdx ) ) + "]" + Chr(10)
    CASE cSub == "edit"
       nSpace := At( " ", cRest )
@@ -241,28 +241,28 @@ FUNCTION CCHOOKS_Render( cArg )
       IF Empty( cCmd )
          RETURN "error: command empty" + Chr(10)
       ENDIF
-      IF !CCHOOKS_IsValidEvent( cEvent )
+      IF !AGHOOKS_IsValidEvent( cEvent )
          RETURN "error: unknown event '" + cEvent + ;
-                "'. Valid: " + CCHOOKS_EventList() + Chr(10)
+                "'. Valid: " + AGHOOKS_EventList() + Chr(10)
       ENDIF
-      aHooks := CCHOOKS_List( hSet, cEvent )
+      aHooks := AGHOOKS_List( hSet, cEvent )
       IF nIdx < 1 .OR. nIdx > Len( aHooks )
          RETURN "error: index " + LTrim( Str( nIdx ) ) + ;
                 " out of range (1.." + LTrim( Str( Len( aHooks ) ) ) + ")" + Chr(10)
       ENDIF
-      CCHOOKS_Edit( hSet, cEvent, nIdx, cCmd )
-      CCSETTINGS_Save( hSet )
+      AGHOOKS_Edit( hSet, cEvent, nIdx, cCmd )
+      AGSETTINGS_Save( hSet )
       cOut := "[hook edited -> " + cEvent + " #" + LTrim( Str( nIdx ) ) + ": " + ;
               cCmd + "]" + Chr(10)
    CASE cSub == "test"
       cEvent := iif( Empty( cRest ), "turn_complete", Lower( cRest ) )
-      IF !CCHOOKS_IsValidEvent( cEvent )
+      IF !AGHOOKS_IsValidEvent( cEvent )
          RETURN "error: unknown event '" + cEvent + ;
-                "'. Valid: " + CCHOOKS_EventList() + Chr(10)
+                "'. Valid: " + AGHOOKS_EventList() + Chr(10)
       ENDIF
-      CCHOOKS_Run( cEvent, { "status" => "success", ;
+      AGHOOKS_Run( cEvent, { "status" => "success", ;
          "model" => "test", "tokens" => 0, "duration_ms" => 0 } )
-      cOut := "[fired " + LTrim( Str( Len( CCHOOKS_List( hSet, cEvent ) ) ) ) + ;
+      cOut := "[fired " + LTrim( Str( Len( AGHOOKS_List( hSet, cEvent ) ) ) ) + ;
               " hook(s) -- check log if hooks_log enabled]" + Chr(10)
    CASE cSub == "log"
       IF !hb_HGetDef( hSet, "hooks_log", .F. )
@@ -270,9 +270,9 @@ FUNCTION CCHOOKS_Render( cArg )
                 Chr(34) + ": true in " + ".agents" + hb_ps() + ;
                 "settings.json]" + Chr(10)
       ENDIF
-      cOut := "[log: " + CCHOOKS_LogPath() + "]" + Chr(10)
-      IF hb_FileExists( CCHOOKS_LogPath() )
-         cLog := hb_MemoRead( CCHOOKS_LogPath() )
+      cOut := "[log: " + AGHOOKS_LogPath() + "]" + Chr(10)
+      IF hb_FileExists( AGHOOKS_LogPath() )
+         cLog := hb_MemoRead( AGHOOKS_LogPath() )
          aLines := hb_ATokens( cLog, Chr(10) )
          nStart := Max( 1, Len( aLines ) - 19 )
          FOR i := nStart TO Len( aLines )
@@ -288,8 +288,8 @@ FUNCTION CCHOOKS_Render( cArg )
    RETURN cOut
 
 // Comma-separated string of valid event names for error messages.
-FUNCTION CCHOOKS_EventList()
-   LOCAL aEv := CCHOOKS_ValidEvents(), cOut := "", i
+FUNCTION AGHOOKS_EventList()
+   LOCAL aEv := AGHOOKS_ValidEvents(), cOut := "", i
    FOR i := 1 TO Len( aEv )
       cOut += aEv[ i ]
       IF i < Len( aEv )

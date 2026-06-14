@@ -1,11 +1,11 @@
 // ccpropose: the multi-row proposal selector used by the propose_agents
 // tool. Pure state + raw-key I/O loop; the block rendering lives in
-// CCUI_ProposeBlock (ccui.prg) so it can reuse CCUI_Color and the palette.
+// AGUI_ProposeBlock (ccui.prg) so it can reuse AGUI_Color and the palette.
 
 // Builds a fresh selector state from a list of {agent_type, prompt}
 // proposals. All proposals start marked as accepted; the user toggles
 // off any they want to drop. Cursor starts on the first row.
-FUNCTION CCPROPOSE_New( aProposals )
+FUNCTION AGPROPOSE_New( aProposals )
    LOCAL aItems := {}, h, cType, cPrompt
    IF ValType( aProposals ) == "A"
       FOR EACH h IN aProposals
@@ -25,8 +25,8 @@ FUNCTION CCPROPOSE_New( aProposals )
    ENDIF
    RETURN { "items" => aItems, "cursor" => 1 }
 
-// Moves the cursor by nDelta rows, wrapping around (consistent with CCSEL).
-FUNCTION CCPROPOSE_Move( oSel, nDelta )
+// Moves the cursor by nDelta rows, wrapping around (consistent with AGSEL).
+FUNCTION AGPROPOSE_Move( oSel, nDelta )
    LOCAL nMax := Len( oSel[ "items" ] )
    LOCAL n
    IF nMax <= 0
@@ -43,7 +43,7 @@ FUNCTION CCPROPOSE_Move( oSel, nDelta )
    RETURN oSel
 
 // Toggles accepted on the highlighted row.
-FUNCTION CCPROPOSE_Toggle( oSel )
+FUNCTION AGPROPOSE_Toggle( oSel )
    IF !Empty( oSel[ "items" ] )
       oSel[ "items" ][ oSel[ "cursor" ] ][ "accepted" ] := ;
          !oSel[ "items" ][ oSel[ "cursor" ] ][ "accepted" ]
@@ -52,7 +52,7 @@ FUNCTION CCPROPOSE_Toggle( oSel )
 
 // Returns an array of the {type, prompt} hashes the user accepted (in
 // original order, only the ones still marked accepted).
-FUNCTION CCPROPOSE_Accepted( oSel )
+FUNCTION AGPROPOSE_Accepted( oSel )
    LOCAL aOut := {}, h
    FOR EACH h IN oSel[ "items" ]
       IF h[ "accepted" ]
@@ -61,29 +61,29 @@ FUNCTION CCPROPOSE_Accepted( oSel )
    NEXT
    RETURN aOut
 
-// Writes bytes to stdout, bypassing CCREPL_Out's line rewriting.
-STATIC FUNCTION CCPROPOSE_Raw( cText )
+// Writes bytes to stdout, bypassing AGREPL_Out's line rewriting.
+STATIC FUNCTION AGPROPOSE_Raw( cText )
    FWrite( hb_GetStdOut(), cText )
    RETURN NIL
 
 // Paints the proposal block. With the box mounted, it sits in absolute
-// rows at the bottom of the scroll region (just like CCSEL_Paint).
-STATIC FUNCTION CCPROPOSE_Paint( oSel, lRepaint )
+// rows at the bottom of the scroll region (just like AGSEL_Paint).
+STATIC FUNCTION AGPROPOSE_Paint( oSel, lRepaint )
    LOCAL nLines, cPre := "", oPrompt, hReg, nTop, aLines, i, cOut, nCols
    LOCAL cSep, cLabel
-   oPrompt := CCREPL_BoxPrompt()
-   nCols := CCREPL_Cols()
+   oPrompt := AGREPL_BoxPrompt()
+   nCols := AGREPL_Cols()
    IF oPrompt != NIL .AND. ;
       ValType( oPrompt[ "region" ] ) == "H" .AND. ;
       oPrompt[ "region" ][ "active" ] == .T.
       // Pin the box first so the selector has a stable anchor.
-      CCPROMPT_ForcePin( oPrompt )
+      AGPROMPT_ForcePin( oPrompt )
       hReg := oPrompt[ "region" ]
-      cSep := CCUI_Color( Replicate( Chr(226)+Chr(148)+Chr(128), ;
+      cSep := AGUI_Color( Replicate( Chr(226)+Chr(148)+Chr(128), ;
                                      hReg[ "cols" ] - 1 ), ;
-                          CCUI_Pal( "bash_header" ) )
-      cLabel := CCUI_Color( " Propose agents", CCUI_Pal( "bash_header" ) )
-      aLines := hb_ATokens( CCUI_ProposeBlock( oSel ), Chr(10) )
+                          AGUI_Pal( "bash_header" ) )
+      cLabel := AGUI_Color( " Propose agents", AGUI_Pal( "bash_header" ) )
+      aLines := hb_ATokens( AGUI_ProposeBlock( oSel ), Chr(10) )
       hb_AIns( aLines, 1, cSep, .T. )
       hb_AIns( aLines, 2, cLabel, .T. )
       hb_AIns( aLines, 3, "", .T. )
@@ -105,8 +105,8 @@ STATIC FUNCTION CCPROPOSE_Paint( oSel, lRepaint )
                  Chr(27) + "[2K" + ;
                  iif( i <= Len( aLines ), aLines[ i ], "" )
       NEXT
-      cOut += CCREPL_BoxCursorSeq()
-      CCPROPOSE_Raw( cOut )
+      cOut += AGREPL_BoxCursorSeq()
+      AGPROPOSE_Raw( cOut )
       RETURN NIL
    ENDIF
    // No box (cooked / tests): LF-driven layout, relative repaint
@@ -114,7 +114,7 @@ STATIC FUNCTION CCPROPOSE_Paint( oSel, lRepaint )
    IF lRepaint
       cPre := Chr(27) + "[" + LTrim( Str( nLines ) ) + "A"
    ENDIF
-   CCPROPOSE_Raw( cPre + CCUI_ProposeBlock( oSel ) )
+   AGPROPOSE_Raw( cPre + AGUI_ProposeBlock( oSel ) )
    HB_SYMBOL_UNUSED( nCols )
    RETURN NIL
 
@@ -122,27 +122,27 @@ STATIC FUNCTION CCPROPOSE_Paint( oSel, lRepaint )
 // proposals (possibly empty if the user rejected all but confirmed), or
 // NIL if the user cancelled with Esc. With no console it auto-accepts
 // every proposal so non-interactive runs do not stall.
-FUNCTION CCPROPOSE_Run( oSel )
+FUNCTION AGPROPOSE_Run( oSel )
    LOCAL nKey, lDone := .F., lCancel := .F.
-   IF !CCCON_HasConsole()
-      RETURN CCPROPOSE_Accepted( oSel )
+   IF !AGCON_HasConsole()
+      RETURN AGPROPOSE_Accepted( oSel )
    ENDIF
    IF Empty( oSel[ "items" ] )
       RETURN {}
    ENDIF
-   CCPROPOSE_Paint( oSel, .F. )
+   AGPROPOSE_Paint( oSel, .F. )
    DO WHILE !lDone
-      DO WHILE !CCCON_KeyPending()
+      DO WHILE !AGCON_KeyPending()
          hb_idleSleep( 0.02 )
       ENDDO
-      nKey := CCCON_ReadKey()
+      nKey := AGCON_ReadKey()
       DO CASE
       CASE nKey == -9                       // Up
-         CCPROPOSE_Move( oSel, -1 )
+         AGPROPOSE_Move( oSel, -1 )
       CASE nKey == -10                      // Down
-         CCPROPOSE_Move( oSel, 1 )
+         AGPROPOSE_Move( oSel, 1 )
       CASE nKey == 32                       // Space -> toggle current row
-         CCPROPOSE_Toggle( oSel )
+         AGPROPOSE_Toggle( oSel )
       CASE nKey == 65 .OR. nKey == 97       // A / a -> accept all
          AEval( oSel[ "items" ], {| h | h[ "accepted" ] := .T. } )
       CASE nKey == 78 .OR. nKey == 110      // N / n -> reject all
@@ -154,10 +154,10 @@ FUNCTION CCPROPOSE_Run( oSel )
          lDone := .T.
       ENDCASE
       IF !lDone
-         CCPROPOSE_Paint( oSel, .T. )
+         AGPROPOSE_Paint( oSel, .T. )
       ENDIF
    ENDDO
    IF lCancel
       RETURN NIL
    ENDIF
-   RETURN CCPROPOSE_Accepted( oSel )
+   RETURN AGPROPOSE_Accepted( oSel )

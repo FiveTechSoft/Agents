@@ -2,11 +2,11 @@
 // reply. The reply arrives as text deltas; this renders each line once it is
 // complete, mirroring the SSE parser pattern. It also captures the
 // "Suggested next:" marker line. Never throws: unrecognised text is emitted
-// unchanged, and with colour off (CCUI_ColorOn() false) markers are stripped
+// unchanged, and with colour off (AGUI_ColorOn() false) markers are stripped
 // but no ANSI codes are produced.
 
 // Creates a fresh render state.
-FUNCTION CCMD_New()
+FUNCTION AGMD_New()
    RETURN { "buf" => "", "fence" => .F., "suggestion" => "" }
 
 // Appends a chunk; renders every line completed by a newline. Returns the
@@ -14,20 +14,20 @@ FUNCTION CCMD_New()
 // buffered). Defensive against models that emit a list as a single line
 // with "- " markers joining items but no real newlines: such a line is
 // detected and split into one bullet per virtual line before rendering.
-FUNCTION CCMD_Feed( oSt, cChunk )
+FUNCTION AGMD_Feed( oSt, cChunk )
    LOCAL cOut := "", nNL, cLine, cSplit, aParts, cPart
    oSt[ "buf" ] += hb_CStr( cChunk )
    DO WHILE ( nNL := At( Chr(10), oSt[ "buf" ] ) ) > 0
       cLine := Left( oSt[ "buf" ], nNL - 1 )
       oSt[ "buf" ] := SubStr( oSt[ "buf" ], nNL + 1 )
-      cSplit := CCMD_SplitBulletRun( cLine )
+      cSplit := AGMD_SplitBulletRun( cLine )
       IF Chr(10) $ cSplit
          aParts := hb_ATokens( cSplit, Chr(10) )
          FOR EACH cPart IN aParts
-            cOut += CCMD_RenderLine( oSt, cPart )
+            cOut += AGMD_RenderLine( oSt, cPart )
          NEXT
       ELSE
-         cOut += CCMD_RenderLine( oSt, cLine )
+         cOut += AGMD_RenderLine( oSt, cLine )
       ENDIF
    ENDDO
    RETURN cOut
@@ -37,7 +37,7 @@ FUNCTION CCMD_Feed( oSt, cChunk )
 // concatenated a list into one line without newlines. Split it so each
 // item becomes its own virtual line, preserving the marker on every
 // line. Returns the original cLine when no split is needed.
-STATIC FUNCTION CCMD_SplitBulletRun( cLine )
+STATIC FUNCTION AGMD_SplitBulletRun( cLine )
    LOCAL cMark := "", aParts, i, cResult, nStart
    IF Left( cLine, 2 ) == "- "
       cMark := "- "
@@ -64,30 +64,30 @@ STATIC FUNCTION CCMD_SplitBulletRun( cLine )
    RETURN cResult
 
 // Renders any buffered partial line (call at end of stream). Applies the
-// same bullet-run split as CCMD_Feed so a list that arrived without any
+// same bullet-run split as AGMD_Feed so a list that arrived without any
 // terminating newline still renders one item per line.
-FUNCTION CCMD_Flush( oSt )
+FUNCTION AGMD_Flush( oSt )
    LOCAL cOut := "", cSplit, aParts, cPart
    IF Len( oSt[ "buf" ] ) > 0
-      cSplit := CCMD_SplitBulletRun( oSt[ "buf" ] )
+      cSplit := AGMD_SplitBulletRun( oSt[ "buf" ] )
       oSt[ "buf" ] := ""
       IF Chr(10) $ cSplit
          aParts := hb_ATokens( cSplit, Chr(10) )
          FOR EACH cPart IN aParts
-            cOut += CCMD_RenderLine( oSt, cPart )
+            cOut += AGMD_RenderLine( oSt, cPart )
          NEXT
       ELSE
-         cOut := CCMD_RenderLine( oSt, cSplit )
+         cOut := AGMD_RenderLine( oSt, cSplit )
       ENDIF
    ENDIF
    RETURN cOut
 
 // Returns the captured suggested next prompt, or "".
-FUNCTION CCMD_Suggestion( oSt )
+FUNCTION AGMD_Suggestion( oSt )
    RETURN oSt[ "suggestion" ]
 
 // Renders one line (no trailing newline supplied); the result ends in LF.
-STATIC FUNCTION CCMD_RenderLine( oSt, cLine )
+STATIC FUNCTION AGMD_RenderLine( oSt, cLine )
    LOCAL cTrim, cRest, nH, cList, nSuggest
    cLine := StrTran( cLine, Chr(13), "" )
    cTrim := AllTrim( cLine )
@@ -111,7 +111,7 @@ STATIC FUNCTION CCMD_RenderLine( oSt, cLine )
       RETURN ""
    ENDIF
    IF oSt[ "fence" ]
-      RETURN "  " + CCUI_Color( cLine, "90" ) + Chr(10)
+      RETURN "  " + AGUI_Color( cLine, "90" ) + Chr(10)
    ENDIF
 
    // blank line
@@ -120,23 +120,23 @@ STATIC FUNCTION CCMD_RenderLine( oSt, cLine )
    ENDIF
 
    // heading
-   nH := CCMD_HeadingLevel( cTrim )
+   nH := AGMD_HeadingLevel( cTrim )
    IF nH > 0
       cRest := AllTrim( SubStr( cTrim, nH + 1 ) )
-      RETURN CCUI_Color( cRest, "1" ) + Chr(10)
+      RETURN AGUI_Color( cRest, "1" ) + Chr(10)
    ENDIF
 
    // list item
-   cList := CCMD_ListRender( cTrim )
+   cList := AGMD_ListRender( cTrim )
    IF cList != NIL
       RETURN cList + Chr(10)
    ENDIF
 
    // paragraph
-   RETURN CCMD_Inline( cLine ) + Chr(10)
+   RETURN AGMD_Inline( cLine ) + Chr(10)
 
 // Returns the heading level 1..6 for a "# " .. "###### " line, else 0.
-STATIC FUNCTION CCMD_HeadingLevel( cTrim )
+STATIC FUNCTION AGMD_HeadingLevel( cTrim )
    LOCAL n := 0
    DO WHILE SubStr( cTrim, n + 1, 1 ) == "#"
       n++
@@ -148,12 +148,12 @@ STATIC FUNCTION CCMD_HeadingLevel( cTrim )
 
 // Renders a bullet ("- ", "* ", "+ ") or numbered ("<digits>. ") list item,
 // or NIL when the line is not a list item.
-STATIC FUNCTION CCMD_ListRender( cTrim )
+STATIC FUNCTION AGMD_ListRender( cTrim )
    LOCAL cMark := Left( cTrim, 2 ), nDot := 0, i, c
    LOCAL cBullet := Chr(226)+Chr(128)+Chr(162)   // U+2022 bullet
    IF cMark == "- " .OR. cMark == "* " .OR. cMark == "+ "
-      RETURN "  " + CCUI_Color( cBullet, "90" ) + " " + ;
-             CCMD_Inline( SubStr( cTrim, 3 ) )
+      RETURN "  " + AGUI_Color( cBullet, "90" ) + " " + ;
+             AGMD_Inline( SubStr( cTrim, 3 ) )
    ENDIF
    FOR i := 1 TO Len( cTrim )
       c := SubStr( cTrim, i, 1 )
@@ -166,22 +166,22 @@ STATIC FUNCTION CCMD_ListRender( cTrim )
       EXIT
    NEXT
    IF nDot > 0
-      RETURN "  " + CCUI_Color( Left( cTrim, nDot ), "90" ) + " " + ;
-             CCMD_Inline( SubStr( cTrim, nDot + 2 ) )
+      RETURN "  " + AGUI_Color( Left( cTrim, nDot ), "90" ) + " " + ;
+             AGMD_Inline( SubStr( cTrim, nDot + 2 ) )
    ENDIF
    RETURN NIL
 
 // Applies inline formatting: **bold**, `code`, *italic*. Order matters:
 // ** before * so a bold pair is not split by the italic pass.
-STATIC FUNCTION CCMD_Inline( cText )
-   cText := CCMD_Span( cText, "**", "1" )
-   cText := CCMD_Span( cText, "`", "96" )
-   cText := CCMD_Span( cText, "*", "3" )
+STATIC FUNCTION AGMD_Inline( cText )
+   cText := AGMD_Span( cText, "**", "1" )
+   cText := AGMD_Span( cText, "`", "96" )
+   cText := AGMD_Span( cText, "*", "3" )
    RETURN cText
 
 // Wraps every cDelim..cDelim span in cText with the ANSI colour cSGR.
 // An unmatched trailing delimiter is left as literal text.
-STATIC FUNCTION CCMD_Span( cText, cDelim, cSGR )
+STATIC FUNCTION AGMD_Span( cText, cDelim, cSGR )
    LOCAL nDL := Len( cDelim ), nOpen, nClose, cResult := ""
    LOCAL cInner, cBefore
    DO WHILE ( nOpen := At( cDelim, cText ) ) > 0
@@ -191,7 +191,7 @@ STATIC FUNCTION CCMD_Span( cText, cDelim, cSGR )
       ENDIF
       cBefore := Left( cText, nOpen - 1 )
       cInner  := SubStr( cText, nOpen + nDL, nClose - 1 )
-      cResult += cBefore + CCUI_Color( cInner, cSGR )
+      cResult += cBefore + AGUI_Color( cInner, cSGR )
       cText := SubStr( cText, nOpen + nDL + nClose - 1 + nDL )
    ENDDO
    RETURN cResult + cText

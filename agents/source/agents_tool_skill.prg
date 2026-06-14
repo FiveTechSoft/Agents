@@ -3,7 +3,7 @@
 // part of the agent's context for the rest of the turn; the name also lands
 // in the active-skills status line under the input box.
 
-FUNCTION CCTool_UseSkill()
+FUNCTION AGTOOL_UseSkill()
    RETURN { "name" => "use_skill", ;
             "description" => "Activate a project skill: returns its " + ;
                "checklist/instructions and pins its name to the status " + ;
@@ -14,18 +14,18 @@ FUNCTION CCTool_UseSkill()
                               "description" => "The skill name (see the " + ;
                                  "skills section of the system prompt)" } }, ;
                "required" => { "name" } }, ;
-            "handler" => {| hArgs | CCTool_UseSkillRun( hArgs ) } }
+            "handler" => {| hArgs | AGTOOL_UseSkillRun( hArgs ) } }
 
-STATIC FUNCTION CCTool_UseSkillRun( hArgs )
+STATIC FUNCTION AGTOOL_UseSkillRun( hArgs )
    LOCAL cName, cBody
    cName := hb_CStr( hArgs[ "name" ] )
    IF Empty( cName )
       RETURN "Error: use_skill requires 'name'"
    ENDIF
-   cBody := CCSKILL_Load( cName )
+   cBody := AGSKILL_Load( cName )
    IF cBody == NIL
       RETURN "Error: skill '" + cName + "' not found in .agents/skills/"
    ENDIF
-   CCSKILL_Activate( cName )
+   AGSKILL_Activate( cName )
    RETURN "Skill '" + cName + "' activated. Follow these instructions:" + ;
           Chr(10) + Chr(10) + cBody

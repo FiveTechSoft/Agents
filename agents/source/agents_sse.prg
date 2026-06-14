@@ -1,18 +1,18 @@
-FUNCTION CCSSE_New()
+FUNCTION AGSSE_New()
    RETURN { "buffer" => "", "closed" => .F. }
 
-FUNCTION CCSSE_Feed( oP, cChunk, bEmit )
+FUNCTION AGSSE_Feed( oP, cChunk, bEmit )
    LOCAL nPos, cLine
    oP[ "buffer" ] += cChunk
    DO WHILE ( nPos := At( Chr(10), oP[ "buffer" ] ) ) > 0
       cLine := Left( oP[ "buffer" ], nPos - 1 )
       oP[ "buffer" ] := SubStr( oP[ "buffer" ], nPos + 1 )
       cLine := StrTran( cLine, Chr(13), "" )
-      CCSSE_Line( cLine, bEmit )
+      AGSSE_Line( cLine, bEmit )
    ENDDO
    RETURN NIL
 
-STATIC FUNCTION CCSSE_Line( cLine, bEmit )
+STATIC FUNCTION AGSSE_Line( cLine, bEmit )
    LOCAL cData, xJson, hChoice, hDelta
    IF Empty( cLine ) .OR. !( Left( cLine, 5 ) == "data:" )
       RETURN NIL   // comments, blank keep-alive lines, event: lines -> ignored
@@ -50,7 +50,7 @@ STATIC FUNCTION CCSSE_Line( cLine, bEmit )
                            "text" => hDelta[ "reasoning" ] } )
          ENDIF
          IF hb_HHasKey( hDelta, "tool_calls" )
-            CCSSE_ToolCalls( hDelta[ "tool_calls" ], bEmit )
+            AGSSE_ToolCalls( hDelta[ "tool_calls" ], bEmit )
          ENDIF
       ENDIF
       IF hb_HHasKey( hChoice, "finish_reason" ) .AND. ;
@@ -64,7 +64,7 @@ STATIC FUNCTION CCSSE_Line( cLine, bEmit )
    ENDIF
    RETURN NIL
 
-STATIC FUNCTION CCSSE_ToolCalls( aCalls, bEmit )
+STATIC FUNCTION AGSSE_ToolCalls( aCalls, bEmit )
    LOCAL hCall, hFn, hEv
    FOR EACH hCall IN aCalls
       hEv := { "type" => "tool_call_delta", "index" => 0, ;

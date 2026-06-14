@@ -1,7 +1,7 @@
 // GitHub tools for Agents: github_read (queries) and github_write (mutations).
 
 // Builds the standard GitHub API request headers; adds auth when a token is set.
-STATIC FUNCTION CCGithub_Headers( cToken )
+STATIC FUNCTION AGGITHUB_Headers( cToken )
    LOCAL aHdr := { "Accept: application/vnd.github+json", ;
                    "User-Agent: Agents", ;
                    "Content-Type: application/json" }
@@ -12,7 +12,7 @@ STATIC FUNCTION CCGithub_Headers( cToken )
 
 // Percent-encodes a string for use in a URL query component. Byte-wise so
 // multi-byte (UTF-8) input is encoded one octet at a time.
-STATIC FUNCTION CCGithub_UrlEncode( cText )
+STATIC FUNCTION AGGITHUB_UrlEncode( cText )
    LOCAL cOut := "", i, c
    FOR i := 1 TO hb_BLen( cText )
       c := hb_BSubStr( cText, i, 1 )
@@ -26,15 +26,15 @@ STATIC FUNCTION CCGithub_UrlEncode( cText )
    RETURN cOut
 
 // Percent-encodes a file path for a URL, preserving the "/" separators.
-STATIC FUNCTION CCGithub_UrlEncodePath( cPath )
+STATIC FUNCTION AGGITHUB_UrlEncodePath( cPath )
    LOCAL aSeg := hb_ATokens( cPath, "/" ), cOut := "", i
    FOR i := 1 TO Len( aSeg )
-      cOut += iif( i > 1, "/", "" ) + CCGithub_UrlEncode( aSeg[ i ] )
+      cOut += iif( i > 1, "/", "" ) + AGGITHUB_UrlEncode( aSeg[ i ] )
    NEXT
    RETURN cOut
 
 // Extracts the "message" field from a GitHub error JSON body, or "".
-STATIC FUNCTION CCGithub_ApiMessage( cBody )
+STATIC FUNCTION AGGITHUB_ApiMessage( cBody )
    LOCAL xJson := hb_jsonDecode( cBody )
    IF ValType( xJson ) == "H" .AND. hb_HHasKey( xJson, "message" )
       RETURN hb_CStr( xJson[ "message" ] )
@@ -43,7 +43,7 @@ STATIC FUNCTION CCGithub_ApiMessage( cBody )
 
 // github_read: read-only GitHub queries. cToken is optional (unauthenticated
 // requests work but are rate-limited).
-FUNCTION CCTool_GithubRead( cToken )
+FUNCTION AGTOOL_GithubRead( cToken )
    RETURN { "name" => "github_read", ;
             "description" => "Read from GitHub: repo info, file content, directory listing, issues, pull requests, code search.", ;
             "parameters" => { "type" => "object", ;
@@ -59,11 +59,11 @@ FUNCTION CCTool_GithubRead( cToken )
                   "query" => { "type" => "string", ;
                      "description" => "Code search query (search)" } }, ;
                "required" => { "operation" } }, ;
-            "handler" => {| hArgs | CCTool_GithubReadRun( hArgs, cToken ) } }
+            "handler" => {| hArgs | AGTOOL_GithubReadRun( hArgs, cToken ) } }
 
 // The executor validates only `operation`; this handler validates the
 // per-operation arguments (repo, path, number, query).
-STATIC FUNCTION CCTool_GithubReadRun( hArgs, cToken )
+STATIC FUNCTION AGTOOL_GithubReadRun( hArgs, cToken )
    LOCAL cOp, cRepo, cUrl, hRes
    cOp := Lower( hb_CStr( hArgs[ "operation" ] ) )
    IF cOp == "search"
@@ -71,7 +71,7 @@ STATIC FUNCTION CCTool_GithubReadRun( hArgs, cToken )
          RETURN "Error: github_read 'search' requires 'query'"
       ENDIF
       cUrl := "https://api.github.com/search/code?q=" + ;
-              CCGithub_UrlEncode( hb_CStr( hArgs[ "query" ] ) )
+              AGGITHUB_UrlEncode( hb_CStr( hArgs[ "query" ] ) )
    ELSE
       IF !hb_HHasKey( hArgs, "repo" ) .OR. Empty( hArgs[ "repo" ] )
          RETURN "Error: github_read '" + cOp + "' requires 'repo'"
@@ -85,7 +85,7 @@ STATIC FUNCTION CCTool_GithubReadRun( hArgs, cToken )
             RETURN "Error: github_read '" + cOp + "' requires 'path'"
          ENDIF
          cUrl := "https://api.github.com/repos/" + cRepo + "/contents/" + ;
-                 CCGithub_UrlEncodePath( hb_CStr( hArgs[ "path" ] ) )
+                 AGGITHUB_UrlEncodePath( hb_CStr( hArgs[ "path" ] ) )
       CASE cOp == "issues"
          cUrl := "https://api.github.com/repos/" + cRepo + "/issues"
       CASE cOp == "issue"
@@ -106,34 +106,34 @@ STATIC FUNCTION CCTool_GithubReadRun( hArgs, cToken )
          RETURN "Error: github_read: unknown operation '" + cOp + "'"
       ENDCASE
    ENDIF
-   hRes := CCHTTP_Fetch( { "url" => cUrl, "method" => "GET", ;
-                           "headers" => CCGithub_Headers( cToken ) } )
+   hRes := AGHTTP_Fetch( { "url" => cUrl, "method" => "GET", ;
+                           "headers" => AGGITHUB_Headers( cToken ) } )
    IF !hRes[ "ok" ]
       RETURN "Error: github_read failed: " + hRes[ "error" ]
    ENDIF
    IF hRes[ "status" ] < 200 .OR. hRes[ "status" ] >= 300
       RETURN "Error: github_read HTTP " + LTrim( Str( hRes[ "status" ] ) ) + ": " + ;
-             CCGithub_ApiMessage( hRes[ "body" ] )
+             AGGITHUB_ApiMessage( hRes[ "body" ] )
    ENDIF
-   RETURN CCGithub_FormatRead( cOp, hRes[ "body" ] )
+   RETURN AGGITHUB_FormatRead( cOp, hRes[ "body" ] )
 
 // Caps a string at 30000 bytes, appending a marker when it had to be cut.
-STATIC FUNCTION CCGithub_Cap( cText )
+STATIC FUNCTION AGGITHUB_Cap( cText )
    IF hb_BLen( cText ) > 30000
       RETURN hb_BLeft( cText, 30000 ) + Chr( 10 ) + "[output truncated]" + Chr( 10 )
    ENDIF
    RETURN cText
 
 // Formats a successful github_read response by operation.
-STATIC FUNCTION CCGithub_FormatRead( cOp, cBody )
+STATIC FUNCTION AGGITHUB_FormatRead( cOp, cBody )
    LOCAL xJson, cText, h1
    DO CASE
    CASE cOp == "file"
       xJson := hb_jsonDecode( cBody )
       IF ValType( xJson ) == "H" .AND. hb_HHasKey( xJson, "content" )
-         RETURN CCGithub_Cap( hb_base64Decode( StrTran( hb_CStr( xJson[ "content" ] ), Chr( 10 ), "" ) ) )
+         RETURN AGGITHUB_Cap( hb_base64Decode( StrTran( hb_CStr( xJson[ "content" ] ), Chr( 10 ), "" ) ) )
       ENDIF
-      RETURN CCGithub_Cap( cBody )
+      RETURN AGGITHUB_Cap( cBody )
    CASE cOp == "list"
       xJson := hb_jsonDecode( cBody )
       IF ValType( xJson ) == "A"
@@ -144,15 +144,15 @@ STATIC FUNCTION CCGithub_FormatRead( cOp, cBody )
                         hb_CStr( h1[ "name" ] ) + Chr( 10 )
             ENDIF
          NEXT
-         RETURN CCGithub_Cap( cText )
+         RETURN AGGITHUB_Cap( cText )
       ENDIF
-      RETURN CCGithub_Cap( cBody )
+      RETURN AGGITHUB_Cap( cBody )
    ENDCASE
-   RETURN CCGithub_Cap( cBody )
+   RETURN AGGITHUB_Cap( cBody )
 
 // github_write: GitHub mutations. cToken is mandatory — an empty token yields
 // a clear error at call time.
-FUNCTION CCTool_GithubWrite( cToken )
+FUNCTION AGTOOL_GithubWrite( cToken )
    RETURN { "name" => "github_write", ;
             "description" => "Write to GitHub: create an issue, comment on an issue, or open a pull request. Requires GITHUB_TOKEN.", ;
             "parameters" => { "type" => "object", ;
@@ -172,11 +172,11 @@ FUNCTION CCTool_GithubWrite( cToken )
                   "base" => { "type" => "string", ;
                      "description" => "Target branch (create_pr)" } }, ;
                "required" => { "operation", "repo" } }, ;
-            "handler" => {| hArgs | CCTool_GithubWriteRun( hArgs, cToken ) } }
+            "handler" => {| hArgs | AGTOOL_GithubWriteRun( hArgs, cToken ) } }
 
 // The executor validates only `operation` and `repo`; this handler validates
 // the per-operation arguments (title, number, head, base).
-STATIC FUNCTION CCTool_GithubWriteRun( hArgs, cToken )
+STATIC FUNCTION AGTOOL_GithubWriteRun( hArgs, cToken )
    LOCAL cOp, cRepo, cUrl, cReqBody, hRes, xJson
    IF Empty( cToken )
       RETURN "Error: GITHUB_TOKEN not set"
@@ -212,14 +212,14 @@ STATIC FUNCTION CCTool_GithubWriteRun( hArgs, cToken )
    OTHERWISE
       RETURN "Error: github_write: unknown operation '" + cOp + "'"
    ENDCASE
-   hRes := CCHTTP_Fetch( { "url" => cUrl, "method" => "POST", ;
-      "headers" => CCGithub_Headers( cToken ), "body" => cReqBody } )
+   hRes := AGHTTP_Fetch( { "url" => cUrl, "method" => "POST", ;
+      "headers" => AGGITHUB_Headers( cToken ), "body" => cReqBody } )
    IF !hRes[ "ok" ]
       RETURN "Error: github_write failed: " + hRes[ "error" ]
    ENDIF
    IF hRes[ "status" ] < 200 .OR. hRes[ "status" ] >= 300
       RETURN "Error: github_write HTTP " + LTrim( Str( hRes[ "status" ] ) ) + ": " + ;
-             CCGithub_ApiMessage( hRes[ "body" ] )
+             AGGITHUB_ApiMessage( hRes[ "body" ] )
    ENDIF
    xJson := hb_jsonDecode( hRes[ "body" ] )
    IF ValType( xJson ) == "H" .AND. hb_HHasKey( xJson, "html_url" )

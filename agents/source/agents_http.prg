@@ -1,7 +1,7 @@
 ﻿// Creates a client. hOpts: { api_key, base_url, model, timeout, config_path }.
 // The returned hash holds only immutable data -> safe to share read-only
 // across pool threads.
-FUNCTION CC_Client( hOpts )
+FUNCTION AG_Client( hOpts )
    IF ValType( hOpts ) != "H"
       hOpts := {=>}
    ENDIF
@@ -14,7 +14,7 @@ FUNCTION CC_Client( hOpts )
 // bOnEvent (optional): codeblock invoked per parsed SSE event.
 // Returns hResult: { success, content, tool_calls, finish_reason, usage,
 //                    error_type, status, curl_code, retryable, message }
-FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
+FUNCTION AG_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
    LOCAL hCfg, hResult, hState, oParser, hReq, hHttp, cBody, cModel, bEmit
 
    IF ValType( hParams ) != "H"
@@ -27,11 +27,11 @@ FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
                 "message" => NIL, "reasoning_content" => "" }
 
    // 1. resolve key/url (fail fast, no HTTP)
-   hCfg := CCCFG_Resolve( oClient[ "opts" ] )
+   hCfg := AGCFG_Resolve( oClient[ "opts" ] )
    IF !hCfg[ "ok" ]
       hResult[ "error_type" ] := hCfg[ "error_type" ]
       hResult[ "message" ]    := hCfg[ "message" ]
-      CC_Emit( bOnEvent, { "type" => "error", "error_type" => hCfg[ "error_type" ], ;
+      AG_Emit( bOnEvent, { "type" => "error", "error_type" => hCfg[ "error_type" ], ;
                            "message" => hCfg[ "message" ] } )
       RETURN hResult
    ENDIF
@@ -40,13 +40,13 @@ FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
    IF Empty( cModel )
       hResult[ "error_type" ] := "config"
       hResult[ "message" ]    := "No model id: set it on the client or in hParams"
-      CC_Emit( bOnEvent, { "type" => "error", "error_type" => "config", ;
+      AG_Emit( bOnEvent, { "type" => "error", "error_type" => "config", ;
                            "message" => hResult[ "message" ] } )
       RETURN hResult
    ENDIF
 
    // 2. build request body
-   cBody := hb_jsonEncode( CC_BuildBody( cModel, aMessages, hParams, ;
+   cBody := hb_jsonEncode( AG_BuildBody( cModel, aMessages, hParams, ;
                                          hCfg[ "base_url" ] ) )
    // Ollama 0.20.x specifics, captured here so the rest of the stack is
    // backend-agnostic:
@@ -60,7 +60,7 @@ FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
    //     on a remote that never answers. The stored cloud key is left
    //     untouched in settings.json so /provider deepseek re-uses it.
    hReq  := { "url" => hCfg[ "base_url" ] + "/chat/completions", ;
-              "headers" => iif( CC_IsOllamaUrl( hCfg[ "base_url" ] ), ;
+              "headers" => iif( AG_IsOllamaUrl( hCfg[ "base_url" ] ), ;
                                 { "Content-Type: application/json", ;
                                   "Authorization: Bearer ollama" }, ;
                                 { "Content-Type: application/json", ;
@@ -72,11 +72,11 @@ FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
    // 3. stream: feed every chunk to a fresh parser; assemble into hState
    hState  := { "content" => "", "tools" => {}, "finish" => NIL, ;
                 "usage" => NIL, "got_done" => .F., "raw" => "", "reasoning" => "" }
-   oParser := CCSSE_New()
-   bEmit   := {| hEv | CC_OnEvent( hEv, hState, bOnEvent ) }
+   oParser := AGSSE_New()
+   bEmit   := {| hEv | AG_OnEvent( hEv, hState, bOnEvent ) }
 
-   hHttp := CCHTTP_Post( hReq, ;
-      {| cChunk | CC_FeedChunk( cChunk, hState, oParser, bEmit ) }, ;
+   hHttp := AGHTTP_Post( hReq, ;
+      {| cChunk | AG_FeedChunk( cChunk, hState, oParser, bEmit ) }, ;
       iif( hb_HHasKey( hParams, "transport" ), hParams[ "transport" ], NIL ) )
 
    // 4. classify the outcome
@@ -91,7 +91,7 @@ FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
          hResult[ "error_type" ] := "network"
          hResult[ "message" ]    := hHttp[ "error" ]
       ENDIF
-      CC_Emit( bOnEvent, { "type" => "error", "error_type" => hResult[ "error_type" ], ;
+      AG_Emit( bOnEvent, { "type" => "error", "error_type" => hResult[ "error_type" ], ;
                            "message" => hResult[ "message" ] } )
       RETURN hResult
    ENDIF
@@ -99,8 +99,8 @@ FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
    IF hHttp[ "status" ] < 200 .OR. hHttp[ "status" ] >= 300
       hResult[ "error_type" ] := "api"
       hResult[ "retryable" ]  := ( hHttp[ "status" ] == 429 .OR. hHttp[ "status" ] >= 500 )
-      hResult[ "message" ]    := CC_ApiErrorMessage( hState[ "raw" ], hHttp[ "status" ] )
-      CC_Emit( bOnEvent, { "type" => "error", "error_type" => "api", ;
+      hResult[ "message" ]    := AG_ApiErrorMessage( hState[ "raw" ], hHttp[ "status" ] )
+      AG_Emit( bOnEvent, { "type" => "error", "error_type" => "api", ;
                            "message" => hResult[ "message" ] } )
       RETURN hResult
    ENDIF
@@ -108,7 +108,7 @@ FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
    IF !hState[ "got_done" ]
       hResult[ "error_type" ] := "stream_incomplete"
       hResult[ "message" ]    := "Stream closed before [DONE]"
-      CC_Emit( bOnEvent, { "type" => "error", "error_type" => "stream_incomplete", ;
+      AG_Emit( bOnEvent, { "type" => "error", "error_type" => "stream_incomplete", ;
                            "message" => hResult[ "message" ] } )
       RETURN hResult
    ENDIF
@@ -125,12 +125,12 @@ FUNCTION CC_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
 // request shape. Matches the standard "localhost:11434" / "127.0.0.1:11434"
 // daemon URL plus an explicit "ollama" path component for reverse-proxied
 // installs. Case-insensitive.
-STATIC FUNCTION CC_IsOllamaUrl( cUrl )
+STATIC FUNCTION AG_IsOllamaUrl( cUrl )
    LOCAL cLow := Lower( hb_CStr( cUrl ) )
    RETURN "11434" $ cLow .OR. "ollama" $ cLow
 
-STATIC FUNCTION CC_BuildBody( cModel, aMessages, hParams, cBaseUrl )
-   LOCAL hBody, lOllama := CC_IsOllamaUrl( cBaseUrl )
+STATIC FUNCTION AG_BuildBody( cModel, aMessages, hParams, cBaseUrl )
+   LOCAL hBody, lOllama := AG_IsOllamaUrl( cBaseUrl )
    hBody := { "model" => cModel, "messages" => aMessages, ;
               "stream" => .T. }
    // Ollama 0.20.x does not support OpenAI's stream_options.include_usage
@@ -154,20 +154,20 @@ STATIC FUNCTION CC_BuildBody( cModel, aMessages, hParams, cBaseUrl )
    RETURN hBody
 
 // Records raw bytes (for error bodies) and feeds the SSE parser.
-STATIC FUNCTION CC_FeedChunk( cChunk, hState, oParser, bEmit )
+STATIC FUNCTION AG_FeedChunk( cChunk, hState, oParser, bEmit )
    hState[ "raw" ] += cChunk
-   CCSSE_Feed( oParser, cChunk, bEmit )
+   AGSSE_Feed( oParser, cChunk, bEmit )
    RETURN NIL
 
 // Folds one parsed SSE event into hState and forwards it to the caller.
-STATIC FUNCTION CC_OnEvent( hEv, hState, bOnEvent )
+STATIC FUNCTION AG_OnEvent( hEv, hState, bOnEvent )
    DO CASE
    CASE hEv[ "type" ] == "text_delta"
       hState[ "content" ] += hEv[ "text" ]
    CASE hEv[ "type" ] == "reasoning_delta"
       hState[ "reasoning" ] += hEv[ "text" ]
    CASE hEv[ "type" ] == "tool_call_delta"
-      CC_AccTool( hState[ "tools" ], hEv )
+      AG_AccTool( hState[ "tools" ], hEv )
    CASE hEv[ "type" ] == "finish"
       hState[ "finish" ] := hEv[ "finish_reason" ]
    CASE hEv[ "type" ] == "usage"
@@ -175,11 +175,11 @@ STATIC FUNCTION CC_OnEvent( hEv, hState, bOnEvent )
    CASE hEv[ "type" ] == "done"
       hState[ "got_done" ] := .T.
    ENDCASE
-   CC_Emit( bOnEvent, hEv )
+   AG_Emit( bOnEvent, hEv )
    RETURN NIL
 
 // Merges a tool_call_delta into the accumulator array, keyed by "index".
-STATIC FUNCTION CC_AccTool( aTools, hEv )
+STATIC FUNCTION AG_AccTool( aTools, hEv )
    LOCAL hTool, nFound := 0, i
    FOR i := 1 TO Len( aTools )
       IF aTools[ i ][ "index" ] == hEv[ "index" ]
@@ -204,9 +204,9 @@ STATIC FUNCTION CC_AccTool( aTools, hEv )
    ENDIF
    RETURN NIL
 
-STATIC FUNCTION CC_ApiErrorMessage( cRaw, nStatus )
+STATIC FUNCTION AG_ApiErrorMessage( cRaw, nStatus )
    LOCAL xJson, cMsg, cSnippet, cClean
-   cClean := CC_SanitizeUTF8( cRaw )
+   cClean := AG_SanitizeUTF8( cRaw )
    xJson := hb_jsonDecode( cClean )
    IF ValType( xJson ) == "H" .AND. hb_HHasKey( xJson, "error" ) .AND. ;
       ValType( xJson[ "error" ] ) == "H"
@@ -221,7 +221,7 @@ STATIC FUNCTION CC_ApiErrorMessage( cRaw, nStatus )
       RETURN "HTTP " + LTrim( Str( nStatus ) ) + " - " + cMsg
    ENDIF
    // fallback: scan for "message" key via plain string search
-   xJson := CC_JsonFindMsg( cClean )
+   xJson := AG_JsonFindMsg( cClean )
    IF xJson != NIL
       RETURN "HTTP " + LTrim( Str( nStatus ) ) + " - " + hb_CStr( xJson )
    ENDIF
@@ -231,7 +231,7 @@ STATIC FUNCTION CC_ApiErrorMessage( cRaw, nStatus )
    RETURN "HTTP " + LTrim( Str( nStatus ) ) + " - body: " + cSnippet
 
 // Scans cText for a JSON key "message" and returns its value string, or NIL.
-STATIC FUNCTION CC_JsonFindMsg( cText )
+STATIC FUNCTION AG_JsonFindMsg( cText )
    LOCAL nPos, nEnd, cVal
    nPos := hb_At( '"message"', cText, 1 )
    IF nPos == 0
@@ -258,7 +258,7 @@ STATIC FUNCTION CC_JsonFindMsg( cText )
    cVal := StrTran( cVal, '\\t', Chr(9) )
    RETURN cVal
 
-FUNCTION CC_Emit( bOnEvent, hEv )
+FUNCTION AG_Emit( bOnEvent, hEv )
    IF bOnEvent != NIL
       Eval( bOnEvent, hEv )
    ENDIF

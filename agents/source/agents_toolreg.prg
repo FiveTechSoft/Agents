@@ -2,36 +2,36 @@
 // hKeys (optional): { github => <token> } — captured by
 // the web/github tool handlers. Omitting it leaves those keys empty; the
 // affected tools then return a clear error at call time.
-FUNCTION CCTOOLS_Registry( hKeys )
+FUNCTION AGTOOLS_Registry( hKeys )
    LOCAL oReg := {=>}
    IF ValType( hKeys ) != "H"
       hKeys := {=>}
    ENDIF
-   CCTOOLS_Register( oReg, CCTool_Read() )
-   CCTOOLS_Register( oReg, CCTool_Write() )
-   CCTOOLS_Register( oReg, CCTool_Edit() )
-   CCTOOLS_Register( oReg, CCTool_Glob() )
-   CCTOOLS_Register( oReg, CCTool_Grep() )
-   CCTOOLS_Register( oReg, CCTool_Shell( hb_HGetDef( hKeys, "co_author", "" ), ;
+   AGTOOLS_Register( oReg, AGTOOL_Read() )
+   AGTOOLS_Register( oReg, AGTOOL_Write() )
+   AGTOOLS_Register( oReg, AGTOOL_Edit() )
+   AGTOOLS_Register( oReg, AGTOOL_Glob() )
+   AGTOOLS_Register( oReg, AGTOOL_Grep() )
+   AGTOOLS_Register( oReg, AGTOOL_Shell( hb_HGetDef( hKeys, "co_author", "" ), ;
                                        hb_HGetDef( hKeys, "shell_timeout", 30 ) ) )
-   CCTOOLS_Register( oReg, CCTool_WebSearch() )
-   CCTOOLS_Register( oReg, CCTool_WebFetch() )
-   CCTOOLS_Register( oReg, CCTool_GithubRead( hb_HGetDef( hKeys, "github", "" ) ) )
-   CCTOOLS_Register( oReg, CCTool_GithubWrite( hb_HGetDef( hKeys, "github", "" ) ) )
-   CCTOOLS_Register( oReg, CCTool_Memory( "memory.md" ) )
-   CCTOOLS_Register( oReg, CCTool_AskUser() )
-   CCTOOLS_Register( oReg, CCTool_TodoWrite() )
-   CCTOOLS_Register( oReg, CCTool_UseSkill() )
-   CCTOOLS_Register( oReg, CCTool_DispatchAgent() )
-   CCTOOLS_Register( oReg, CCTool_DispatchAgentBackground() )
-   CCTOOLS_Register( oReg, CCTool_ProposeAgents() )
+   AGTOOLS_Register( oReg, AGTOOL_WebSearch() )
+   AGTOOLS_Register( oReg, AGTOOL_WebFetch() )
+   AGTOOLS_Register( oReg, AGTOOL_GithubRead( hb_HGetDef( hKeys, "github", "" ) ) )
+   AGTOOLS_Register( oReg, AGTOOL_GithubWrite( hb_HGetDef( hKeys, "github", "" ) ) )
+   AGTOOLS_Register( oReg, AGTOOL_Memory( "memory.md" ) )
+   AGTOOLS_Register( oReg, AGTOOL_AskUser() )
+   AGTOOLS_Register( oReg, AGTOOL_TodoWrite() )
+   AGTOOLS_Register( oReg, AGTOOL_UseSkill() )
+   AGTOOLS_Register( oReg, AGTOOL_DispatchAgent() )
+   AGTOOLS_Register( oReg, AGTOOL_DispatchAgentBackground() )
+   AGTOOLS_Register( oReg, AGTOOL_ProposeAgents() )
    RETURN oReg
 
 // Strips a tool registry down to the set allowed for a subagent of the
 // given type. Always removes dispatch_agent so a subagent cannot spawn its
 // own subagent (no recursion). For "explore", keeps read-only tools only.
 // For "general", keeps everything except dispatch_agent.
-FUNCTION CCTOOLS_FilterForAgent( oReg, cType )
+FUNCTION AGTOOLS_FilterForAgent( oReg, cType )
    LOCAL aRemove := { "dispatch_agent", "dispatch_agent_background" }, cKey
    LOCAL aKeepExplore := { "read", "glob", "grep", "github_read", ;
                            "memory", "use_skill" }
@@ -52,12 +52,12 @@ FUNCTION CCTOOLS_FilterForAgent( oReg, cType )
 
 // Adds a tool record to the registry, keyed by its name.
 // hTool: { name, description, parameters, handler }.
-FUNCTION CCTOOLS_Register( oReg, hTool )
+FUNCTION AGTOOLS_Register( oReg, hTool )
    oReg[ hTool[ "name" ] ] := hTool
    RETURN oReg
 
 // Returns the OpenAI "tools" array for every registered tool.
-FUNCTION CCTOOLS_Schemas( oReg )
+FUNCTION AGTOOLS_Schemas( oReg )
    LOCAL aOut := {}, cKey, hTool
    FOR EACH cKey IN hb_HKeys( oReg )
       hTool := oReg[ cKey ]
@@ -69,12 +69,12 @@ FUNCTION CCTOOLS_Schemas( oReg )
    RETURN aOut
 
 // Returns the executor codeblock { |cName,cArgsJson| -> cResultString }.
-// It plugs straight into CC_AgentRun's hOpts["tool_executor"].
-FUNCTION CCTOOLS_Executor( oReg )
-   RETURN {| cName, cArgsJson | CCTOOLS_Dispatch( oReg, cName, cArgsJson ) }
+// It plugs straight into AG_AgentRun's hOpts["tool_executor"].
+FUNCTION AGTOOLS_Executor( oReg )
+   RETURN {| cName, cArgsJson | AGTOOLS_Dispatch( oReg, cName, cArgsJson ) }
 
 // Looks up a tool, validates arguments, runs the handler under an error net.
-STATIC FUNCTION CCTOOLS_Dispatch( oReg, cName, cArgsJson )
+STATIC FUNCTION AGTOOLS_Dispatch( oReg, cName, cArgsJson )
    LOCAL hTool, xArgs, cReq, cResult, oErr
    IF !hb_HHasKey( oReg, cName )
       RETURN "Error: unknown tool '" + hb_CStr( cName ) + "'"
@@ -97,12 +97,12 @@ STATIC FUNCTION CCTOOLS_Dispatch( oReg, cName, cArgsJson )
       cResult := "Error: tool '" + cName + "' failed: " + ;
                  iif( ValType( oErr ) == "O", hb_CStr( oErr:Description ), "exception" )
    END SEQUENCE
-   RETURN CC_SanitizeUTF8( cResult )
+   RETURN AG_SanitizeUTF8( cResult )
 
 // Replaces invalid UTF-8 byte sequences (and non-printable control chars
 // except tab/CR/LF) with "?" so that hb_jsonEncode produces valid JSON
 // that the API server can parse.
-FUNCTION CC_SanitizeUTF8( cText )
+FUNCTION AG_SanitizeUTF8( cText )
    LOCAL cOut := "", i := 1, nLen, nByte, nCont, nNeed
    IF ValType( cText ) != "C"
       RETURN "?"

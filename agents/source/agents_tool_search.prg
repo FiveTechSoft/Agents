@@ -1,5 +1,5 @@
 // glob: lists files matching a filename mask under a directory, recursively.
-FUNCTION CCTool_Glob()
+FUNCTION AGTOOL_Glob()
    RETURN { "name" => "glob", ;
             "description" => "List files matching a filename pattern (e.g. *.prg) under a directory, recursively.", ;
             "parameters" => { "type" => "object", ;
@@ -9,9 +9,9 @@ FUNCTION CCTool_Glob()
                   "path" => { "type" => "string", ;
                               "description" => "Root directory to search (default current directory)" } }, ;
                "required" => { "pattern" } }, ;
-            "handler" => {| hArgs | CCTool_GlobRun( hArgs ) } }
+            "handler" => {| hArgs | AGTOOL_GlobRun( hArgs ) } }
 
-STATIC FUNCTION CCTool_GlobRun( hArgs )
+STATIC FUNCTION AGTOOL_GlobRun( hArgs )
    LOCAL cPattern, cPath, cMask, aFiles, a1, cOut := "", nShown := 0
    LOCAL nCap := 200
    cPattern := hb_CStr( hArgs[ "pattern" ] )
@@ -46,7 +46,7 @@ STATIC FUNCTION CCTool_GlobRun( hArgs )
    RETURN cOut
 
 // grep: searches file contents with a regular expression.
-FUNCTION CCTool_Grep()
+FUNCTION AGTOOL_Grep()
    RETURN { "name" => "grep", ;
             "description" => "Search file contents with a regular expression. Returns file:line:text matches.", ;
             "parameters" => { "type" => "object", ;
@@ -58,9 +58,9 @@ FUNCTION CCTool_Grep()
                   "glob" => { "type" => "string", ;
                               "description" => "Filename mask filtering which files are scanned" } }, ;
                "required" => { "pattern" } }, ;
-            "handler" => {| hArgs | CCTool_GrepRun( hArgs ) } }
+            "handler" => {| hArgs | AGTOOL_GrepRun( hArgs ) } }
 
-STATIC FUNCTION CCTool_GrepRun( hArgs )
+STATIC FUNCTION AGTOOL_GrepRun( hArgs )
    LOCAL cPattern, cPath, cGlob, pRegex, aFiles, a1, cFile, cText, aLines, i
    LOCAL cOut := "", nShown := 0, nCap := 200
    cPattern := hb_CStr( hArgs[ "pattern" ] )

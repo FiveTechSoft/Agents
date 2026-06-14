@@ -4,9 +4,9 @@
 // marker. Pure: no colour, no I/O -- the display layer colours it.
 
 // Returns the diff text for cOld -> cNew.
-FUNCTION CCDIFF_Lines( cOld, cNew )
+FUNCTION AGDIFF_Lines( cOld, cNew )
    LOCAL aOps, op, nAdd := 0, nDel := 0, cHdr
-   aOps := CCDIFF_Ops( CCDIFF_Split( cOld ), CCDIFF_Split( cNew ) )
+   aOps := AGDIFF_Ops( AGDIFF_Split( cOld ), AGDIFF_Split( cNew ) )
    FOR EACH op IN aOps
       DO CASE
       CASE op[ "t" ] == "add"
@@ -17,10 +17,10 @@ FUNCTION CCDIFF_Lines( cOld, cNew )
    NEXT
    cHdr := "Added " + LTrim( Str( nAdd ) ) + " line" + iif( nAdd == 1, "", "s" ) + ;
            ", removed " + LTrim( Str( nDel ) ) + " line" + iif( nDel == 1, "", "s" )
-   RETURN cHdr + Chr(10) + CCDIFF_Format( aOps )
+   RETURN cHdr + Chr(10) + AGDIFF_Format( aOps )
 
 // Splits text into a line array, dropping CR. Empty text is zero lines.
-STATIC FUNCTION CCDIFF_Split( cText )
+STATIC FUNCTION AGDIFF_Split( cText )
    cText := StrTran( hb_CStr( cText ), Chr(13), "" )
    IF Len( cText ) == 0
       RETURN {}
@@ -29,7 +29,7 @@ STATIC FUNCTION CCDIFF_Split( cText )
 
 // Diffs two line arrays via a longest-common-subsequence table; returns an
 // array of ops { t => "ctx"|"add"|"del", o => oldLineNo, n => newLineNo, x => text }.
-STATIC FUNCTION CCDIFF_Ops( aOld, aNew )
+STATIC FUNCTION AGDIFF_Ops( aOld, aNew )
    LOCAL nO := Len( aOld ), nN := Len( aNew ), aC, i, j, aOps := {}
    aC := Array( nO + 1 )
    FOR i := 1 TO nO + 1
@@ -71,7 +71,7 @@ STATIC FUNCTION CCDIFF_Ops( aOld, aNew )
    RETURN aOps
 
 // Formats the ops: changed lines plus 3 context lines each side, capped.
-STATIC FUNCTION CCDIFF_Format( aOps )
+STATIC FUNCTION AGDIFF_Format( aOps )
    LOCAL n := Len( aOps ), aShow, i, k, cOut := "", nShown := 0
    LOCAL nCtx := 3, nCap := 60
    IF n == 0
@@ -94,7 +94,7 @@ STATIC FUNCTION CCDIFF_Format( aOps )
          cOut += "... (diff truncated)" + Chr(10)
          EXIT
       ENDIF
-      cOut += CCDIFF_Line( aOps[ i ] ) + Chr(10)
+      cOut += AGDIFF_Line( aOps[ i ] ) + Chr(10)
       nShown++
    NEXT
    IF Empty( cOut )
@@ -104,7 +104,7 @@ STATIC FUNCTION CCDIFF_Format( aOps )
 
 // Formats one op: "<6-wide line number> <marker> <text>". Added lines carry
 // the new line number, deleted lines the old one, context the new one.
-STATIC FUNCTION CCDIFF_Line( op )
+STATIC FUNCTION AGDIFF_Line( op )
    LOCAL nNum, cMark
    DO CASE
    CASE op[ "t" ] == "add"

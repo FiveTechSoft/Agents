@@ -1,7 +1,7 @@
 // todo_write: the agent maintains a visible session task list. Each call
 // replaces the whole list; the rendered list is returned so the model and
 // the user both see the current state.
-FUNCTION CCTool_TodoWrite()
+FUNCTION AGTOOL_TodoWrite()
    RETURN { "name" => "todo_write", ;
             "description" => "Maintain a visible task list for multi-step " + ;
                "work. Call with the full list every time -- it replaces the " + ;
@@ -42,11 +42,11 @@ FUNCTION CCTool_TodoWrite()
                               "items" => { "type" => "string" } } }, ;
                         "required" => { "text", "status" } } } }, ;
                "required" => { "todos" } }, ;
-            "handler" => {| hArgs | CCTool_TodoWriteRun( hArgs ) } }
+            "handler" => {| hArgs | AGTOOL_TodoWriteRun( hArgs ) } }
 
-STATIC FUNCTION CCTool_TodoWriteRun( hArgs )
+STATIC FUNCTION AGTOOL_TodoWriteRun( hArgs )
    IF ValType( hArgs[ "todos" ] ) != "A"
       RETURN "Error: 'todos' must be an array"
    ENDIF
-   CCTODO_Set( hArgs[ "todos" ] )
-   RETURN CCUI_TodoBlock( CCTODO_Get() )
+   AGTODO_Set( hArgs[ "todos" ] )
+   RETURN AGUI_TodoBlock( AGTODO_Get() )

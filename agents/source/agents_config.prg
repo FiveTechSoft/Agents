@@ -7,7 +7,7 @@
 //     -> env OPENAI_API_KEY      (OpenAI)
 //     -> config file at hOpts["config_path"]
 // Returns: { ok, api_key, base_url, error_type, message }
-FUNCTION CCCFG_Resolve( hOpts )
+FUNCTION AGCFG_Resolve( hOpts )
    LOCAL hRes, cKey := "", cFileKey, aEnvs, cEnvName, cEnv
 
    IF ValType( hOpts ) != "H"
@@ -36,7 +36,7 @@ FUNCTION CCCFG_Resolve( hOpts )
       IF Empty( cKey ) .AND. ;
          hb_HHasKey( hOpts, "config_path" ) .AND. ;
          !Empty( hOpts[ "config_path" ] )
-         cFileKey := CCCFG_FromFile( hOpts[ "config_path" ] )
+         cFileKey := AGCFG_FromFile( hOpts[ "config_path" ] )
          IF !Empty( cFileKey )
             cKey := cFileKey
          ENDIF
@@ -44,13 +44,13 @@ FUNCTION CCCFG_Resolve( hOpts )
       // Fall back to settings.json so a key saved via /provider key
       // <secret> is picked up on the next turn without rebuilding the
       // client. Honour AGENTS_CONFIG first (same precedence as
-      // CCSETTINGS_Load), then the default .agents/settings.json.
+      // AGSETTINGS_Load), then the default .agents/settings.json.
       IF Empty( cKey )
          cFileKey := hb_GetEnv( "AGENTS_CONFIG" )
          IF Empty( cFileKey )
             cFileKey := ".agents" + hb_ps() + "settings.json"
          ENDIF
-         cFileKey := CCCFG_FromFile( cFileKey )
+         cFileKey := AGCFG_FromFile( cFileKey )
          IF !Empty( cFileKey )
             cKey := cFileKey
          ENDIF
@@ -71,7 +71,7 @@ FUNCTION CCCFG_Resolve( hOpts )
    hRes[ "ok" ]      := .T.
    RETURN hRes
 
-STATIC FUNCTION CCCFG_FromFile( cPath )
+STATIC FUNCTION AGCFG_FromFile( cPath )
    LOCAL cText, xJson
    IF !hb_FileExists( cPath )
       RETURN ""
@@ -86,7 +86,7 @@ STATIC FUNCTION CCCFG_FromFile( cPath )
 
 // Resolves a secret value. Precedence: environment variable cEnvName, then
 // hSettings[ cSettingKey ]. Returns "" when neither is set.
-FUNCTION CCCFG_ResolveKey( cEnvName, cSettingKey, hSettings )
+FUNCTION AGCFG_ResolveKey( cEnvName, cSettingKey, hSettings )
    LOCAL cEnv := hb_GetEnv( cEnvName )
    IF !Empty( cEnv )
       RETURN cEnv

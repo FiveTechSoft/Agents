@@ -5,7 +5,7 @@
 // { agent_type, prompt } items; the agent then iterates and invokes
 // dispatch_agent for each.
 
-FUNCTION CCTool_ProposeAgents()
+FUNCTION AGTOOL_ProposeAgents()
    RETURN { "name" => "propose_agents", ;
             "description" => "Propose a batch of subagents (2+) to the user " + ;
                "BEFORE dispatching any of them. Use this whenever you would " + ;
@@ -31,9 +31,9 @@ FUNCTION CCTool_ProposeAgents()
                                          "description" => "The task for this subagent" } }, ;
                                    "required" => { "agent_type", "prompt" } } } }, ;
                "required" => { "agents" } }, ;
-            "handler" => {| hArgs | CCTool_ProposeAgentsRun( hArgs ) } }
+            "handler" => {| hArgs | AGTOOL_ProposeAgentsRun( hArgs ) } }
 
-STATIC FUNCTION CCTool_ProposeAgentsRun( hArgs )
+STATIC FUNCTION AGTOOL_ProposeAgentsRun( hArgs )
    LOCAL oSel, aApproved, cOut, h, n
    IF !hb_HHasKey( hArgs, "agents" ) .OR. ValType( hArgs[ "agents" ] ) != "A"
       RETURN "Error: propose_agents requires 'agents' (array)"
@@ -41,11 +41,11 @@ STATIC FUNCTION CCTool_ProposeAgentsRun( hArgs )
    IF Empty( hArgs[ "agents" ] )
       RETURN "Error: propose_agents needs at least one proposal"
    ENDIF
-   oSel := CCPROPOSE_New( hArgs[ "agents" ] )
+   oSel := AGPROPOSE_New( hArgs[ "agents" ] )
    IF Empty( oSel[ "items" ] )
       RETURN "Error: no valid proposals (each needs agent_type and prompt)"
    ENDIF
-   aApproved := CCPROPOSE_Run( oSel )
+   aApproved := AGPROPOSE_Run( oSel )
    IF aApproved == NIL
       RETURN "[cancelled] User cancelled the batch. Wait for new " + ;
              "instructions; do not dispatch anything."
@@ -56,7 +56,7 @@ STATIC FUNCTION CCTool_ProposeAgentsRun( hArgs )
    ENDIF
    // top up dispatch_agent's per-turn allowance so the approved batch
    // dispatches without the second-call gate kicking in
-   CCTool_DispatchGrantAllowance( Len( aApproved ) )
+   AGTOOL_DispatchGrantAllowance( Len( aApproved ) )
    // build a JSON array so the model can iterate it deterministically
    cOut := "User approved " + LTrim( Str( Len( aApproved ) ) ) + " of " + ;
            LTrim( Str( Len( oSel[ "items" ] ) ) ) + " proposals. " + ;

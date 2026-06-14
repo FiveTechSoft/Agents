@@ -9,7 +9,7 @@
 // /btw "what are you doing?") that does not interrupt the loop.
 // Returns hResult: { success, messages, content, stop_reason, iterations,
 //                    usage, error_type, message }
-FUNCTION CC_AgentRun( oClient, aMessages, hOpts, bOnEvent )
+FUNCTION AG_AgentRun( oClient, aMessages, hOpts, bOnEvent )
    LOCAL hResult, aMsgs, nIter := 0, nMax, hUsage, hChat, hChatParams, tc, cRes, bInterrupt
    LOCAL bInject, cInject
 
@@ -49,14 +49,14 @@ FUNCTION CC_AgentRun( oClient, aMessages, hOpts, bOnEvent )
          EXIT
       ENDIF
       nIter++
-      CC_Emit( bOnEvent, { "type" => "iteration_start", "n" => nIter } )
+      AG_Emit( bOnEvent, { "type" => "iteration_start", "n" => nIter } )
 
       // mid-run user interjection: append it before the next request
       IF bInject != NIL
          cInject := Eval( bInject )
          IF ValType( cInject ) == "C" .AND. !Empty( cInject )
             AAdd( aMsgs, { "role" => "user", "content" => cInject } )
-            CC_Emit( bOnEvent, { "type" => "inject", "text" => cInject } )
+            AG_Emit( bOnEvent, { "type" => "inject", "text" => cInject } )
          ENDIF
       ENDIF
 
@@ -77,7 +77,7 @@ FUNCTION CC_AgentRun( oClient, aMessages, hOpts, bOnEvent )
          hChatParams[ "max_tokens" ] := hOpts[ "max_tokens" ]
       ENDIF
 
-      hChat := CC_ChatCompletion( oClient, aMsgs, hChatParams, bOnEvent )
+      hChat := AG_ChatCompletion( oClient, aMsgs, hChatParams, bOnEvent )
 
       IF !hChat[ "success" ]
          hResult[ "messages" ]    := aMsgs
@@ -89,8 +89,8 @@ FUNCTION CC_AgentRun( oClient, aMessages, hOpts, bOnEvent )
          RETURN hResult
       ENDIF
 
-      CC_AgentAddUsage( hUsage, hChat[ "usage" ] )
-      AAdd( aMsgs, CC_AgentAsstMsg( hChat ) )
+      AG_AgentAddUsage( hUsage, hChat[ "usage" ] )
+      AAdd( aMsgs, AG_AgentAsstMsg( hChat ) )
 
       IF Empty( hChat[ "tool_calls" ] )
          // If the model consumed all tokens on reasoning and produced no
@@ -126,11 +126,11 @@ FUNCTION CC_AgentRun( oClient, aMessages, hOpts, bOnEvent )
             hResult[ "stop_reason" ] := "interrupted"
             EXIT
          ENDIF
-         CC_Emit( bOnEvent, { "type" => "tool_call", "id" => tc[ "id" ], ;
+         AG_Emit( bOnEvent, { "type" => "tool_call", "id" => tc[ "id" ], ;
                                    "name" => tc[ "name" ], ;
                                    "arguments" => tc[ "arguments" ] } )
          cRes := Eval( hOpts[ "tool_executor" ], tc[ "name" ], tc[ "arguments" ] )
-         CC_Emit( bOnEvent, { "type" => "tool_result", "id" => tc[ "id" ], ;
+         AG_Emit( bOnEvent, { "type" => "tool_result", "id" => tc[ "id" ], ;
                                    "content" => cRes } )
          AAdd( aMsgs, { "role" => "tool", "tool_call_id" => tc[ "id" ], ;
                         "content" => cRes } )
@@ -149,11 +149,11 @@ FUNCTION CC_AgentRun( oClient, aMessages, hOpts, bOnEvent )
    hResult[ "messages" ]   := aMsgs
    hResult[ "iterations" ] := nIter
    hResult[ "usage" ]      := hUsage
-   hResult[ "content" ]    := CC_AgentLastText( aMsgs )
+   hResult[ "content" ]    := AG_AgentLastText( aMsgs )
    RETURN hResult
 
-// Builds an OpenAI-format assistant message from a CC_ChatCompletion result.
-STATIC FUNCTION CC_AgentAsstMsg( hChat )
+// Builds an OpenAI-format assistant message from a AG_ChatCompletion result.
+STATIC FUNCTION AG_AgentAsstMsg( hChat )
    LOCAL hMsg, aTC := {}, tc
    hMsg := { "role" => "assistant", "content" => hChat[ "content" ] }
    IF !Empty( hChat[ "tool_calls" ] )
@@ -174,7 +174,7 @@ STATIC FUNCTION CC_AgentAsstMsg( hChat )
    RETURN hMsg
 
 // Returns the content of the last assistant message, or "" if there is none.
-STATIC FUNCTION CC_AgentLastText( aMsgs )
+STATIC FUNCTION AG_AgentLastText( aMsgs )
    LOCAL i
    FOR i := Len( aMsgs ) TO 1 STEP -1
       IF aMsgs[ i ][ "role" ] == "assistant"
@@ -184,7 +184,7 @@ STATIC FUNCTION CC_AgentLastText( aMsgs )
    RETURN ""
 
 // Adds the numeric keys of xUsage into hUsage (running totals across turns).
-STATIC FUNCTION CC_AgentAddUsage( hUsage, xUsage )
+STATIC FUNCTION AG_AgentAddUsage( hUsage, xUsage )
    LOCAL cKey
    IF ValType( xUsage ) != "H"
       RETURN NIL
