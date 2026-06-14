@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agents EXE - Agents Docs</title>
+  <link rel="stylesheet" href="../../css/style.css">
+</head>
+<body>
+  <nav id="sidebar">
+    <div id="sidebar-header">
+      <h2>Agents</h2>
+      <div class="version">Version 1.0</div>
+    </div>
+  </nav>
+
+  <main id="content">
+    <h1>Agents EXE</h1>
+    <p>Native desktop executable built with <strong>Harbour</strong> and <strong>FiveWin</strong>. A full TUI (Terminal User Interface) coding assistant with streaming SSE, 17 built-in tools, skills system, multi-agent dispatch, and a persistent input box — all in a single ~1.2 MB executable. No Python, Node.js, or Docker required.</p>
+
+    <h2 id="architecture">Architecture</h2>
+    <div class="mermaid">
+graph TD
+    A[agents.exe] --> B[REPL Loop]
+    B --> C[Agent Class]
+    C --> D[Streaming API]
+    C --> E[Tool Registry]
+    C --> F[Skills System]
+    D --> G[curl SSE]
+    E --> H[17 tools]
+    F --> I[.agents/skills/]
+    B --> J[TUI Layer]
+    J --> K[Input Box]
+    J --> L[Markdown Cards]
+    J --> M[Permission Gate]
+    </div>
+
+    <h2 id="features">Features</h2>
+    <ul>
+      <li><strong>Single executable:</strong> ~1.2 MB, zero dependencies</li>
+      <li><strong>Full TUI:</strong> Card-style output, persistent multi-line input box, markdown rendering</li>
+      <li><strong>Streaming SSE:</strong> Real-time token-by-token via curl subprocess</li>
+      <li><strong>17 Built-in Tools:</strong> read, write, edit, glob, grep, shell, web_search, web_fetch, github_read, github_write, memory, ask_user, todo_write, use_skill, dispatch_agent, dispatch_agent_background, propose_agents</li>
+      <li><strong>Slash Commands:</strong> /help, /model, /plan, /goal, /run, /key, /provider, /clear, /save, /load, /lean, /compact, /rewind, /loop, /tasks, /btw, /hook, /caveman</li>
+      <li><strong>Skills System:</strong> Markdown-based with YAML frontmatter, auto-activation via trigger regex</li>
+      <li><strong>Multi-Agent:</strong> dispatch_agent (blocking) and dispatch_agent_background (threaded)</li>
+      <li><strong>Permission Gate:</strong> allow/deny/ask per tool + plan-mode lock</li>
+      <li><strong>Session Management:</strong> /save and /load with JSON export</li>
+      <li><strong>Multi-Backend:</strong> DeepSeek, OpenAI, GLM, Moonshot, Ollama</li>
+    </ul>
+
+    <h2 id="building">Building from Source</h2>
+    <pre><code>cd agents\source
+hbmk2 -comp=msvc64 agents.hbp</code></pre>
+    <p>Requires: Harbour 3.2+, Visual Studio 2019/2022 Build Tools, curl (included in Windows 10/11).</p>
+
+    <h2 id="quick-start">Quick Start</h2>
+    <pre><code># Set your API key
+set DEEPSEEK_API_KEY=sk-...
+
+# Launch
+agents.exe
+
+# Or specify a backend
+agents.exe
+/provider deepseek
+/key sk-...</code></pre>
+
+    <h2 id="class-agent">CLASS Agent API</h2>
+    <p>The <code>Agent</code> class is a reusable OOP wrapper for autonomous AI agent loops with tool-calling, skills, planning, and multi-agent dispatch.</p>
+
+    <h3 id="initialization">Initialization</h3>
+    <pre><code>oAgent := Agent():New( cApiKey, cModel, hOpts )
+// hOpts: { base_url, max_steps, timeout, co_author, github_token, interrupt, inject }</code></pre>
+
+    <h3 id="main-loop">Main Loop</h3>
+    <table>
+      <tr><th>Method</th><th>Description</th></tr>
+      <tr><td><code>Run( cPrompt )</code></td><td>Execute full agent loop with prompt, returns { success, content, stop_reason, iterations, tool_call_count, usage }</td></tr>
+      <tr><td><code>Step()</code></td><td>Single LLM API call with streaming SSE</td></tr>
+      <tr><td><code>AddMessage( cRole, cContent )</code></td><td>Append to conversation history</td></tr>
+      <tr><td><code>BuildSystemPrompt()</code></td><td>Compile system prompt with skills + tools</td></tr>
+    </table>
+
+    <h3 id="tools">Built-in Tools</h3>
+    <table>
+      <tr><th>Method</th><th>Tool</th><th>Access</th></tr>
+      <tr><td><code>Tool_Read( hArgs )</code></td><td>Read file with line numbers</td><td>Read</td></tr>
+      <tr><td><code>Tool_Write( hArgs )</code></td><td>Write/overwrite file with diff</td><td>Write</td></tr>
+      <tr><td><code>Tool_Edit( hArgs )</code></td><td>Replace exact string in file</td><td>Write</td></tr>
+      <tr><td><code>Tool_Glob( hArgs )</code></td><td>List files matching pattern</td><td>Read</td></tr>
+      <tr><td><code>Tool_Grep( hArgs )</code></td><td>Regex search in file contents</td><td>Read</td></tr>
+      <tr><td><code>Tool_Shell( hArgs )</code></td><td>Run shell command with timeout</td><td>Write</td></tr>
+      <tr><td><code>Tool_WebSearch( hArgs )</code></td><td>DuckDuckGo web search</td><td>Read</td></tr>
+      <tr><td><code>Tool_WebFetch( hArgs )</code></td><td>Fetch URL content</td><td>Read</td></tr>
+    </table>
+
+    <h3 id="skills">Skills</h3>
+    <table>
+      <tr><th>Method</th><th>Description</th></tr>
+      <tr><td><code>ActivateSkill( cName )</code></td><td>Enable a named skill for the session</td></tr>
+      <tr><td><code>DeactivateSkill( cName )</code></td><td>Disable a named skill</td></tr>
+      <tr><td><code>ActiveSkillsPrompt()</code></td><td>Return concatenated active skill contents</td></tr>
+      <tr><td><code>LoadSkills( cDir )</code></td><td>Load .md skills from directory</td></tr>
+    </table>
+
+    <h3 id="multi-agent">Multi-Agent Dispatch</h3>
+    <table>
+      <tr><th>Method</th><th>Description</th></tr>
+      <tr><td><code>DispatchAgent( cPrompt, cType, nTimeout )</code></td><td>Spawn subagent with filtered toolset</td></tr>
+      <tr><td><code>SubAgentRun( cId, cType, cPrompt, nTimeout )</code></td><td>Thread entry point for subagents</td></tr>
+    </table>
+
+    <h3 id="utilities">Utilities</h3>
+    <table>
+      <tr><th>Method</th><th>Description</th></tr>
+      <tr><td><code>UsageReport()</code></td><td>Return session cost in USD (DeepSeek pricing)</td></tr>
+      <tr><td><code>Abort()</code></td><td>Set abort flag to stop the loop</td></tr>
+      <tr><td><code>SaveState( cDir ) / LoadState( cDir )</code></td><td>Persist/restore user tools and active skills</td></tr>
+      <tr><td><code>ResolveApiKey()</code></td><td>Resolve API key from instance, env, or settings.json</td></tr>
+    </table>
+
+    <h2 id="complete-example">Complete Example</h2>
+    <pre><code>#include "hbclass.ch"
+
+FUNCTION Main()
+   LOCAL oAgent, hResult
+
+   oAgent := Agent():New( hb_GetEnv( "DEEPSEEK_API_KEY" ), ;
+      "deepseek-v4-pro", { "base_url" => "https://api.deepseek.com" } )
+
+   hResult := oAgent:Run( "List all .prg files and summarize each in one line" )
+
+   IF hResult[ "success" ]
+      ? hResult[ "content" ]
+      ? "Steps:", hResult[ "iterations" ]
+      ? "Cost: $", oAgent:UsageReport()
+   ENDIF
+
+RETURN 0</code></pre>
+
+    <h2 id="file-structure">Source File Structure</h2>
+    <pre><code>agents/source/
+  agents.hbp          Build file (hbmk2)
+  agents_repl.prg     Main() entry, REPL loop (3328 lines)
+  agents.prg          CLASS Agent (2794 lines, 64 methods)
+  agents_ui.prg       TUI: banner, cards, cost report (1182 lines)
+  agents_prompt.prg   Persistent input box
+  agents_input.prg    Multi-line line editor
+  agents_markdown.prg Streaming markdown-to-ANSI
+  agents_http.prg     API client
+  agents_sse.prg      SSE parser
+  agents_curl.prg     curl subprocess transport
+  agents_tool_*.prg   11 tool handler files
+  agents_settings.prg Settings (.agents/settings.json)
+  agents_perm.prg     Permission gate
+  agents_skill.prg    Skills registry
+  agents_diff.prg     Line-level diff engine
+  agents_console.c    Win32 console backend</code></pre>
+
+  </main>
+
+  <aside id="toc">
+    <div id="toc-title">On this page</div>
+    <div id="toc-links"></div>
+  </aside>
+
+  <script src="../../js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Agents - Agents Docs</title>
+  <link rel="stylesheet" href="../../css/style.css">
+</head>
+<body>
+  <nav id="sidebar">
+    <div id="sidebar-header">
+      <h2>Agents</h2>
+      <div class="version">Version 1.0</div>
+    </div>
+  </nav>
+
+  <main id="content">
+    <h1>Web Agents</h1>
+    <p>Agents that run entirely in the browser using WebView2 or as standalone HTML5/JS applications. No server required — the AI agent logic runs client-side with transformers.js for local inference or connects to cloud APIs (DeepSeek, OpenAI, Ollama).</p>
+
+    <h2 id="architecture">Architecture</h2>
+    <div class="mermaid">
+graph TD
+    A[Browser / WebView2] --> B[Agents.js]
+    B --> C[Agent Class]
+    C --> D[Tool Registry]
+    C --> E[Skills System]
+    C --> F[API Client]
+    F --> G[DeepSeek / OpenAI / Ollama]
+    D --> H[read / write / shell / grep...]
+    E --> I[.md skill files]
+    </div>
+
+    <h2 id="features">Features</h2>
+    <ul>
+      <li><strong>Zero-install:</strong> Runs in any modern browser or embedded WebView2 control</li>
+      <li><strong>Local AI:</strong> Transformer.js for on-device inference (no cloud required)</li>
+      <li><strong>Cloud AI:</strong> Connects to DeepSeek, OpenAI, Ollama, or any OpenAI-compatible API</li>
+      <li><strong>Streaming SSE:</strong> Real-time token-by-token streaming responses</li>
+      <li><strong>17 Built-in Tools:</strong> read, write, edit, glob, grep, shell, web_search, web_fetch, github_read, github_write, memory, ask_user, todo_write, use_skill, dispatch_agent, dispatch_agent_background, propose_agents</li>
+      <li><strong>Skills System:</strong> Markdown-based skill files with YAML frontmatter, auto-activation via trigger regex</li>
+      <li><strong>Multi-Agent Dispatch:</strong> Spawn subagents (blocking or background) for parallel task execution</li>
+      <li><strong>Permission Gate:</strong> allow/deny/ask per tool with plan-mode lock</li>
+    </ul>
+
+    <h2 id="quick-start">Quick Start</h2>
+    <pre><code>// Create a Web Agent
+const agent = new Agent({
+  apiKey: 'sk-...',
+  model: 'deepseek-v4-pro',
+  baseUrl: 'https://api.deepseek.com'
+});
+
+// Run a task
+const result = await agent.run('Find all .prg files and summarize them');
+console.log(result.content);</code></pre>
+
+    <h2 id="webview2">FiveWin TWebView2 Integration</h2>
+    <p>Web Agents integrate natively with FiveWin's <strong>TWebView2</strong> class, providing a full chat UI inside desktop applications:</p>
+    <pre><code>#include "FiveWin.ch"
+
+FUNCTION Main()
+   LOCAL oWnd, oView
+   DEFINE WINDOW oWnd TITLE "Agents - Web Agent"
+   oView := TWebView2():New( oWnd )
+   oView:Navigate( "agents/web/index.html" )
+   ACTIVATE WINDOW oWnd CENTERED
+RETURN NIL</code></pre>
+
+    <h2 id="tools">Available Tools</h2>
+    <table>
+      <tr><th>Tool</th><th>Description</th><th>Access</th></tr>
+      <tr><td><code>read</code></td><td>Read a text file with line numbers</td><td>Read</td></tr>
+      <tr><td><code>write</code></td><td>Write/overwrite a file, shows diff</td><td>Write</td></tr>
+      <tr><td><code>edit</code></td><td>Replace exact string in file</td><td>Write</td></tr>
+      <tr><td><code>glob</code></td><td>List files matching pattern</td><td>Read</td></tr>
+      <tr><td><code>grep</code></td><td>Regex search in file contents</td><td>Read</td></tr>
+      <tr><td><code>shell</code></td><td>Run shell command with timeout</td><td>Write</td></tr>
+      <tr><td><code>web_search</code></td><td>DuckDuckGo web search</td><td>Read</td></tr>
+      <tr><td><code>web_fetch</code></td><td>Fetch URL content</td><td>Read</td></tr>
+      <tr><td><code>memory</code></td><td>Read/write persistent memory</td><td>Read</td></tr>
+      <tr><td><code>ask_user</code></td><td>Interactive multiple-choice</td><td>UI</td></tr>
+      <tr><td><code>use_skill</code></td><td>Activate a skill</td><td>UI</td></tr>
+      <tr><td><code>dispatch_agent</code></td><td>Launch blocking subagent</td><td>Dispatch</td></tr>
+      <tr><td><code>dispatch_agent_background</code></td><td>Launch background subagent</td><td>Dispatch</td></tr>
+      <tr><td><code>propose_agents</code></td><td>Batch subagent proposal</td><td>Dispatch</td></tr>
+    </table>
+
+    <h2 id="disk-classifier">AI Disk Classifier</h2>
+    <p>Web Agents include an <strong>AI disk classifier</strong> powered by transformers.js — classify files on disk using local AI models without sending data to any cloud service.</p>
+    <pre><code>// Classify files on disk
+const result = await agent.run(
+  'Classify all files in c:\\projects by type (source, config, doc, asset)'
+);</code></pre>
+
+  </main>
+
+  <aside id="toc">
+    <div id="toc-title">On this page</div>
+    <div id="toc-links"></div>
+  </aside>
+
+  <script src="../../js/app.js"></script>
+</body>
+</html>

@@ -2951,10 +2951,10 @@ STATIC FUNCTION CCREPL_InitConsole()
 // ("y"/"n"/"a"); the gate normalises it. Never throws.
 STATIC FUNCTION CCREPL_AskPerm( cName, cArgsJson )
    LOCAL cLine := "n", oErr, nTimeout
-   // CCHARBOUR_ASK_TIMEOUT (env, seconds): when > 0, deny if no answer
+   // AGENTS_ASK_TIMEOUT (env, seconds): when > 0, deny if no answer
    // arrives within that window. Non-interactive stdin (piped, script,
    // background) auto-denies immediately -- nobody can answer.
-   nTimeout := Val( hb_GetEnv( "CCHARBOUR_ASK_TIMEOUT", "0" ) )
+   nTimeout := Val( hb_GetEnv( "AGENTS_ASK_TIMEOUT", "0" ) )
    IF !CCCON_HasConsole()
       CCREPL_Out( Chr(10) + "[non-interactive stdin -- '" + hb_CStr( cName ) + "' denied]" + Chr(10) )
       RETURN "n"

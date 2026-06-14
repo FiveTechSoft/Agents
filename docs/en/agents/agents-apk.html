@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agents APK - Agents Docs</title>
+  <link rel="stylesheet" href="../../css/style.css">
+</head>
+<body>
+  <nav id="sidebar">
+    <div id="sidebar-header">
+      <h2>Agents</h2>
+      <div class="version">Version 1.0</div>
+    </div>
+  </nav>
+
+  <main id="content">
+    <h1>Agents APK</h1>
+    <p>Android mobile package running the full Agents engine natively on ARM devices. Built with <strong>Harbour</strong> cross-compiled to Android NDK, wrapped in an APK with a WebView-based chat UI.</p>
+
+    <h2 id="architecture">Architecture</h2>
+    <div class="mermaid">
+graph TD
+    A[Android APK] --> B[WebView UI]
+    B --> C[Agents Engine]
+    C --> D[Harbour Runtime]
+    C --> E[Agent Class]
+    E --> F[Tools]
+    E --> G[API Client]
+    G --> H[DeepSeek / Ollama]
+    </div>
+
+    <h2 id="features">Features</h2>
+    <ul>
+      <li><strong>Native ARM:</strong> Harbour compiled for Android NDK, no emulation</li>
+      <li><strong>WebView UI:</strong> HTML5 chat interface inside Android WebView</li>
+      <li><strong>Offline-capable:</strong> Connect to local Ollama or on-device models</li>
+      <li><strong>Same tools:</strong> All 17 built-in tools available (filesystem access via Android scoped storage)</li>
+      <li><strong>Permissions:</strong> Android runtime permissions for storage, network, shell</li>
+    </ul>
+
+    <h2 id="building">Building APK</h2>
+    <pre><code># Cross-compile Harbour for Android NDK
+export HARBOUR=/opt/harbour-android
+export NDK=/opt/android-ndk
+
+# Build native library
+hbmk2 -comp=android agents_android.hbp
+
+# Package as APK with Android Studio / Gradle
+./gradlew assembleRelease</code></pre>
+
+    <h2 id="installation">Installation</h2>
+    <pre><code># Install via ADB
+adb install agents.apk
+
+# Or sideload from device storage
+# Settings → Security → Unknown sources → Allow
+# Open agents.apk from Downloads</code></pre>
+
+  </main>
+
+  <aside id="toc">
+    <div id="toc-title">On this page</div>
+    <div id="toc-links"></div>
+  </aside>
+
+  <script src="../../js/app.js"></script>
+</body>
+</html>

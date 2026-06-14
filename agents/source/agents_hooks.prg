@@ -68,7 +68,7 @@ FUNCTION CCHOOKS_Edit( hSet, cEvent, nIdx, cCmd )
    aHooks[ nIdx ] := cCmd
    RETURN .T.
 
-// Path to the hooks log file, relative to the CCHarbour cwd. Matches
+// Path to the hooks log file, relative to the Agents cwd. Matches
 // the location convention used by .agents/settings.json so the log
 // sits next to the config that opted into it.
 FUNCTION CCHOOKS_LogPath()
@@ -77,7 +77,7 @@ FUNCTION CCHOOKS_LogPath()
 // Appends cLine + LF to CCHOOKS_LogPath() iff settings have hooks_log
 // set to .T.. Best-effort, single-writer: writes are wrapped so a
 // missing directory or read-only filesystem cannot crash the REPL,
-// and concurrent CCHarbour processes sharing a cwd can clobber each
+// and concurrent Agents processes sharing a cwd can clobber each
 // other's log lines (acceptable for the per-turn fire rate).
 FUNCTION CCHOOKS_Log( cLine )
    LOCAL hSet := CCSETTINGS_Load(), cTs, cPath, cDir
@@ -103,7 +103,7 @@ FUNCTION CCHOOKS_Log( cLine )
 //   "tokens"       -> total turn tokens (numeric, 0 if unavailable)
 //   "duration_ms"  -> turn wall-clock duration (numeric, 0 if unavailable)
 // Each hook is spawned detached (fire-and-forget). Env vars are set on
-// the CCHarbour process before each spawn; the child inherits them.
+// the Agents process before each spawn; the child inherits them.
 // Failures are logged when hooks_log is on and otherwise silenced.
 FUNCTION CCHOOKS_Run( cEvent, hContext )
    LOCAL aHooks, cCmd, hSet, nProc, cStatus
@@ -120,15 +120,15 @@ FUNCTION CCHOOKS_Run( cEvent, hContext )
       hContext := {=>}
    ENDIF
    cStatus := hb_CStr( hb_HGetDef( hContext, "status", "success" ) )
-   hb_SetEnv( "CCHARBOUR_EVENT", cEvent )
-   hb_SetEnv( "CCHARBOUR_STATUS", cStatus )
-   hb_SetEnv( "CCHARBOUR_MODEL", ;
+   hb_SetEnv( "AGENTS_EVENT", cEvent )
+   hb_SetEnv( "AGENTS_STATUS", cStatus )
+   hb_SetEnv( "AGENTS_MODEL", ;
       hb_CStr( hb_HGetDef( hContext, "model", "" ) ) )
-   hb_SetEnv( "CCHARBOUR_TOKENS", ;
+   hb_SetEnv( "AGENTS_TOKENS", ;
       LTrim( Str( hb_HGetDef( hContext, "tokens", 0 ) ) ) )
-   hb_SetEnv( "CCHARBOUR_DURATION_MS", ;
+   hb_SetEnv( "AGENTS_DURATION_MS", ;
       LTrim( Str( hb_HGetDef( hContext, "duration_ms", 0 ) ) ) )
-   hb_SetEnv( "CCHARBOUR_CWD", hb_cwd() )
+   hb_SetEnv( "AGENTS_CWD", hb_cwd() )
    FOR EACH cCmd IN aHooks
       BEGIN SEQUENCE WITH {| oErr | Break( oErr ) }
          nProc := hb_processOpen( cCmd, NIL, NIL, NIL, .T. /* detach */ )

@@ -21,7 +21,7 @@ FUNCTION CCSETTINGS_Defaults()
             "hooks_log"         => .F. }
 
 // Loads settings.json merged over the defaults.
-// cPath omitted -> env CCHARBOUR_CONFIG, else .agents/settings.json under cwd.
+// cPath omitted -> env AGENTS_CONFIG, else .agents/settings.json under cwd.
 // When the default file is missing it is auto-created with the defaults so
 // the user has something to edit. Missing (after that) or malformed file ->
 // the pure defaults. Never throws.
@@ -29,7 +29,7 @@ FUNCTION CCSETTINGS_Load( cPath )
    LOCAL hSet := CCSETTINGS_Defaults(), cText, xJson, cKey, cTool
    LOCAL lDefaultPath := .F.
    IF Empty( cPath )
-      cPath := hb_GetEnv( "CCHARBOUR_CONFIG" )
+      cPath := hb_GetEnv( "AGENTS_CONFIG" )
    ENDIF
    IF Empty( cPath )
       cPath := ".agents" + hb_ps() + "settings.json"
@@ -37,7 +37,7 @@ FUNCTION CCSETTINGS_Load( cPath )
    ENDIF
    IF !hb_FileExists( cPath )
       // Only auto-create at the default location; an explicit
-      // CCHARBOUR_CONFIG path is left untouched.
+      // AGENTS_CONFIG path is left untouched.
       IF lDefaultPath
          CCSETTINGS_Create( cPath, hSet )
       ENDIF
@@ -81,7 +81,7 @@ STATIC FUNCTION CCSETTINGS_Create( cPath, hSet )
 // file at runtime (notably the /provider command).
 FUNCTION CCSETTINGS_Save( hSet, cPath )
    IF Empty( cPath )
-      cPath := hb_GetEnv( "CCHARBOUR_CONFIG" )
+      cPath := hb_GetEnv( "AGENTS_CONFIG" )
    ENDIF
    IF Empty( cPath )
       cPath := ".agents" + hb_ps() + "settings.json"

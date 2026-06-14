@@ -1,4 +1,4 @@
-// Web tools for CCHarbour: web_fetch (retrieve a URL) and web_search (DuckDuckGo).
+// Web tools for Agents: web_fetch (retrieve a URL) and web_search (DuckDuckGo).
 
 // web_fetch: retrieves the raw content of a URL.
 FUNCTION CCTool_WebFetch()

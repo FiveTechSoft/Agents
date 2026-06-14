@@ -1,9 +1,9 @@
-// Agents — Agent class: OOP refactoring of CCHarbour's agent loop.
+// Agents — Agent class: OOP refactoring of Agents's agent loop.
 // Based on c:\fwteam\source\classes\agent.prg pattern.
 // Reusable OOP wrapper: Agent():New( key ) → :Run( prompt )
-// CCHarbour TUI runs via ccrepl.prg (Main entry point).
+// Agents TUI runs via ccrepl.prg (Main entry point).
 // Based on c:\fwteam\source\classes\agent.prg pattern.
-// Wraps CCHarbour's streaming API, 17-tool ecosystem, skills, and
+// Wraps Agents's streaming API, 17-tool ecosystem, skills, and
 // permission gate into a reusable CLASS Agent.
 
 #include "fileio.ch"
@@ -171,7 +171,7 @@ RETURN Self
 
 METHOD InitTools() CLASS Agent
 
-   // Built-in tools — same set as CCHarbour's 17-tool ecosystem.
+   // Built-in tools — same set as Agents's 17-tool ecosystem.
    // Each tool is a hash: { name, description, parameters, handler }.
    // The handler is a codeblock that receives hArgs and returns cResult.
 
@@ -606,7 +606,7 @@ METHOD BuildSystemPrompt() CLASS Agent
    LOCAL cPrompt := ""
    LOCAL cSkills
 
-   cPrompt += "You are CCHarbour Agent — a coding assistant that works with files on disk. "
+   cPrompt += "You are Agents — a coding assistant that works with files on disk. "
    cPrompt += "Use the available tools to read, write, edit, search, and run commands. "
    cPrompt += "Be concise and direct. Prefer code over prose."
 
@@ -1435,7 +1435,7 @@ METHOD Tool_WebFetch( hArgs ) CLASS Agent
    ENDIF
 
    hRes := AGENT_HTTP_Fetch( { "url" => cUrl, "timeout" => 30, ;
-      "headers" => { "User-Agent: Mozilla/5.0 (compatible; CCHarbour/1.0)" } } )
+      "headers" => { "User-Agent: Mozilla/5.0 (compatible; Agents/1.0)" } } )
 
    IF !hRes[ "ok" ] .OR. hRes[ "status" ] >= 400
       RETURN "Error: fetch failed - HTTP " + LTrim( Str( hRes[ "status" ] ) )

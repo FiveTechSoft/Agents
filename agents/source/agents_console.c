@@ -1,4 +1,4 @@
-/* Windows console support for CCHarbour: console detection, raw-mode
+/* Windows console support for Agents: console detection, raw-mode
  * toggling, and raw key reading for the line editor. */
 #include "hbapi.h"
 #include "hbapiitm.h"

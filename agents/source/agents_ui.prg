@@ -123,9 +123,9 @@ FUNCTION CCUI_CostReport( hUsage )
    RETURN cOut
 
 // Returns the sessions directory path (.agents/sessions under the
-// working directory, or CCHARBOUR_CONFIG).
+// working directory, or AGENTS_CONFIG).
 FUNCTION CCUI_SessionDir()
-   LOCAL cBase := hb_GetEnv( "CCHARBOUR_CONFIG" )
+   LOCAL cBase := hb_GetEnv( "AGENTS_CONFIG" )
    IF Empty( cBase )
       cBase := hb_cwd() + hb_ps() + ".agents"
    ENDIF

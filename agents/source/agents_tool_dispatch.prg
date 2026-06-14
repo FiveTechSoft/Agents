@@ -115,7 +115,7 @@ STATIC FUNCTION CCTool_DispatchRun( hArgs )
    CCTOOLS_FilterForAgent( oReg, cType )
    aMsgs := { ;
       { "role" => "system", ;
-        "content" => "You are a CCHarbour subagent of type '" + cType + "'. " + ;
+        "content" => "You are a Agents subagent of type '" + cType + "'. " + ;
            "Complete the task using the tools you have, then return a SHORT " + ;
            "synthesis -- at most 10-15 lines, ideally fewer." + Chr(10) + ;
            Chr(10) + ;
@@ -310,7 +310,7 @@ STATIC FUNCTION CCTool_BackgroundWorker( cId, cType, cPrompt, nTimeout )
    CCTOOLS_FilterForAgent( oReg, cType )
    aMsgs := { ;
       { "role" => "system", ;
-        "content" => "You are a CCHarbour background subagent of type '" + ;
+        "content" => "You are a Agents background subagent of type '" + ;
            cType + "'. Complete the task using the tools you have, then " + ;
            "return a SHORT synthesis -- at most 10-15 lines, ideally " + ;
            "fewer. NEVER dump raw tool output. No preamble, no " + ;

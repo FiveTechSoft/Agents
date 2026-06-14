@@ -1,0 +1,151 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-body: #0d1117;
+  --bg-sidebar: #161b22;
+  --bg-content: #0d1117;
+  --bg-toc: #161b22;
+  --bg-code: #1c2129;
+  --bg-hover: #1f2937;
+  --bg-active: #1f6feb22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --text-link: #58a6ff;
+  --text-heading: #f0f6fc;
+  --accent: #1f6feb;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg-body);
+  color: var(--text);
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  font-size: 17px;
+  line-height: 1.75;
+}
+
+/* LEFT SIDEBAR */
+#sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 16px 0;
+}
+
+#sidebar-header { padding: 8px 16px 16px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+#sidebar-header h2 { font-size: 16px; color: var(--text-heading); font-weight: 600; }
+#sidebar-header .version { font-size: 12px; color: var(--text-dim); }
+
+/* Search box */
+#search-box { padding: 8px 16px 12px; }
+#search-input {
+  width: 100%; padding: 8px 12px; background: var(--bg-body); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 14px; outline: none;
+}
+#search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim, #1f6feb33); }
+#search-input::placeholder { color: var(--text-dim); }
+#search-results { padding: 0 8px 8px; display: none; }
+#search-results.active { display: block; }
+.search-result { display: block; padding: 6px 12px; color: var(--text-dim); text-decoration: none; font-size: 13px; border-radius: 4px; margin: 2px 0; }
+.search-result:hover { background: var(--bg-hover); color: var(--text); }
+.search-result .sr-title { color: var(--text-link); font-weight: 500; }
+.search-result .sr-section { font-size: 11px; color: var(--text-dim); }
+
+.nav-section { padding: 4px 0; }
+.nav-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); padding: 8px 16px 4px; }
+
+.nav-item {
+  display: block; padding: 6px 16px 6px 24px; color: var(--text-dim); text-decoration: none;
+  font-size: 16px; border-left: 2px solid transparent; transition: all 0.15s;
+}
+.nav-item:hover { color: var(--text); background: var(--bg-hover); }
+.nav-item.active { color: var(--text-link); background: var(--bg-active); border-left-color: var(--accent); }
+
+/* CENTER CONTENT */
+#content { flex: 1; overflow-y: auto; padding: 32px 48px; }
+#content h1 { font-size: 34px; color: var(--text-heading); margin-bottom: 8px; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+#content h2 { font-size: 26px; color: var(--text-heading); margin: 32px 0 12px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+#content h3 { font-size: 21px; color: var(--text-heading); margin: 24px 0 8px; font-weight: 600; }
+#content p { margin: 8px 0 16px; }
+#content ul, #content ol { margin: 8px 0 16px 24px; }
+#content li { margin: 4px 0; }
+#content a { color: var(--text-link); text-decoration: none; }
+#content a:hover { text-decoration: underline; }
+
+code { background: var(--bg-code); padding: 2px 6px; border-radius: 4px; font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; font-size: 15px; color: #f97583; }
+pre { background: var(--bg-code); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; margin: 12px 0 20px; }
+pre code { background: none; padding: 0; color: var(--text); font-size: 15px; }
+
+/* Syntax highlighting */
+.kw { color: #ff7b72; }   /* keywords: function, local, return, if, endif, etc */
+.cm { color: #8b949e; }   /* comments */
+.st { color: #a5d6ff; }   /* strings */
+.fn { color: #d2a8ff; }   /* function calls */
+.nb { color: #79c0ff; }   /* numbers */
+.pp { color: #ffa657; }   /* preprocessor: #include, #define */
+.dt { color: #7ee787; }   /* data types, class names */
+.op { color: #e6edf3; }   /* operators */
+
+.mermaid { background: var(--bg-code); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0 24px; text-align: center; position: relative; }
+.mermaid .mermaid-max { position: absolute; top: 6px; right: 6px; background: var(--accent); border: 1px solid var(--accent); color: #fff; width: 30px; height: 30px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; display: flex; align-items: center; justify-content: center; opacity: 0.85; transition: opacity 0.2s; z-index: 10; letter-spacing: 0; }
+.mermaid .mermaid-max:hover { opacity: 1; background: #388bfd; }
+
+/* Fullscreen overlay for maximized diagram */
+.mermaid-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); z-index: 9999; display: flex; align-items: center; justify-content: center; }
+.mermaid-overlay .mermaid-full { width: 95vw; height: 95vh; overflow: auto; background: var(--bg-code); border-radius: 8px; padding: 24px; display: flex; align-items: center; justify-content: center; }
+.mermaid-overlay .mermaid-full svg { width: auto !important; height: 90vh !important; max-width: 100% !important; }
+.mermaid-overlay .mermaid-close { position: absolute; top: 16px; right: 24px; background: var(--bg-sidebar); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: 6px; cursor: pointer; font-size: 22px; display: flex; align-items: center; justify-content: center; z-index: 10000; }
+.mermaid-overlay .mermaid-close:hover { background: var(--bg-hover); }
+
+table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; font-size: 14px; }
+th { background: var(--bg-sidebar); color: var(--text-heading); font-weight: 600; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+.badge-blue { background: #1f6feb33; color: #58a6ff; }
+.badge-green { background: #23863633; color: #3fb950; }
+.badge-purple { background: #6e40c933; color: #bc8cff; }
+.source-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--bg-code); border: 1px solid var(--border); padding: 2px 8px; border-radius: 12px; font-size: 12px; color: var(--text-dim); margin: 4px 2px; }
+
+/* RIGHT TOC */
+#toc { width: 240px; min-width: 240px; background: var(--bg-toc); border-left: 1px solid var(--border); overflow-y: auto; padding: 24px 16px; }
+#toc-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); margin-bottom: 12px; }
+.toc-item { display: block; padding: 4px 0 4px 12px; color: var(--text-dim); text-decoration: none; font-size: 14px; border-left: 1px solid var(--border); transition: all 0.15s; }
+.toc-item:hover { color: var(--text); border-left-color: var(--text-dim); }
+.toc-item.toc-h3 { padding-left: 24px; font-size: 13px; }
+
+/* MOBILE HAMBURGER */
+#menu-toggle {
+  display: none; position: fixed; top: 10px; left: 10px; z-index: 1000;
+  background: var(--accent); color: #fff; border: none; border-radius: 6px;
+  width: 40px; height: 40px; font-size: 22px; cursor: pointer; align-items: center; justify-content: center;
+}
+
+/* RESPONSIVE */
+@media (max-width: 1024px) {
+  body { flex-direction: column; height: auto; overflow: auto; }
+  #sidebar { width: 100%; min-width: 0; max-height: 100vh; overflow-y: auto; position: fixed; top: 0; left: 0; z-index: 999; transform: translateX(-100%); transition: transform 0.3s; }
+  #sidebar.open { transform: translateX(0); }
+  #menu-toggle { display: flex; }
+  #content { padding: 24px 16px; margin-top: 0; }
+  #content h1 { font-size: 24px; }
+  #content h2 { font-size: 20px; margin: 24px 0 8px; }
+  #content h3 { font-size: 18px; }
+  #toc { display: none; }
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+  th, td { font-size: 13px; padding: 6px 8px; }
+  pre { font-size: 13px; padding: 12px; }
+  pre code { font-size: 13px; }
+  code { font-size: 14px; }
+  .mermaid { padding: 12px; overflow-x: auto; }
+  .nav-item { font-size: 15px; padding: 8px 16px 8px 24px; }
+  body.sidebar-open { overflow: hidden; }
+}
+@media (min-width: 1025px) {
+  #sidebar { transform: translateX(0) !important; }
+}

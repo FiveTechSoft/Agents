@@ -1,9 +1,9 @@
-// GitHub tools for CCHarbour: github_read (queries) and github_write (mutations).
+// GitHub tools for Agents: github_read (queries) and github_write (mutations).
 
 // Builds the standard GitHub API request headers; adds auth when a token is set.
 STATIC FUNCTION CCGithub_Headers( cToken )
    LOCAL aHdr := { "Accept: application/vnd.github+json", ;
-                   "User-Agent: CCHarbour", ;
+                   "User-Agent: Agents", ;
                    "Content-Type: application/json" }
    IF !Empty( cToken )
       AAdd( aHdr, "Authorization: Bearer " + cToken )
