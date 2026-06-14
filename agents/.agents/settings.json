@@ -1,0 +1,26 @@
+{
+  "model": "deepseek-v4-flash",
+  "base_url": "https://api.deepseek.com",
+  "max_iterations": 25,
+  "color": true,
+  "co_author": "",
+  "shell_timeout": 30,
+  "api_timeout": null,
+  "compact_threshold": 0.7,
+  "permissions":
+  {
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "write": "ask",
+    "edit": "ask",
+    "shell": "ask",
+    "web_search": "ask",
+    "web_fetch": "ask",
+    "github_read": "allow",
+    "github_write": "ask",
+    "memory": "allow"
+  },
+  "hooks": {},
+  "hooks_log": false
+}
