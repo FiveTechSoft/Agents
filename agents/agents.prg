@@ -1,10 +1,120 @@
 // Agents — Agent class: OOP refactoring of CCHarbour's agent loop.
 // Based on c:\fwteam\source\classes\agent.prg pattern.
+// Reusable OOP wrapper: Agent():New( key ) → :Run( prompt )
+// CCHarbour TUI runs via ccrepl.prg (Main entry point).
+// Based on c:\fwteam\source\classes\agent.prg pattern.
 // Wraps CCHarbour's streaming API, 17-tool ecosystem, skills, and
 // permission gate into a reusable CLASS Agent.
-// Core method implementations.
 
-#include "agent.ch"
+#include "fileio.ch"
+#include "hbclass.ch"
+
+#define AGENT_MAX_STEPS    25
+#define AGENT_MODEL_DEF    "deepseek-v4-pro"
+#define AGENT_API_DEF      "https://api.deepseek.com"
+
+// ---------------------------------------------------------------------------
+// Agent — Autonomous AI agent with tools, skills, and multi-agent dispatch
+// ---------------------------------------------------------------------------
+
+CLASS Agent
+
+   // ---- conversation state ----
+   DATA aMessages       INIT {}
+   DATA cSystemPrompt   INIT ""
+   DATA lRunning        INIT .F.
+
+   // ---- tools ----
+   DATA hBuiltinTools   INIT {=>}
+   DATA hUserTools      INIT {=>}
+
+   // ---- skills ----
+   DATA hSkills         INIT {=>}
+   DATA aActiveSkills   INIT {}
+
+   // ---- planning ----
+   DATA cGoal           INIT ""
+   DATA aPlan           INIT {}
+
+   // ---- configuration ----
+   DATA cModel          INIT AGENT_MODEL_DEF
+   DATA cApiKey         INIT ""
+   DATA cApiUrl         INIT AGENT_API_DEF
+   DATA nMaxSteps       INIT AGENT_MAX_STEPS
+   DATA nApiTimeout     INIT 120
+   DATA lStreaming      INIT .T.
+   DATA cCoAuthor       INIT ""
+   DATA cGithubToken    INIT ""
+
+   // ---- metrics ----
+   DATA nTokensIn       INIT 0
+   DATA nTokensOut      INIT 0
+   DATA nTokensCache    INIT 0
+   DATA nCost           INIT 0
+
+   // ---- control ----
+   DATA lAbort          INIT .F.
+   DATA bInterrupt
+   DATA bInject
+   DATA bOnEvent
+
+   // ---- subagent ----
+   DATA lIsSubAgent     INIT .F.
+   DATA cSubAgentType   INIT ""
+
+   // Initialization
+   METHOD New( cKey, cModel, hOpts )
+   METHOD InitTools()
+   METHOD InitSkills()
+   METHOD LoadSkills( cDir )
+
+   // Main loop
+   METHOD Run( cPrompt )
+   METHOD Step()
+   METHOD SendToLLM( aMsgs, hParams )
+
+   // Messages & prompt
+   METHOD AddMessage( cRole, cContent, hExtra )
+   METHOD BuildSystemPrompt()
+   METHOD BuildToolsArray()
+
+   // Tool dispatch
+   METHOD ExecTool( cName, hArgs )
+   METHOD RegisterTool( cName, cDesc, cScript, cType )
+   METHOD UnregisterTool( cName )
+   METHOD ListUserTools()
+
+   // Built-in tools
+   METHOD Tool_Read( hArgs )
+   METHOD Tool_Write( hArgs )
+   METHOD Tool_Edit( hArgs )
+   METHOD Tool_Glob( hArgs )
+   METHOD Tool_Grep( hArgs )
+   METHOD Tool_Shell( hArgs )
+   METHOD Tool_WebSearch( hArgs )
+   METHOD Tool_WebFetch( hArgs )
+
+   // Skills
+   METHOD ActivateSkill( cName )
+   METHOD DeactivateSkill( cName )
+   METHOD ActiveSkillsPrompt()
+
+   // Multi-agent
+   METHOD DispatchAgent( cPrompt, cType, nTimeout )
+   METHOD SubAgentRun( cId, cType, cPrompt, nTimeout )
+
+   // Planning
+   METHOD GeneratePlan( cGoal )
+   METHOD ExecutePlan()
+
+   // Utilities
+   METHOD UsageReport()
+   METHOD Abort()
+   METHOD SaveState( cDir )
+   METHOD LoadState( cDir )
+   METHOD ResolveApiKey()
+
+ENDCLASS
 
 // ============================================================================
 // Initialization
