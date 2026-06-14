@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Build the AgenticAI Android APK (arm64-v8a).
+# Build the Agents Android APK (arm64-v8a).
 #
-# Reuses the prebuilt Harbour-for-Android static libs from C:\HarbourAndroid and
-# the ccharbour agent core. No hbcurl/openssl: the LLM HTTP transport is Java
-# (MainActivity.httpPost), injected into ccharbour via hOpts["transport"].
+# Uses the prebuilt Harbour-for-Android static libs from C:\HarbourAndroid and
+# the Agents core from agents/source/. No hbcurl/openssl: the LLM HTTP transport
+# is Java (MainActivity.httpPost), injected via hOpts["transport"].
 set -eu
 
 APP=/c/fwteam/samples/AgenticAI/Android
-CC_SRC=/c/ccharbour/src
+AGENTS_SRC=/c/agents/agents/source
 
 HB_SRC=/c/HarbourAndroid/harbour-core
 HB_LIB=$HB_SRC/lib/android/clang-android-arm64-v8a
@@ -31,16 +31,17 @@ OUT=$APP/build
 rm -rf "$OUT"; mkdir -p "$OUT"/{obj,gen,jni-libs/arm64-v8a,apk,classes,res-compiled,payload/lib/arm64-v8a}
 
 # ---- 1. PRG -> C (native host harbour.exe) ----
-echo ">>> [1/8] harbour.exe (app + ccharbour core)"
+echo ">>> [1/8] harbour.exe (app + agents core)"
 PRGS="$APP/src/prg/agents.prg /c/fwteam/samples/AgenticAI/ccguistub.prg \
-  $CC_SRC/ccconfig.prg $CC_SRC/ccsse.prg $CC_SRC/cchttp.prg $CC_SRC/ccapi.prg \
-  $CC_SRC/ccagent.prg $CC_SRC/cctools.prg $CC_SRC/cctools_file.prg \
-  $CC_SRC/cctools_search.prg $CC_SRC/cctools_shell.prg $CC_SRC/cctools_web.prg \
-  $CC_SRC/cctools_memory.prg $CC_SRC/ccdiff.prg"
+  $AGENTS_SRC/agents_config.prg $AGENTS_SRC/agents_sse.prg $AGENTS_SRC/agents_curl.prg \
+  $AGENTS_SRC/agents_http.prg $AGENTS_SRC/agents_loop.prg $AGENTS_SRC/agents_toolreg.prg \
+  $AGENTS_SRC/agents_tool_file.prg $AGENTS_SRC/agents_tool_search.prg \
+  $AGENTS_SRC/agents_tool_shell.prg $AGENTS_SRC/agents_tool_web.prg \
+  $AGENTS_SRC/agents_tool_memory.prg $AGENTS_SRC/agents_diff.prg"
 OBJS=""
 for p in $PRGS; do
   b=$(basename "$p" .prg)
-  "$HOST_HB" "$p" -n -q -I"$(cygpath -w $HB_INC)" -I"$(cygpath -w $CC_SRC)" -o"$(cygpath -w $OUT/obj/)"
+  "$HOST_HB" "$p" -n -q -I"$(cygpath -w $HB_INC)" -I"$(cygpath -w $AGENTS_SRC)" -o"$(cygpath -w $OUT/obj/)"
   OBJS="$OBJS $OUT/obj/$b.o"
 done
 
@@ -53,11 +54,11 @@ for p in $PRGS; do
 done
 "$CLANG" $CFLAGS -c "$APP/src/cpp/android_webview.c" -o "$OUT/obj/android_webview.o"
 
-# ---- 3. link libagenticai.so ----
-echo ">>> [3/8] link libagenticai.so"
+# ---- 3. link libagents.so ----
+echo ">>> [3/8] link libagents.so"
 "$CLANG" --target=$TARGET -shared -fPIC \
-  -Wl,-soname,libagenticai.so \
-  -o "$OUT/jni-libs/arm64-v8a/libagenticai.so" \
+  -Wl,-soname,libagents.so \
+  -o "$OUT/jni-libs/arm64-v8a/libagents.so" \
   "$OUT/obj/android_webview.o" \
   -Wl,--whole-archive $OBJS -Wl,--no-whole-archive \
   -L"$HB_LIB" -Wl,--start-group \
@@ -66,7 +67,7 @@ echo ">>> [3/8] link libagenticai.so"
   -lrddntx -lrddcdx -lrddfpt -lrddnsx \
   -lgtstd -lgttrm -lgtcgi -lgtpca -lhbsix -lhbhsx \
   -Wl,--end-group -ldl -lm -llog
-ls -lh "$OUT/jni-libs/arm64-v8a/libagenticai.so"
+ls -lh "$OUT/jni-libs/arm64-v8a/libagents.so"
 
 # ---- 4-5. resources ----
 echo ">>> [4/8] aapt2 compile"; aapt2 compile --dir "$APP/src/res" -o "$OUT/res-compiled"
@@ -78,8 +79,8 @@ aapt2 link -I "$ANDROID_JAR" --manifest "$APP/AndroidManifest.xml" \
 echo ">>> [6/8] javac"
 javac -d "$OUT/classes" -source 1.8 -target 1.8 \
   -bootclasspath "$ANDROID_JAR" -classpath "$ANDROID_JAR" \
-  "$APP/src/java/com/harbour/agenticai/MainActivity.java" \
-  "$OUT/gen/com/harbour/agenticai/R.java"
+  "$APP/src/java/com/harbour/agents/MainActivity.java" \
+  "$OUT/gen/com/harbour/agents/R.java"
 echo ">>> [7/8] d8"
 cd "$OUT/classes"; d8.bat --lib "$ANDROID_JAR" --min-api 24 --output "$OUT/apk/" $(find . -name "*.class")
 
@@ -87,18 +88,18 @@ cd "$OUT/classes"; d8.bat --lib "$ANDROID_JAR" --min-api 24 --output "$OUT/apk/"
 echo ">>> [8/8] package & sign"
 cp "$OUT/apk/base.apk" "$OUT/apk/unsigned.apk"
 cp "$OUT/apk/classes.dex" "$OUT/payload/classes.dex"
-cp "$OUT/jni-libs/arm64-v8a/libagenticai.so" "$OUT/payload/lib/arm64-v8a/libagenticai.so"
-cd "$OUT/payload"; "$JDK/bin/jar.exe" uf "$OUT/apk/unsigned.apk" classes.dex lib/arm64-v8a/libagenticai.so
+cp "$OUT/jni-libs/arm64-v8a/libagents.so" "$OUT/payload/lib/arm64-v8a/libagents.so"
+cd "$OUT/payload"; "$JDK/bin/jar.exe" uf "$OUT/apk/unsigned.apk" classes.dex lib/arm64-v8a/libagents.so
 cd "$OUT"; zipalign.exe -f -p 4 "$OUT/apk/unsigned.apk" "$OUT/apk/aligned.apk"
 
 KS="$APP/debug.keystore"
-[ -f "$KS" ] || keytool -genkeypair -v -keystore "$KS" -alias agentic -keyalg RSA \
+[ -f "$KS" ] || keytool -genkeypair -v -keystore "$KS" -alias agents -keyalg RSA \
   -keysize 2048 -validity 10000 -storepass android -keypass android \
-  -dname "CN=AgenticAI,O=FiveTech,C=ES"
+  -dname "CN=Agents,O=FiveTech,C=ES"
 apksigner.bat sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
   --out "$OUT/agents.apk" "$OUT/apk/aligned.apk"
 
 echo "=============================================="
 echo " APK ready: $OUT/agents.apk"
-echo " Install:  adb install -r $OUT/agents.apk"
+echo " Install:   adb install -r $OUT/agents.apk"
 echo "=============================================="
