@@ -37,7 +37,13 @@ PRGS="$APP/src/prg/agents.prg /c/fwteam/samples/AgenticAI/ccguistub.prg \
   $AGENTS_SRC/agents_http.prg $AGENTS_SRC/agents_loop.prg $AGENTS_SRC/agents_toolreg.prg \
   $AGENTS_SRC/agents_tool_file.prg $AGENTS_SRC/agents_tool_search.prg \
   $AGENTS_SRC/agents_tool_shell.prg $AGENTS_SRC/agents_tool_web.prg \
-  $AGENTS_SRC/agents_tool_memory.prg $AGENTS_SRC/agents_diff.prg"
+  $AGENTS_SRC/agents_tool_github.prg $AGENTS_SRC/agents_tool_memory.prg \
+  $AGENTS_SRC/agents_tool_ask.prg $AGENTS_SRC/agents_tool_todo.prg \
+  $AGENTS_SRC/agents_tool_skill.prg $AGENTS_SRC/agents_tool_dispatch.prg \
+  $AGENTS_SRC/agents_tool_propose.prg \
+  $AGENTS_SRC/agents_diff.prg $AGENTS_SRC/agents_perm.prg \
+  $AGENTS_SRC/agents_skill.prg $AGENTS_SRC/agents_bg.prg \
+  $AGENTS_SRC/agents_settings.prg"
 OBJS=""
 for p in $PRGS; do
   b=$(basename "$p" .prg)
@@ -79,8 +85,8 @@ aapt2 link -I "$ANDROID_JAR" --manifest "$APP/AndroidManifest.xml" \
 echo ">>> [6/8] javac"
 javac -d "$OUT/classes" -source 1.8 -target 1.8 \
   -bootclasspath "$ANDROID_JAR" -classpath "$ANDROID_JAR" \
-  "$APP/src/java/com/harbour/agents/MainActivity.java" \
-  "$OUT/gen/com/harbour/agents/R.java"
+  "$APP/src/java/com/harbour/agenticai/MainActivity.java" \
+  "$OUT/gen/com/harbour/agenticai/R.java"
 echo ">>> [7/8] d8"
 cd "$OUT/classes"; d8.bat --lib "$ANDROID_JAR" --min-api 24 --output "$OUT/apk/" $(find . -name "*.class")
 
