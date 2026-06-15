@@ -1,0 +1,79 @@
+Application
+===========
+   Path and name: C:\fwteam\samples\AgenticAI\agents.exe (32 bits)
+   Size: 6,328,320 bytes
+   Compiler version: Harbour 3.2.0dev (r2502031126)
+   FiveWin version: FWH 26.03
+   C compiler version: Borland/Embarcadero C++ 7.7 (32-bit)
+   Windows 11 64 Bits, version: 6.2, Build 9200 
+
+   Time from start: 0 sec
+   Error occurred at: 06/15/26, 07:51:22
+   Error description: Error BASE/1123  Argument error: HB_HKEYS
+   Args:
+     [   1] = A   {} length: 0
+
+Stack Calls
+===========
+   Called from:  => HB_HKEYS( 0 )
+   Called from: ..\..\source\classes\agent.prg => AGENT:INITTOOLS( 181 )
+   Called from: ..\..\source\classes\agent.prg => AGENT:NEW( 140 )
+   Called from: agents.prg => MAIN( 48 )
+
+System
+======
+   CPU type: Intel(R) Xeon(R) W-2140B CPU @ 3.20GHz 3192 Mhz
+   Hardware memory: 32480 megs
+
+   Free System resources: 90 %
+        GDI resources: 90 %
+        User resources: 90 %
+
+   Windows total applications running: 1
+      1 amd dvr overlay,                                                                                                     
+
+Variables in use
+================
+   Procedure     Type   Value
+   ==========================
+   HB_HKEYS
+     Param   1:    O    Class: ERROR
+   AGENT:INITTOOLS
+     Param   1:    A    Len:    0
+     Local   1:    U    
+     Local   2:    U    
+   AGENT:NEW
+     Local   1:    O    Class: AGENT
+   MAIN
+     Param   1:    C    ""
+     Local   1:    C    "deepseek-v4-pro"
+     Local   2:    U    
+
+Linked RDDs
+===========
+   DBF
+   DBFFPT
+   DBFBLOB
+   DBFCDX
+   DBFNTX
+
+Databases in use
+================
+
+Classes in use:
+===============
+     1 ERROR
+     2 HBCLASS
+     3 HBOBJECT
+     4 AGENT
+     5 TREG32
+     6 TSTRUCT
+
+Memory Analysis
+===============
+      767 Static variables
+
+   Dynamic memory consume:
+      Actual Value:     589824 bytes
+      Highest Value:     589824 bytes
+
