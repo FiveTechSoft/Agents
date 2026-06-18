@@ -62,6 +62,18 @@ CLASS Agent
    DATA lIsSubAgent     INIT .F.
    DATA cSubAgentType   INIT ""
 
+   // ---- checkpoints ----
+   DATA aCheckpoints    INIT {}
+   DATA cCheckpointDir  INIT ""
+   DATA nCheckpointInterval INIT 3
+   DATA nCheckpointId   INIT 0
+
+   // ---- tasks ----
+   DATA aTasks          INIT {}
+
+   // ---- actors ----
+   DATA aActors         INIT {}
+
    // Initialization
    METHOD New( cKey, cModel, hOpts )
    METHOD InitTools()
@@ -94,6 +106,13 @@ CLASS Agent
    METHOD Tool_WebSearch( hArgs )
    METHOD Tool_WebFetch( hArgs )
 
+   // Git tools
+   METHOD Tool_GitStatus( hArgs )
+   METHOD Tool_GitDiff( hArgs )
+   METHOD Tool_GitLog( hArgs )
+   METHOD Tool_GitCommit( hArgs )
+   METHOD Tool_GitPush( hArgs )
+
    // Skills
    METHOD ActivateSkill( cName )
    METHOD DeactivateSkill( cName )
@@ -106,6 +125,28 @@ CLASS Agent
    // Planning
    METHOD GeneratePlan( cGoal )
    METHOD ExecutePlan()
+
+   // Checkpoints
+   METHOD SaveCheckpoint( cLabel )
+   METHOD LoadCheckpoint( nId )
+   METHOD ListCheckpoints()
+   METHOD DeleteCheckpoint( nId )
+   METHOD AutoCheckpoint()
+   METHOD LoadCheckpoints()
+
+   // Tasks
+   METHOD TaskCreate( cSummary )
+   METHOD TaskList()
+   METHOD TaskDone( nId )
+   METHOD TaskBlock( nId, cReason )
+   METHOD TaskStart( nId )
+
+   // Actors
+   METHOD ActorSpawn( cPrompt )
+   METHOD ActorWait( nId )
+   METHOD ActorSend( nId, cMsg )
+   METHOD ActorList()
+   METHOD ActorCancel( nId )
 
    // Utilities
    METHOD UsageReport()
@@ -159,11 +200,15 @@ METHOD New( cKey, cModel, hOpts ) CLASS Agent
       ::bOnEvent := hOpts[ "on_event" ]
    ENDIF
 
-   ::InitTools()
-   ::InitSkills()
+    ::InitTools()
+    ::InitSkills()
 
-   // load persisted state
-   ::LoadState( hb_DirBase() + "agent_state" + hb_ps() )
+    // load persisted state
+    ::LoadState( hb_DirBase() + "agent_state" + hb_ps() )
+
+    // load checkpoints
+    ::cCheckpointDir := hb_DirBase() + ".agents" + hb_ps()
+    ::LoadCheckpoints()
 
 RETURN Self
 
@@ -356,19 +401,176 @@ METHOD InitTools() CLASS Agent
          "properties" => {} }, ;
       "handler" => {| hArgs | ::ListUserTools() } } )
 
-   // Subagent dispatch
-   AGENT_RegTool( ::hBuiltinTools, { ;
-      "name" => "dispatch_agent", ;
-      "description" => "Launch an isolated subagent on a specific task.", ;
-      "parameters" => { "type" => "object", ;
-         "properties" => { ;
-            "prompt" => { "type" => "string" }, ;
-            "agent_type" => { "type" => "string" }, ;
-            "timeout_s" => { "type" => "number" } }, ;
-         "required" => { "prompt" } }, ;
-      "handler" => {| hArgs | ::DispatchAgent( hArgs[ "prompt" ], ;
-         hb_HGetDef( hArgs, "agent_type", "explore" ), ;
-         hb_HGetDef( hArgs, "timeout_s", 120 ) ) } } )
+    // Subagent dispatch
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "dispatch_agent", ;
+       "description" => "Launch an isolated subagent on a specific task.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "prompt" => { "type" => "string" }, ;
+             "agent_type" => { "type" => "string" }, ;
+             "timeout_s" => { "type" => "number" } }, ;
+          "required" => { "prompt" } }, ;
+       "handler" => {| hArgs | ::DispatchAgent( hArgs[ "prompt" ], ;
+          hb_HGetDef( hArgs, "agent_type", "explore" ), ;
+          hb_HGetDef( hArgs, "timeout_s", 120 ) ) } } )
+
+    // Git tools
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "git_status", ;
+       "description" => "Show git working tree status.", ;
+       "parameters" => { "type" => "object", "properties" => {=>} }, ;
+       "handler" => {| hArgs | ::Tool_GitStatus( hArgs ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "git_diff", ;
+       "description" => "Show unstaged changes.", ;
+       "parameters" => { "type" => "object", "properties" => {=>} }, ;
+       "handler" => {| hArgs | ::Tool_GitDiff( hArgs ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "git_log", ;
+       "description" => "Show recent commit history.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "count" => { "type" => "number" } } }, ;
+       "handler" => {| hArgs | ::Tool_GitLog( hArgs ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "git_commit", ;
+       "description" => "Stage all changes and commit with a message.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "message" => { "type" => "string" } }, ;
+          "required" => { "message" } }, ;
+       "handler" => {| hArgs | ::Tool_GitCommit( hArgs ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "git_push", ;
+       "description" => "Push commits to remote.", ;
+       "parameters" => { "type" => "object", "properties" => {=>} }, ;
+       "handler" => {| hArgs | ::Tool_GitPush( hArgs ) } } )
+
+    // Checkpoints
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "save_checkpoint", ;
+       "description" => "Save a checkpoint of current agent state.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "label" => { "type" => "string" } } }, ;
+       "handler" => {| hArgs | ::SaveCheckpoint( hb_HGetDef( hArgs, "label", "" ) ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "list_checkpoints", ;
+       "description" => "List all available checkpoints.", ;
+       "parameters" => { "type" => "object", "properties" => {=>} }, ;
+       "handler" => {| hArgs | ::ListCheckpoints() } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "load_checkpoint", ;
+       "description" => "Restore agent state from a checkpoint by ID.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "id" => { "type" => "number" } }, ;
+          "required" => { "id" } }, ;
+       "handler" => {| hArgs | ::LoadCheckpoint( hb_HGetDef( hArgs, "id", 0 ) ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "delete_checkpoint", ;
+       "description" => "Delete a checkpoint by ID.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "id" => { "type" => "number" } }, ;
+          "required" => { "id" } }, ;
+       "handler" => {| hArgs | ::DeleteCheckpoint( hb_HGetDef( hArgs, "id", 0 ) ) } } )
+
+    // Tasks
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "task_create", ;
+       "description" => "Create a new persistent task.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "summary" => { "type" => "string" } }, ;
+          "required" => { "summary" } }, ;
+       "handler" => {| hArgs | ::TaskCreate( hArgs[ "summary" ] ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "task_list", ;
+       "description" => "List all tasks with status.", ;
+       "parameters" => { "type" => "object", "properties" => {=>} }, ;
+       "handler" => {| hArgs | ::TaskList() } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "task_done", ;
+       "description" => "Mark a task as completed.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "id" => { "type" => "number" } }, ;
+          "required" => { "id" } }, ;
+       "handler" => {| hArgs | ::TaskDone( hArgs[ "id" ] ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "task_block", ;
+       "description" => "Block a task with a reason.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "id" => { "type" => "number" }, ;
+             "reason" => { "type" => "string" } }, ;
+          "required" => { "id" } }, ;
+       "handler" => {| hArgs | ::TaskBlock( hArgs[ "id" ], ;
+          hb_HGetDef( hArgs, "reason", "" ) ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "task_start", ;
+       "description" => "Mark a task as in-progress.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "id" => { "type" => "number" } }, ;
+          "required" => { "id" } }, ;
+       "handler" => {| hArgs | ::TaskStart( hArgs[ "id" ] ) } } )
+
+    // Actors
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "spawn_actor", ;
+       "description" => "Spawn a persistent background sub-agent.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "prompt" => { "type" => "string" } }, ;
+          "required" => { "prompt" } }, ;
+       "handler" => {| hArgs | ::ActorSpawn( hArgs[ "prompt" ] ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "wait_actor", ;
+       "description" => "Wait for an actor to finish (or all if no id).", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "id" => { "type" => "number" } } }, ;
+       "handler" => {| hArgs | ::ActorWait( hb_HGetDef( hArgs, "id", 0 ) ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "send_actor", ;
+       "description" => "Send a message to a running actor.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "id" => { "type" => "number" }, ;
+             "message" => { "type" => "string" } }, ;
+          "required" => { "id", "message" } }, ;
+       "handler" => {| hArgs | ::ActorSend( hArgs[ "id" ], hArgs[ "message" ] ) } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "list_actors", ;
+       "description" => "List all actors and their status.", ;
+       "parameters" => { "type" => "object", "properties" => {=>} }, ;
+       "handler" => {| hArgs | ::ActorList() } } )
+
+    AGENT_RegTool( ::hBuiltinTools, { ;
+       "name" => "cancel_actor", ;
+       "description" => "Cancel a running actor.", ;
+       "parameters" => { "type" => "object", ;
+          "properties" => { ;
+             "id" => { "type" => "number" } }, ;
+          "required" => { "id" } }, ;
+       "handler" => {| hArgs | ::ActorCancel( hArgs[ "id" ] ) } } )
 
 RETURN .T.
 
@@ -413,9 +615,12 @@ METHOD Run( cPrompt ) CLASS Agent
          EXIT
       ENDIF
 
-      nStep++
+       nStep++
 
-      // mid-run injection
+       // auto-checkpoint
+       ::AutoCheckpoint()
+
+       // mid-run injection
       IF ::bInject != NIL
          cInject := Eval( ::bInject )
          IF ValType( cInject ) == "C" .AND. !Empty( cInject )
@@ -902,31 +1107,42 @@ RETURN hResult
 
 METHOD GeneratePlan( cGoal ) CLASS Agent
 
-   LOCAL aOldMsgs, hResult, cContent, hPlan
+   LOCAL aOldMsgs, cOldPrompt, hResult, cContent, hPlan
 
    ::cGoal := cGoal
 
-   // save current messages, run a planning prompt
-   aOldMsgs := AClone( ::aMessages )
-   ::aMessages := {}
+   // save current state
+   aOldMsgs   := AClone( ::aMessages )
+   cOldPrompt := ::cSystemPrompt
 
-   ::AddMessage( "user", "You are a planner. Decompose this task into 3-6 concrete steps. " + ;
-      "Respond ONLY with JSON: " + Chr(123) + '"steps":[' + Chr(123) + '"title":"...","state":"pending"' + Chr(125) + ']' + Chr(125) + ". " + ;
-      "The first step should be " + Chr(34) + "active" + Chr(34) + ". No prose." + hb_eol() + hb_eol() + ;
-      "Task: " + cGoal )
+   // set up a clean planning context: dedicated system prompt + one user message
+   ::cSystemPrompt := "You are a planner. Decompose the given task into 3-6 " + ;
+      "concrete, actionable steps. Respond ONLY with compact JSON: " + ;
+      '{"steps":[{"title":"...","state":"pending"}]}. ' + ;
+      "The first step should have state " + Chr(34) + "active" + Chr(34) + ". " + ;
+      "No prose, no markdown fences, just the JSON object."
 
-   hResult  := ::Run( "" )  // Run will add the plan-prompt user message internally... actually no.
-   // We already added the message, so we can't use Run() directly. Let's use Step() instead.
+   ::aMessages := { { "role" => "user", "content" => cGoal } }
 
-   // Restore messages
-   ::aMessages := aOldMsgs
+   // call Step() directly (single LLM call, no loop, no extra AddMessage)
+   hResult := ::Step()
 
-   // Try to parse plan from hResult content
-   cContent := hResult[ "content" ]
-   IF !Empty( cContent )
-      hPlan := hb_jsonDecode( cContent )
-      IF ValType( hPlan ) == "H" .AND. hb_HHasKey( hPlan, "steps" )
-         ::aPlan := hPlan[ "steps" ]
+   // restore original state
+   ::aMessages     := aOldMsgs
+   ::cSystemPrompt := cOldPrompt
+
+   // parse plan from response
+   IF hResult[ "success" ]
+      cContent := hResult[ "content" ]
+      IF !Empty( cContent )
+         // strip markdown fences if present
+         cContent := StrTran( cContent, "```json", "" )
+         cContent := StrTran( cContent, "```", "" )
+         cContent := AllTrim( cContent )
+         hPlan := hb_jsonDecode( cContent )
+         IF ValType( hPlan ) == "H" .AND. hb_HHasKey( hPlan, "steps" )
+            ::aPlan := hPlan[ "steps" ]
+         ENDIF
       ENDIF
    ENDIF
 
@@ -976,6 +1192,458 @@ METHOD Abort() CLASS Agent
    ::lRunning := .F.
 
 RETURN .T.
+
+// ---------------------------------------------------------------------------
+// Git tools
+// ---------------------------------------------------------------------------
+
+METHOD Tool_GitStatus( hArgs ) CLASS Agent
+
+   LOCAL cOut := "", cErr := "", nExit
+
+   nExit := hb_processRun( "git status --short", , @cOut, @cErr )
+   IF !Empty( cErr ) .AND. nExit != 0
+      RETURN "git error: " + AllTrim( cErr )
+   ENDIF
+
+RETURN iif( Empty( cOut ), "(clean working tree)", AllTrim( cOut ) )
+
+// ---------------------------------------------------------------------------
+
+METHOD Tool_GitDiff( hArgs ) CLASS Agent
+
+   LOCAL cOut := "", cErr := "", nExit
+
+   nExit := hb_processRun( "git diff", , @cOut, @cErr )
+   IF !Empty( cErr ) .AND. nExit != 0
+      RETURN "git error: " + AllTrim( cErr )
+   ENDIF
+
+   IF hb_BLen( cOut ) > 30000
+      cOut := hb_BLeft( cOut, 30000 ) + Chr( 10 ) + "[truncated]"
+   ENDIF
+
+RETURN iif( Empty( cOut ), "(no changes)", AllTrim( cOut ) )
+
+// ---------------------------------------------------------------------------
+
+METHOD Tool_GitLog( hArgs ) CLASS Agent
+
+   LOCAL cOut := "", cErr := "", nExit, nCount
+
+   nCount := iif( hb_HHasKey( hArgs, "count" ), Int( hArgs[ "count" ] ), 10 )
+   nExit := hb_processRun( "git log --oneline -" + LTrim( Str( nCount ) ), , @cOut, @cErr )
+   IF !Empty( cErr ) .AND. nExit != 0
+      RETURN "git error: " + AllTrim( cErr )
+   ENDIF
+
+RETURN iif( Empty( cOut ), "(no commits)", AllTrim( cOut ) )
+
+// ---------------------------------------------------------------------------
+
+METHOD Tool_GitCommit( hArgs ) CLASS Agent
+
+   LOCAL cMessage, cOut := "", cErr := "", nExit
+
+   cMessage := hb_CStr( hArgs[ "message" ] )
+   IF Empty( cMessage )
+      RETURN "Error: message required"
+   ENDIF
+
+   hb_processRun( "git add -A", , @cOut, @cErr )
+
+   // auto-inject co-author if set
+   IF !Empty( ::cCoAuthor )
+      cMessage += ' --trailer "Co-authored-by: ' + ::cCoAuthor + '"'
+   ENDIF
+
+   nExit := hb_processRun( 'git commit -m "' + cMessage + '"', , @cOut, @cErr )
+   IF !Empty( cErr ) .AND. nExit != 0
+      RETURN "git commit error: " + AllTrim( cErr )
+   ENDIF
+
+RETURN AllTrim( cOut )
+
+// ---------------------------------------------------------------------------
+
+METHOD Tool_GitPush( hArgs ) CLASS Agent
+
+   LOCAL cOut := "", cErr := "", nExit
+
+   nExit := hb_processRun( "git push", , @cOut, @cErr )
+   IF !Empty( cErr ) .AND. nExit != 0
+      RETURN "git push error: " + AllTrim( cErr )
+   ENDIF
+
+RETURN AllTrim( cOut + cErr )
+
+// ============================================================================
+// Checkpoints
+// ============================================================================
+
+METHOD SaveCheckpoint( cLabel ) CLASS Agent
+
+   LOCAL hCheckpoint, cJson, cFile, nId
+
+   IF cLabel == NIL ; cLabel := "" ; ENDIF
+
+   nId := ::nCheckpointId + 1
+   ::nCheckpointId := nId
+
+   hCheckpoint := { ;
+      "id"        => nId, ;
+      "step"      => Len( ::aMessages ), ;
+      "label"     => cLabel, ;
+      "ts"        => hb_DateTime(), ;
+      "messages"  => hb_jsonDecode( hb_jsonEncode( ::aMessages ) ), ;
+      "plan"      => AClone( ::aPlan ), ;
+      "goal"      => ::cGoal, ;
+      "model"     => ::cModel, ;
+      "maxSteps"  => ::nMaxSteps }
+
+   AAdd( ::aCheckpoints, hCheckpoint )
+
+   IF !hb_vfDirExists( ::cCheckpointDir )
+      hb_vfDirMake( ::cCheckpointDir )
+   ENDIF
+
+   hb_jsonEncode( hCheckpoint, @cJson )
+   cFile := ::cCheckpointDir + "cp_" + LTrim( Str( nId ) ) + ".json"
+   MemoWrit( cFile, cJson )
+
+RETURN "Checkpoint #" + LTrim( Str( nId ) ) + ;
+       iif( !Empty( cLabel ), " (" + cLabel + ")", "" ) + ;
+       " saved at step " + LTrim( Str( Len( ::aMessages ) ) )
+
+// ---------------------------------------------------------------------------
+
+METHOD LoadCheckpoint( nId ) CLASS Agent
+
+   LOCAL hCheckpoint, cFile, cJson
+
+   IF nId == NIL .OR. nId == 0
+      IF Empty( ::aCheckpoints )
+         RETURN "No checkpoints available"
+      ENDIF
+      hCheckpoint := ::aCheckpoints[ Len( ::aCheckpoints ) ]
+      nId := hCheckpoint[ "id" ]
+   ELSE
+      AEval( ::aCheckpoints, {| h | iif( h[ "id" ] == nId, hCheckpoint := h, NIL ) } )
+      IF hCheckpoint == NIL
+         cFile := ::cCheckpointDir + "cp_" + LTrim( Str( nId ) ) + ".json"
+         IF hb_FileExists( cFile )
+            cJson := hb_MemoRead( cFile )
+            hCheckpoint := hb_jsonDecode( cJson )
+         ENDIF
+      ENDIF
+   ENDIF
+
+   IF hCheckpoint == NIL .OR. ValType( hCheckpoint ) != "H"
+      RETURN "Checkpoint #" + LTrim( Str( nId ) ) + " not found"
+   ENDIF
+
+   ::aMessages := hb_jsonDecode( hb_jsonEncode( hCheckpoint[ "messages" ] ) )
+   ::aPlan     := AClone( hCheckpoint[ "plan" ] )
+   ::cGoal     := hCheckpoint[ "goal" ]
+
+RETURN "Checkpoint #" + LTrim( Str( nId ) ) + " restored (" + ;
+       LTrim( Str( Len( ::aMessages ) ) ) + " messages)"
+
+// ---------------------------------------------------------------------------
+
+METHOD ListCheckpoints() CLASS Agent
+
+   LOCAL cList := "", h
+
+   IF Empty( ::aCheckpoints )
+      RETURN "(no checkpoints)"
+   ENDIF
+
+   FOR EACH h IN ::aCheckpoints
+      cList += "#" + LTrim( Str( h[ "id" ] ) ) + ;
+               iif( !Empty( h[ "label" ] ), " [" + h[ "label" ] + "]", "" ) + ;
+               " step=" + LTrim( Str( h[ "step" ] ) ) + ;
+               " msgs=" + LTrim( Str( Len( h[ "messages" ] ) ) ) + Chr( 10 )
+   NEXT
+
+RETURN cList
+
+// ---------------------------------------------------------------------------
+
+METHOD DeleteCheckpoint( nId ) CLASS Agent
+
+   LOCAL nPos, cFile
+
+   IF nId == NIL .OR. nId == 0
+      RETURN "ID required"
+   ENDIF
+
+   nPos := 0
+   AEval( ::aCheckpoints, {| h, i | iif( h[ "id" ] == nId, nPos := i, NIL ) } )
+   IF nPos > 0
+      hb_ADel( ::aCheckpoints, nPos, .T. )
+   ENDIF
+
+   cFile := ::cCheckpointDir + "cp_" + LTrim( Str( nId ) ) + ".json"
+   IF hb_FileExists( cFile )
+      FErase( cFile )
+   ENDIF
+
+RETURN "Checkpoint #" + LTrim( Str( nId ) ) + " deleted"
+
+// ---------------------------------------------------------------------------
+
+METHOD AutoCheckpoint() CLASS Agent
+
+   IF ::nCheckpointInterval <= 0
+      RETURN .F.
+   ENDIF
+
+   IF Len( ::aMessages ) > 0 .AND. Mod( Len( ::aMessages ), ::nCheckpointInterval ) == 0
+      ::SaveCheckpoint( "auto_step_" + LTrim( Str( Len( ::aMessages ) ) ) )
+   ENDIF
+
+RETURN .T.
+
+// ---------------------------------------------------------------------------
+
+METHOD LoadCheckpoints() CLASS Agent
+
+   LOCAL aFiles, cFile, cJson, hData, aFile
+
+   IF !hb_vfDirExists( ::cCheckpointDir )
+      RETURN .T.
+   ENDIF
+
+   ::aCheckpoints := {}
+   ::nCheckpointId := 0
+
+   aFiles := Directory( ::cCheckpointDir + "cp_*.json" )
+   FOR EACH aFile IN aFiles
+      cFile := ::cCheckpointDir + aFile[ 1 ]
+      cJson := hb_MemoRead( cFile )
+      IF !Empty( cJson )
+         hData := hb_jsonDecode( cJson )
+         IF ValType( hData ) == "H" .AND. hb_HHasKey( hData, "id" )
+            AAdd( ::aCheckpoints, hData )
+            IF hData[ "id" ] > ::nCheckpointId
+               ::nCheckpointId := hData[ "id" ]
+            ENDIF
+         ENDIF
+      ENDIF
+   NEXT
+
+   ::aCheckpoints := ASort( ::aCheckpoints, , , {| x, y | x[ "id" ] < y[ "id" ] } )
+
+RETURN .T.
+
+// ============================================================================
+// Tasks
+// ============================================================================
+
+METHOD TaskCreate( cSummary ) CLASS Agent
+
+   LOCAL nId, hTask
+
+   IF Empty( cSummary )
+      RETURN "Error: summary required"
+   ENDIF
+
+   nId := 1
+   AEval( ::aTasks, {| h | iif( h[ "id" ] >= nId, nId := h[ "id" ] + 1, NIL ) } )
+
+   hTask := { "id" => nId, "summary" => cSummary, "status" => "open", ;
+              "created" => hb_DateTime(), "updated" => hb_DateTime(), "notes" => "" }
+   AAdd( ::aTasks, hTask )
+
+RETURN "Task #" + LTrim( Str( nId ) ) + " created: " + cSummary
+
+// ---------------------------------------------------------------------------
+
+METHOD TaskList() CLASS Agent
+
+   LOCAL cList := "", h, cIcon
+
+   IF Empty( ::aTasks )
+      RETURN "(no tasks)"
+   ENDIF
+
+   FOR EACH h IN ::aTasks
+      DO CASE
+      CASE h[ "status" ] == "open"        ; cIcon := "[ ]"
+      CASE h[ "status" ] == "in_progress" ; cIcon := "[>]"
+      CASE h[ "status" ] == "blocked"     ; cIcon := "[!]"
+      CASE h[ "status" ] == "done"        ; cIcon := "[x]"
+      OTHERWISE                           ; cIcon := "[?]"
+      ENDCASE
+      cList += cIcon + " #" + LTrim( Str( h[ "id" ] ) ) + " " + h[ "summary" ] + Chr( 10 )
+   NEXT
+
+RETURN cList
+
+// ---------------------------------------------------------------------------
+
+METHOD TaskDone( nId ) CLASS Agent
+
+   LOCAL hTask
+
+   IF nId == NIL .OR. nId == 0 ; RETURN "ID required" ; ENDIF
+   AEval( ::aTasks, {| h | iif( h[ "id" ] == nId, hTask := h, NIL ) } )
+   IF hTask == NIL ; RETURN "Task not found" ; ENDIF
+
+   hTask[ "status" ]  := "done"
+   hTask[ "updated" ] := hb_DateTime()
+
+RETURN "Task #" + LTrim( Str( nId ) ) + " completed"
+
+// ---------------------------------------------------------------------------
+
+METHOD TaskBlock( nId, cReason ) CLASS Agent
+
+   LOCAL hTask
+
+   IF nId == NIL .OR. nId == 0 ; RETURN "ID required" ; ENDIF
+   AEval( ::aTasks, {| h | iif( h[ "id" ] == nId, hTask := h, NIL ) } )
+   IF hTask == NIL ; RETURN "Task not found" ; ENDIF
+
+   hTask[ "status" ]  := "blocked"
+   hTask[ "notes" ]   := iif( cReason == NIL, "", cReason )
+   hTask[ "updated" ] := hb_DateTime()
+
+RETURN "Task #" + LTrim( Str( nId ) ) + " blocked"
+
+// ---------------------------------------------------------------------------
+
+METHOD TaskStart( nId ) CLASS Agent
+
+   LOCAL hTask
+
+   IF nId == NIL .OR. nId == 0 ; RETURN "ID required" ; ENDIF
+   AEval( ::aTasks, {| h | iif( h[ "id" ] == nId, hTask := h, NIL ) } )
+   IF hTask == NIL ; RETURN "Task not found" ; ENDIF
+
+   hTask[ "status" ]  := "in_progress"
+   hTask[ "updated" ] := hb_DateTime()
+
+RETURN "Task #" + LTrim( Str( nId ) ) + " in progress"
+
+// ============================================================================
+// Actors
+// ============================================================================
+
+METHOD ActorSpawn( cPrompt ) CLASS Agent
+
+   LOCAL nId, hActor, oAgent
+
+   IF Empty( cPrompt ) ; RETURN "Error: prompt required" ; ENDIF
+
+   nId := 1
+   AEval( ::aActors, {| h | iif( h[ "id" ] >= nId, nId := h[ "id" ] + 1, NIL ) } )
+
+   oAgent := Agent():New( ::cApiKey, ::cModel )
+   oAgent:hBuiltinTools := hb_HClone( ::hBuiltinTools )
+   hb_HDel( oAgent:hBuiltinTools, "spawn_actor" )
+   hb_HDel( oAgent:hBuiltinTools, "dispatch_agent" )
+   oAgent:nMaxSteps := 8
+   oAgent:lIsSubAgent := .T.
+
+   hActor := { "id" => nId, "prompt" => cPrompt, "status" => "running", ;
+               "result" => "", "agent" => oAgent, "thread" => 0, ;
+               "created" => hb_DateTime() }
+   AAdd( ::aActors, hActor )
+
+   hActor[ "thread" ] := hb_threadStart( hb_threadSelf():ClassH, ;
+      "AGENT_ActorRun", Self, nId, oAgent, cPrompt )
+
+RETURN "Actor #" + LTrim( Str( nId ) ) + " spawned"
+
+// ---------------------------------------------------------------------------
+
+METHOD ActorWait( nId ) CLASS Agent
+
+   LOCAL hActor, cResult
+
+   IF nId == NIL .OR. nId == 0
+      AEval( ::aActors, {| h |
+         IF h[ "status" ] == "running" .AND. h[ "thread" ] > 0
+            cResult := hb_threadJoin( h[ "thread" ] )
+            h[ "status" ] := "done"
+            h[ "result" ] := cResult
+         ENDIF
+      } )
+      RETURN "All actors completed"
+   ENDIF
+
+   AEval( ::aActors, {| h | iif( h[ "id" ] == nId, hActor := h, NIL ) } )
+   IF hActor == NIL ; RETURN "Actor not found" ; ENDIF
+   IF hActor[ "status" ] != "running" ; RETURN "Actor already " + hActor[ "status" ] ; ENDIF
+
+   cResult := hb_threadJoin( hActor[ "thread" ] )
+   hActor[ "status" ] := "done"
+   hActor[ "result" ] := cResult
+
+RETURN "Actor #" + LTrim( Str( nId ) ) + " done: " + Left( cResult, 200 )
+
+// ---------------------------------------------------------------------------
+
+METHOD ActorSend( nId, cMsg ) CLASS Agent
+
+   LOCAL hActor
+
+   IF nId == NIL .OR. nId == 0 .OR. Empty( cMsg )
+      RETURN "Error: id and message required"
+   ENDIF
+
+   AEval( ::aActors, {| h | iif( h[ "id" ] == nId, hActor := h, NIL ) } )
+   IF hActor == NIL ; RETURN "Actor not found" ; ENDIF
+   IF hActor[ "status" ] != "running" ; RETURN "Actor not running" ; ENDIF
+
+   hActor[ "agent" ]:bInject := {|| cMsg }
+
+RETURN "Message sent to actor #" + LTrim( Str( nId ) )
+
+// ---------------------------------------------------------------------------
+
+METHOD ActorList() CLASS Agent
+
+   LOCAL cList := "", h
+
+   IF Empty( ::aActors )
+      RETURN "(no actors)"
+   ENDIF
+
+   FOR EACH h IN ::aActors
+      cList += "#" + LTrim( Str( h[ "id" ] ) ) + ;
+               " [" + h[ "status" ] + "]" + ;
+               " " + Left( h[ "prompt" ], 80 ) + Chr( 10 )
+   NEXT
+
+RETURN cList
+
+// ---------------------------------------------------------------------------
+
+METHOD ActorCancel( nId ) CLASS Agent
+
+   LOCAL hActor
+
+   IF nId == NIL .OR. nId == 0 ; RETURN "ID required" ; ENDIF
+   AEval( ::aActors, {| h | iif( h[ "id" ] == nId, hActor := h, NIL ) } )
+   IF hActor == NIL ; RETURN "Actor not found" ; ENDIF
+
+   IF hActor[ "status" ] == "running"
+      hActor[ "agent" ]:Abort()
+      hActor[ "status" ] := "cancelled"
+   ENDIF
+
+RETURN "Actor #" + LTrim( Str( nId ) ) + " cancelled"
+
+// ---------------------------------------------------------------------------
+
+FUNCTION AGENT_ActorRun( oParent, nId, oAgent, cPrompt )
+
+   oAgent:Run( cPrompt )
+
+RETURN oAgent:aMessages[ Len( oAgent:aMessages ) ][ "content" ]
 
 // ---------------------------------------------------------------------------
 
@@ -1894,8 +2562,66 @@ RETURN NIL
 FUNCTION AGENT_ToolAskUser( hArgs )
 RETURN "[ask_user: " + hb_HGetDef( hArgs, "question", "?" ) + "]"
 
+// Persists a task list to todo.md in markdown checklist format.
+// hArgs["tasks"]: array of hashes { "title": "...", "done": true/false }
+// Actions: "write" (replace all), "add" (append), "list" (read), "clear" (empty).
 FUNCTION AGENT_ToolTodoWrite( hArgs )
-RETURN "[todo_write: tasks updated]"
+   LOCAL cAction, aTasks, cFile, cOut, nIdx
+
+   cAction := hb_HGetDef( hArgs, "action", "write" )
+   cFile   := "todo.md"
+
+   DO CASE
+   CASE cAction == "list"
+      IF !hb_FileExists( cFile )
+         RETURN "(no tasks)"
+      ENDIF
+      RETURN hb_MemoRead( cFile )
+
+   CASE cAction == "clear"
+      MemoWrit( cFile, "" )
+      RETURN "Task list cleared."
+
+   CASE cAction == "add"
+      aTasks := hb_HGetDef( hArgs, "tasks", {} )
+      IF ValType( aTasks ) != "A" .OR. Len( aTasks ) == 0
+         RETURN "Error: no tasks provided"
+      ENDIF
+      cOut := ""
+      IF hb_FileExists( cFile )
+         cOut := hb_MemoRead( cFile )
+      ENDIF
+      FOR nIdx := 1 TO Len( aTasks )
+         IF ValType( aTasks[ nIdx ] ) == "H"
+            cOut += "- [" + iif( hb_HGetDef( aTasks[ nIdx ], "done", .F. ), "x", " " ) + ;
+                    "] " + hb_HGetDef( aTasks[ nIdx ], "title", "untitled" ) + Chr( 10 )
+         ELSEIF ValType( aTasks[ nIdx ] ) == "C"
+            cOut += "- [ ] " + aTasks[ nIdx ] + Chr( 10 )
+         ENDIF
+      NEXT
+      MemoWrit( cFile, cOut )
+      RETURN LTrim( Str( Len( aTasks ) ) ) + " task(s) added."
+
+   OTHERWISE  // "write" — replace the full list
+      aTasks := hb_HGetDef( hArgs, "tasks", {} )
+      IF ValType( aTasks ) != "A" .OR. Len( aTasks ) == 0
+         MemoWrit( cFile, "" )
+         RETURN "Task list cleared."
+      ENDIF
+      cOut := ""
+      FOR nIdx := 1 TO Len( aTasks )
+         IF ValType( aTasks[ nIdx ] ) == "H"
+            cOut += "- [" + iif( hb_HGetDef( aTasks[ nIdx ], "done", .F. ), "x", " " ) + ;
+                    "] " + hb_HGetDef( aTasks[ nIdx ], "title", "untitled" ) + Chr( 10 )
+         ELSEIF ValType( aTasks[ nIdx ] ) == "C"
+            cOut += "- [ ] " + aTasks[ nIdx ] + Chr( 10 )
+         ENDIF
+      NEXT
+      MemoWrit( cFile, cOut )
+      RETURN LTrim( Str( Len( aTasks ) ) ) + " task(s) saved."
+   ENDCASE
+
+RETURN "Error: unknown action '" + cAction + "'. Use: write, add, list, clear."
 
 FUNCTION AGENT_ToolUseSkill( hArgs, oAgent )
    LOCAL cName := hb_HGetDef( hArgs, "name", "" )
@@ -1914,11 +2640,96 @@ FUNCTION AGENT_ExecUserTool( hTool, hArgs )
       RETURN AGENT_RunShell( hTool[ "script" ] + " " + cArgs )
    ENDIF
 
+// Runs a Python script via the system interpreter. The script receives
+// arguments through sys.argv. Returns combined stdout+stderr, truncated
+// at 30 000 bytes.
 STATIC FUNCTION AGENT_RunPython( cScript, cArgs )
-   LOCAL cCode, cOut
-   cCode := 'import sys;sys.argv=["' + cScript + '"]+' + cArgs + ;
-            Chr( 10 ) + hb_MemoRead( cScript )
-RETURN "[python executed]"
+   LOCAL cCode, cTmpFile, hFile, cCmdLine, cOut, cErr, nExit
+   LOCAL aInterps := { "python3", "python", "py" }, cInterp := "", cTry
 
+   IF !hb_FileExists( cScript )
+      RETURN "Error: script not found: " + cScript
+   ENDIF
+
+   // find a working Python interpreter
+   FOR EACH cTry IN aInterps
+      nExit := hb_processRun( cTry + " --version", , @cOut, @cErr )
+      IF nExit == 0
+         cInterp := cTry
+         EXIT
+      ENDIF
+   NEXT
+
+   IF Empty( cInterp )
+      RETURN "Error: no Python interpreter found (tried python3, python, py)"
+   ENDIF
+
+   // write a wrapper script that sets sys.argv then runs the user script
+   // cArgs is a raw string of space-separated tokens; wrap each in quotes
+   // so sys.argv becomes ["script", "arg1", "arg2", ...]
+   cCode := 'import sys, os' + Chr( 10 ) + ;
+            'sys.argv = ["' + cScript + '"'
+   IF !Empty( cArgs )
+      AEval( hb_ATokens( cArgs, " " ), ;
+         {| cTok | cCode += ', "' + StrTran( cTok, '"', '\"' ) + '"' } )
+   ENDIF
+   cCode += ']' + Chr( 10 ) + ;
+            'exec(open("' + StrTran( cScript, "\", "\\" ) + '").read())' + Chr( 10 )
+
+   cTmpFile := ""
+   hFile := hb_FTempCreateEx( @cTmpFile, hb_DirTemp(), "atpy", ".py" )
+   IF hFile == F_ERROR
+      RETURN "Error: cannot create temp file"
+   ENDIF
+   FWrite( hFile, cCode )
+   FClose( hFile )
+
+#ifdef __PLATFORM__WINDOWS
+   cCmdLine := cInterp + ' "' + cTmpFile + '"'
+#else
+   cCmdLine := cInterp + " '" + cTmpFile + "'"
+#endif
+
+   cOut := ""
+   cErr := ""
+   nExit := hb_processRun( cCmdLine, , @cOut, @cErr )
+   FErase( cTmpFile )
+
+   cOut := RTrim( cOut + cErr )
+   IF hb_BLen( cOut ) > 30000
+      cOut := hb_BLeft( cOut, 30000 ) + Chr( 10 ) + "[output truncated]"
+   ENDIF
+
+   IF nExit != 0 .AND. Empty( cOut )
+      cOut := "[exit code: " + LTrim( Str( nExit ) ) + "]"
+   ENDIF
+
+RETURN iif( Empty( cOut ), "(no output)", cOut )
+
+// Runs a shell command via the system shell. Returns combined output,
+// truncated at 30 000 bytes.
 STATIC FUNCTION AGENT_RunShell( cCmd )
-RETURN "[shell executed: " + cCmd + "]"
+   LOCAL cCmdLine, cOut, cErr, nExit
+
+   IF Empty( cCmd )
+      RETURN "Error: empty command"
+   ENDIF
+
+#ifdef __PLATFORM__WINDOWS
+   cCmdLine := "cmd.exe /c " + cCmd
+#else
+   cCmdLine := "/bin/sh -c '" + StrTran( cCmd, "'", "'\\''" ) + "'"
+#endif
+
+   cOut := ""
+   cErr := ""
+   nExit := hb_processRun( cCmdLine, , @cOut, @cErr )
+
+   cOut := RTrim( cOut + cErr )
+   IF hb_BLen( cOut ) > 30000
+      cOut := hb_BLeft( cOut, 30000 ) + Chr( 10 ) + "[output truncated]"
+   ENDIF
+
+   cOut += Chr( 10 ) + "[exit code: " + LTrim( Str( nExit ) ) + "]"
+
+RETURN cOut
