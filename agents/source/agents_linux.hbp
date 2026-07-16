@@ -1,6 +1,6 @@
 -occ
 -mt
--gtwin
+-gtstd
 -o../agents
 agents_console.prg
 agents_repl.prg

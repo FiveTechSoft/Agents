@@ -182,7 +182,8 @@ agents/source/
   agents_perm.prg         Permission gate
   agents_skill.prg        Skills registry
   agents_diff.prg         Line-level diff engine
-  agents_console.c        Win32 console backend
+  agents_console.prg     Harbour-native cross-platform console backend
+                            (Inkey()/hb_KeyGet()/hb_gtInfo(); no OS C code)
 ```
 
 ---
