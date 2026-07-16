@@ -125,6 +125,10 @@ FUNCTION AGPROMPT_Interrupted( oPrompt )
 // and rewrites LF). Needed for absolute cursor positioning.
 STATIC FUNCTION AGPROMPT_Raw( cText )
    FWrite( hb_GetStdOut(), cText )
+   // Ensure the box paint reaches the terminal immediately. Without this,
+   // some PTY/WSL hosts buffer stdout and the user sees a blank prompt
+   // line until a later newline/flush.
+   AGCON_TTY_FLUSH()
    RETURN NIL
 
 // Forces the dynamic box to pin at the floor immediately. Interactive
@@ -163,6 +167,9 @@ FUNCTION AGPROMPT_Activate( oPrompt, nTopRow )
    IF !hReg[ "active" ]
       RETURN oPrompt
    ENDIF
+   // Force raw TTY (no echo, char-at-a-time) so typed keys reach AGCON
+   // under WSL/Windows Terminal. Safe no-op on Windows.
+   AGCON_RawMode( .T. )
    // park the cursor at the top of the scroll region and save it as the
    // initial output anchor; the box sits one row below until the content
    // grows enough to push it down to the floor
@@ -195,6 +202,7 @@ FUNCTION AGPROMPT_Teardown( oPrompt )
    // move the cursor to the first box row so the shell prompt comes back
    // exactly where the agent's last visible output ended
    AGPROMPT_Raw( Chr(27) + "[" + LTrim( Str( hReg[ "box_top" ] ) ) + ";1H" )
+   AGCON_RawMode( .F. )
    RETURN oPrompt
 
 // Redraws the box on the bottom three rows: top frame, the editor line, the
@@ -417,11 +425,20 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             oEd[ "cursor" ] := hb_UTF8Len( cHist )
          ENDIF
       CASE nKey == -11 ; AGIN_Insert( oEd, Chr(10) )   // Shift+Enter -> newline
-      CASE nKey > 0 ; AGIN_Insert( oEd, AGIN_Utf8Chr( nKey ) )
+      CASE nKey > 0 ; AGIN_Insert( oEd, AGCON_PrintableText( nKey ) )
       // other keys (Tab, Ctrl+C, unmapped) are ignored mid-prompt
       ENDCASE
+      // Repaint after every key so the user sees input immediately.
+      // (Batching at the end failed to run under some WSL drain paths.)
+      IF nKey != -1 .OR. cAction == "none"
+         AGPROMPT_Redraw( oPrompt )
+      ENDIF
       IF cAction == "interrupt"
          EXIT   // stop draining once an interrupt is seen
+      ENDIF
+      // After Enter queued a message, stop draining so the REPL can run it
+      IF cAction == "queued"
+         EXIT
       ENDIF
    ENDDO
    // post-burst paste collapse: after the burst ends, if the editor buffer

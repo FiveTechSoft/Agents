@@ -1,6 +1,6 @@
--occ
 -mt
--gtstd
+-static
+-gttrm
 -o../agents
 agents_console.prg
 agents_repl.prg

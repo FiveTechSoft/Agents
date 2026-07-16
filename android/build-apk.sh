@@ -2,12 +2,12 @@
 # Build the Agents Android APK (arm64-v8a).
 #
 # Uses the prebuilt Harbour-for-Android static libs from C:\HarbourAndroid and
-# the Agents core from agents/source/. No hbcurl/openssl: the LLM HTTP transport
+# the Agents core from source/. No hbcurl/openssl: the LLM HTTP transport
 # is Java (MainActivity.httpPost), injected via hOpts["transport"].
 set -eu
 
 APP=/c/fwteam/samples/AgenticAI/Android
-AGENTS_SRC=/c/agents/agents/source
+AGENTS_SRC=/c/agents/source
 
 HB_SRC=/c/HarbourAndroid/harbour-core
 HB_LIB=$HB_SRC/lib/android/clang-android-arm64-v8a

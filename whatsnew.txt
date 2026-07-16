@@ -1,3 +1,14 @@
+Agents ? What's new
+===================
+
+v2.0.0 (2026-07-16)
+-------------------
+* Harbour-standard keyboard (Inkey + hb_keyStd/hb_keyChar); prompt typing fixed on WSL.
+* Linux: gttrm + static binary at repo root.
+* Repo layout: source/, android/, scripts/, screenshots/; binaries at root.
+* /demo full random offline session; /help lists all commands.
+* settings.json gitignored ? no API keys in the tree.
+
 Agents (Android) - What's new
 =============================
 

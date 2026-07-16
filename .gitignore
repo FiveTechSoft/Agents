@@ -1,4 +1,6 @@
 build/
+.hbmk/
+source/.hbmk/
 *.apk
 *.idsig
 *.keystore
@@ -7,3 +9,16 @@ deepseek.key
 .worktrees/
 _*.html
 _*.png
+error.log
+scripts/error.log
+*.o
+*.c
+!android/**/*.c
+
+# Local secrets / runtime config (never commit keys)
+.agents/settings.json
+**/.agents/settings.json
+*.key
+.env
+.env.*
+!.env.example

@@ -7,8 +7,7 @@
   "shell_timeout": 30,
   "api_timeout": null,
   "compact_threshold": 0.7,
-  "permissions":
-  {
+  "permissions": {
     "read": "allow",
     "glob": "allow",
     "grep": "allow",
@@ -23,5 +22,5 @@
   },
   "hooks": {},
   "hooks_log": false,
-  "api_key": "sk-5eb08f50fa7b4bce8a0ce6eca96af40a"
+  "_comment": "Copy to settings.json. Set key via /provider key or DEEPSEEK_API_KEY."
 }

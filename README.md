@@ -66,7 +66,7 @@ Native terminal app with full TUI:
 ### Build
 
 ```bash
-cd agents/source
+cd source
 hbmk2 -comp=msvc64 agents.hbp    # Windows (MSVC)
 # or
 hbmk2 agents_linux.hbp           # Linux (gcc)
@@ -129,7 +129,7 @@ Native Android application. Harbour cross-compiled to ARM64, packaged as APK.
 ### Build
 
 ```bash
-cd agents
+cd android
 bash build-apk.sh
 ```
 
@@ -163,13 +163,29 @@ Full API reference: https://github.com/FiveTechSoft/Agents/wiki/Class-Agent
 
 ---
 
+## Repository layout
+
+```
+.
+??? agents / agents.exe   # Console binaries (root)
+??? source/               # Console Harbour sources + .hbp
+??? android/              # APK sources, manifest, HarbourAndroid libs
+??? docs/                 # Web UI (GitHub Pages)
+??? tests/                # Automated tests
+??? scripts/              # Helper scripts (ssh-proxy, etc.)
+??? screenshots/          # UI screenshots
+??? .agents/              # Runtime settings & skills
+```
+
 ## Source Structure
 
 ```
-agents/source/
-  agents.hbp              Build file
-  agents_repl.prg         Main() entry, REPL loop (3328 lines)
-  agents.prg              CLASS Agent (2794 lines, 64 methods)
+source/
+  agents.hbp              Build file (Windows)
+  agents_linux.hbp        Build file (Linux, static + gttrm)
+  agents_mac.hbp          Build file (macOS)
+  agents_repl.prg         Main() entry, REPL loop
+  agents.prg              CLASS Agent
   agents_ui.prg           TUI: banner, cards, cost report
   agents_prompt.prg       Persistent input box
   agents_input.prg        Multi-line line editor
@@ -177,13 +193,14 @@ agents/source/
   agents_http.prg         API client
   agents_sse.prg          SSE parser
   agents_curl.prg         curl subprocess transport
-  agents_tool_*.prg       11 tool handler files
+  agents_tool_*.prg       Tool handler files
   agents_settings.prg     .agents/settings.json
   agents_perm.prg         Permission gate
   agents_skill.prg        Skills registry
   agents_diff.prg         Line-level diff engine
-  agents_console.prg     Harbour-native cross-platform console backend
-                            (Inkey()/hb_KeyGet()/hb_gtInfo(); no OS C code)
+  agents_console.prg      Harbour-standard console backend
+                            (Inkey + hb_keyStd/hb_keyChar; gttrm/gtwin)
+  go.bat / go.sh          One-shot build helpers
 ```
 
 ---

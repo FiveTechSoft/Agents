@@ -321,7 +321,7 @@ FUNCTION AGIN_ReadLine( cInitial )
             oSt[ "buf" ] := ""
             oSt[ "cursor" ] := 0
          ENDIF
-         AGIN_Insert( oSt, AGIN_Utf8Chr( nKey ) )
+         AGIN_Insert( oSt, AGCON_PrintableText( nKey ) )
       // nKey == -99 (an unmapped key) matches no case above and is ignored
       ENDCASE
       // redraw the prompt line in place; update hint if line count changed

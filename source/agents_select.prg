@@ -163,7 +163,7 @@ STATIC FUNCTION AGSEL_ReadFreeText( cInitial, oPrompt )
       CASE nKey == -6 ; AGIN_End( oEd )
       CASE nKey == -7 ; AGIN_Delete( oEd )
       CASE nKey == -11 ; AGIN_Insert( oEd, Chr(10) )
-      CASE nKey > 0   ; AGIN_Insert( oEd, AGIN_Utf8Chr( nKey ) )
+      CASE nKey > 0   ; AGIN_Insert( oEd, AGCON_PrintableText( nKey ) )
       ENDCASE
       AGPROMPT_Redraw( oPrompt )
    ENDDO
@@ -191,8 +191,8 @@ STATIC FUNCTION AGSEL_ReadOther( cInitial )
             AGSEL_Raw( Chr(8) + " " + Chr(8) )
          ENDIF
       CASE nKey > 0                         // a printable character
-         cBuf += AGIN_Utf8Chr( nKey )
-         AGSEL_Raw( AGIN_Utf8Chr( nKey ) )
+         cBuf += AGCON_PrintableText( nKey )
+         AGSEL_Raw( AGCON_PrintableText( nKey ) )
       ENDCASE
    ENDDO
    AGSEL_Raw( Chr(10) )
@@ -229,7 +229,7 @@ FUNCTION AGSEL_Run( oSel )
          oBoxEd := oPrompt[ "editor" ]
          DO CASE
          CASE nKey > 0 .AND. nKey != 0          // printable -> insert
-            AGIN_Insert( oBoxEd, AGIN_Utf8Chr( nKey ) )
+            AGIN_Insert( oBoxEd, AGCON_PrintableText( nKey ) )
             lBoxEdit := .T.
          CASE nKey == -2                        // Backspace
             AGIN_Backspace( oBoxEd )

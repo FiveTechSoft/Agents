@@ -302,7 +302,7 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
       CASE hAction[ "type" ] == "run"
          AGREPL_RunPlan( @aMsgs, oClient, oReg, cModel, bGate, nMaxIter, oPrompt )
       CASE hAction[ "type" ] == "demo"
-         AGREPL_Demo()
+         AGREPL_Demo( oReg, oPrompt, cModel, aMsgs )
       CASE hAction[ "type" ] == "shx"
          AGREPL_ShellCmd( hAction[ "text" ], oReg )
       CASE hAction[ "type" ] == "gitx"
@@ -1989,8 +1989,18 @@ STATIC FUNCTION AGREPL_ApplyAutoSkills( cMsg, aMsgs, oPrompt )
 // non-empty buffer, or a /btw line). Returns the submitted text, or loops
 // on a bare Esc.
 STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
-   LOCAL cAction, cText
+   LOCAL cAction, cText, nKey
+   AGCON_RawMode( .T. )
    DO WHILE .T.
+      // Block for one key, then let Poll drain any burst that arrived with it.
+      // ReadKey is blocking; this avoids the KeyPending/WaitKey dance that
+      // could desync under WSL.
+      nKey := AGCON_ReadKey()
+      IF nKey == 0
+         RETURN NIL
+      ENDIF
+      // Push the key back into the pending slot so Poll sees it.
+      AGCON_PushKey( nKey )
       cAction := AGPROMPT_Poll( oPrompt )
       IF cAction == "queued"
          RETURN AGPROMPT_Dequeue( oPrompt )
@@ -2001,14 +2011,12 @@ STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
             oPrompt[ "interrupt" ] := NIL
             RETURN cText
          ENDIF
-         // double-tap Esc at idle -> /rewind one conversation turn
          IF oPrompt[ "interrupt" ][ "kind" ] == "rewind"
             oPrompt[ "interrupt" ] := NIL
             RETURN "/rewind"
          ENDIF
          oPrompt[ "interrupt" ] := NIL
       ENDIF
-      hb_IdleSleep( 0.02 )
    ENDDO
    RETURN NIL
 
@@ -2321,7 +2329,7 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
       ELSE
          // bullet line: ● Running <name>… (white, active) on the faint
          // actions-panel tint (web "acciones" panel parity)
-         AGREPL_Out( Chr(10) + AGREPL_ToolCard( AGUI_Color( "●", "97" ) + ;
+         AGREPL_Out( Chr(10) + AGREPL_ToolCard( AGUI_Color( Chr(226)+Chr(151)+Chr(143), "97" ) + ;
             " Running " + hb_CStr( hEv[ "name" ] ) + ;
             AGUI_Color( Chr( 226 ) + Chr( 128 ) + Chr( 166 ), AGUI_Pal( "dim" ) ) ) )
          // tool content below (command + explanation, no separator)
@@ -2378,7 +2386,7 @@ STATIC FUNCTION AGREPL_ThinkShow( oRender )
       RETURN NIL
    ENDIF
    oRender[ "thinkHeaderDone" ] := .T.
-   cMsg := AGUI_Color( "●", "97" ) + " Thinking" + ;
+   cMsg := AGUI_Color( Chr(226)+Chr(151)+Chr(143), "97" ) + " Thinking" + ;
            AGUI_Color( Chr( 226 ) + Chr( 128 ) + Chr( 166 ), ;
                         AGUI_Pal( "dim" ) )   // … (ellipsis)
    AGREPL_Out( cMsg + Chr(10) )
@@ -2513,104 +2521,318 @@ STATIC FUNCTION AGREPL_ThinkPrintWrapped( cText, nWrap, oRender )
    ENDDO
    RETURN NIL
 
-// /demo -- showcase of the card UI with sample content, like the web Agents
-// demo button: goal, plan, thinking, tool actions, diff, reply, error,
-// permit, cost, compact and context cards, no API key required. Session
-// state (goal / plan) is saved and restored around the show.
-STATIC FUNCTION AGREPL_Demo()
+// /demo -- full random offline session that showcases most cards and
+// slash commands without calling the LLM. No API key required. Session
+// goal/plan/todo state is saved and restored around the show.
+STATIC FUNCTION AGREPL_Demo( oReg, oPrompt, cModel, aMsgs )
    LOCAL nW := Min( AGREPL_Cols() - 2, 100 )
    LOCAL aOldPlan := s_aPlanSteps, cOldGoal := s_cGoal, lOldLoop := s_lGoalLooping
-   LOCAL hUsage := { "prompt_tokens" => 125430, "completion_tokens" => 8205, ;
-                     "prompt_cache_hit_tokens" => 98000 }
-   LOCAL cCorner := "  " + Chr(226)+Chr(142)+Chr(191) + "  "
-   LOCAL cCheck  := Chr(226)+Chr(156)+Chr(147)
+   LOCAL aOldTodos := AGTODO_Get()
+   LOCAL hUsage, cCorner, cCheck, cDot
+   LOCAL aScenarios, hSc, nPick, cFile, cDemoDir
+   LOCAL aTodos, oSel, aOpts, i, nSteps, aPlan
+   LOCAL cTitle, aLines
+
+   HB_SYMBOL_UNUSED( aMsgs )
+
+   cCorner := "  " + Chr(226)+Chr(142)+Chr(191) + "  "
+   cCheck  := Chr(226)+Chr(156)+Chr(147)
+   cDot    := Chr(226)+Chr(151)+Chr(143)
+
+   // Random scenario pack (title, goal, user prompt, file, plan steps)
+   aScenarios := { ;
+      { "title" => "Landing page", ;
+        "goal"  => "Montar una landing minima y documentarla en el repo.", ;
+        "user"  => "Crea index.html con un hero y un README corto.", ;
+        "file"  => "demo_landing.md", ;
+        "body"  => "# Landing demo" + Chr(10) + Chr(10) + ;
+                   "Hero + CTA generados por /demo (offline)." + Chr(10), ;
+        "plan"  => { "Escribir demo_landing.md", "Revisar con cat/head", ;
+                     "Mostrar coste y contexto" } }, ;
+      { "title" => "CLI util", ;
+        "goal"  => "Probar tools de fichero y shell en un util CLI.", ;
+        "user"  => "Haz un script de ejemplo y ensena el diff.", ;
+        "file"  => "demo_cli.md", ;
+        "body"  => "# CLI demo" + Chr(10) + Chr(10) + ;
+                   "Notas del util CLI (sesion /demo)." + Chr(10), ;
+        "plan"  => { "Crear demo_cli.md", "Ejecutar shell seguro", ;
+                     "Listar tools y skills" } }, ;
+      { "title" => "Bugfix walkthrough", ;
+        "goal"  => "Simular un bugfix con error, permit y compact.", ;
+        "user"  => "Reproduce el error de modulo y propon un fix.", ;
+        "file"  => "demo_bugfix.md", ;
+        "body"  => "# Bugfix" + Chr(10) + Chr(10) + ;
+                   "Cannot find module 'clsx' -- ejemplo offline." + Chr(10), ;
+        "plan"  => { "Diagnosticar el error", "Editar el fichero", ;
+                     "Compactar y reportar coste" } }, ;
+      { "title" => "Repo health", ;
+        "goal"  => "Chequeo rapido de salud del repositorio local.", ;
+        "user"  => "Revisa el cwd, lista tools y deja una nota.", ;
+        "file"  => "demo_health.md", ;
+        "body"  => "# Repo health" + Chr(10) + Chr(10) + ;
+                   "pwd/date + inventario de tools (demo)." + Chr(10), ;
+        "plan"  => { "Inspeccionar entorno", "Escribir nota", ;
+                     "Mostrar plan y todos" } }, ;
+      { "title" => "Multi-agent pitch", ;
+        "goal"  => "Mostrar dispatch/propose y cards de delegacion.", ;
+        "user"  => "Prop?n subagentes para documentar y testear.", ;
+        "file"  => "demo_agents.md", ;
+        "body"  => "# Multi-agent" + Chr(10) + Chr(10) + ;
+                   "Borrador de team dispatch (offline /demo)." + Chr(10), ;
+        "plan"  => { "Definir goal", "Proponer subagentes", ;
+                     "Cerrar con resumen y /cost" } } }
+
+   nPick := Int( hb_Random() * Len( aScenarios ) ) + 1
+   IF nPick < 1 ; nPick := 1 ; ENDIF
+   IF nPick > Len( aScenarios ) ; nPick := Len( aScenarios ) ; ENDIF
+   hSc := aScenarios[ nPick ]
+
    AGREPL_Out( Chr(10) + AGUI_Color( "[" + Chr(226)+Chr(150)+Chr(182) + ;
-      " Demo (simulada): cards de muestra - sin API]", ;
-      AGUI_Pal( "accent" ) ) + Chr(10) + Chr(10) )
-   hb_idleSleep( 0.35 )
-   // goal card
-   AGREPL_Out( AGREPL_UserCard( "/goal" ) )
-   s_cGoal := "Mostrar las capacidades de Agents: planes, cards, diffs, " + ;
-              "coste y compactado."
+      " Demo #" + LTrim( Str( nPick ) ) + "/" + LTrim( Str( Len( aScenarios ) ) ) + ;
+      " ? " + hSc[ "title" ] + " ? offline, sin API]", ;
+      AGUI_Pal( "accent" ) ) + Chr(10) )
+   AGREPL_Out( AGUI_Color( "  Sesion completa al azar: cards + comandos reales " + ;
+      "que no requieren LLM.", AGUI_Pal( "dim" ) ) + Chr(10) + Chr(10) )
+   hb_idleSleep( 0.25 )
+
+   // ?? 1. Meta commands (real, no API) ?????????????????????????????????
+   AGREPL_Out( AGREPL_UserCard( "/help" ) )
+   AGREPL_Out( AGUI_Help() + Chr(10) )
+   hb_idleSleep( 0.2 )
+
+   AGREPL_Out( AGREPL_UserCard( "/model" ) )
+   AGREPL_Out( AGUI_Color( "model: " + hb_CStr( cModel ), "90" ) + Chr(10) )
+   hb_idleSleep( 0.15 )
+
+   AGREPL_Out( AGREPL_UserCard( "/provider" ) )
+   AGREPL_HandleProvider( "", oPrompt )
+   hb_idleSleep( 0.15 )
+
+   IF oReg != NIL
+      AGREPL_Out( AGREPL_UserCard( "/tool" ) )
+      AGREPL_ToolsList( oReg )
+      hb_idleSleep( 0.15 )
+   ENDIF
+
+   AGREPL_Out( AGREPL_UserCard( "/skill" ) )
+   AGREPL_SkillCmd( "", aMsgs, oPrompt )
+   hb_idleSleep( 0.15 )
+
+   AGREPL_Out( AGREPL_UserCard( "/tasks" ) )
+   AGREPL_HandleTasks( "" )
+   hb_idleSleep( 0.15 )
+
+   AGREPL_Out( AGREPL_UserCard( "/ctx" ) )
+   AGREPL_HandleCtx( "", cModel )
+   hb_idleSleep( 0.15 )
+
+   // lean toggle flash
+   AGREPL_Out( AGREPL_UserCard( "/lean" ) )
+   AGREPL_ToggleLean( "", aMsgs, oPrompt )
+   hb_idleSleep( 0.1 )
+   AGREPL_Out( AGREPL_UserCard( "/lean off" ) )
+   AGREPL_ToggleLean( "off", aMsgs, oPrompt )
+   hb_idleSleep( 0.15 )
+
+   // ?? 2. Scenario narrative ???????????????????????????????????????????
+   AGREPL_Out( AGREPL_UserCard( hSc[ "user" ] ) )
+   hb_idleSleep( 0.2 )
+
+   AGREPL_Out( Chr(10) + AGUI_Color( "?", "97" ) + " Thinking" + ;
+      AGUI_Color( Chr(226)+Chr(128)+Chr(166), AGUI_Pal( "dim" ) ) + Chr(10) )
+   AGREPL_Out( AGREPL_ThinkLine( cCorner + "Escenario '" + hSc[ "title" ] + ;
+      "'. Trabajo offline: cards + tools locales, sin llamar al modelo." ) + Chr(10) )
+   hb_idleSleep( 0.25 )
+
+   // goal
+   AGREPL_Out( AGREPL_UserCard( "/goal " + hSc[ "goal" ] ) )
+   s_cGoal := hSc[ "goal" ]
    s_lGoalLooping := .F.
    AGREPL_GoalCard()
-   hb_idleSleep( 0.35 )
-   // plan card
+   hb_idleSleep( 0.2 )
+
+   // plan with progressive states
+   aPlan := hSc[ "plan" ]
+   s_aPlanSteps := {}
+   FOR i := 1 TO Len( aPlan )
+      AAdd( s_aPlanSteps, { "title" => aPlan[ i ], ;
+         "state" => iif( i == 1, "active", "pending" ) } )
+   NEXT
    AGREPL_Out( AGREPL_UserCard( "/plan" ) )
-   s_aPlanSteps := { ;
-      { "title" => "Crear bienvenida.md", "state" => "done" }, ;
-      { "title" => "Editar el fichero y mostrar el diff", "state" => "active" }, ;
-      { "title" => "Resumir el coste de la sesion", "state" => "pending" } }
    AGREPL_PlanCard()
-   hb_idleSleep( 0.35 )
-   // thinking glass box
-   AGREPL_Out( Chr(10) + AGUI_Color( "●", "97" ) + " Thinking" + ;
-      AGUI_Color( Chr(226)+Chr(128)+Chr(166), AGUI_Pal( "dim" ) ) + Chr(10) )
-   AGREPL_Out( AGREPL_ThinkLine( cCorner + "El usuario quiere ver las cards. " + ;
-      "Creo el fichero, lo edito y muestro el diff antes de seguir." ) + Chr(10) )
-   hb_idleSleep( 0.35 )
-   // tool action lines + diff
-   AGREPL_Out( AGREPL_UserCard( "Crea bienvenida.md y luego editalo" ) )
-   AGREPL_Out( Chr(10) + AGREPL_ToolCard( AGUI_Color( "●", "97" ) + " Running write" + ;
+   hb_idleSleep( 0.2 )
+
+   // todos
+   aTodos := {}
+   FOR i := 1 TO Len( aPlan )
+      AAdd( aTodos, { "id" => LTrim( Str( i ) ), "content" => aPlan[ i ], ;
+         "status" => iif( i == 1, "in_progress", "pending" ) } )
+   NEXT
+   AGTODO_Set( aTodos )
+   AGREPL_Out( AGREPL_UserCard( "todo_write (demo)" ) )
+   AGREPL_Out( AGUI_TodoBlock( AGTODO_Get() ) )
+   hb_idleSleep( 0.2 )
+
+   // ?? 3. File tools (real shell, safe) ????????????????????????????????
+   cDemoDir := ".agents"
+   IF ! hb_DirExists( cDemoDir )
+      hb_DirBuild( cDemoDir )
+   ENDIF
+   cFile := cDemoDir + hb_ps() + hSc[ "file" ]
+
+   AGREPL_Out( Chr(10) + AGREPL_ToolCard( AGUI_Color( Chr(226)+Chr(151)+Chr(143), "97" ) + " Running write" + ;
       AGUI_Color( Chr(226)+Chr(128)+Chr(166), AGUI_Pal( "dim" ) ) ) )
+   // real write via harbour
+   hb_MemoWrit( cFile, hSc[ "body" ] )
    AGREPL_Out( AGREPL_ToolCard( AGUI_Color( cCheck, "92" ) + " write " + ;
-      AGUI_Color( "Created bienvenida.md (3 lines)", AGUI_Pal( "dim" ) ) ) )
-   hb_idleSleep( 0.35 )
-   AGREPL_Out( Chr(10) + AGREPL_ToolCard( AGUI_Color( "●", "97" ) + " Running edit" + ;
+      AGUI_Color( "Created " + cFile, AGUI_Pal( "dim" ) ) ) )
+   // mark plan step 1 done
+   IF Len( s_aPlanSteps ) >= 1
+      s_aPlanSteps[ 1 ][ "state" ] := "done"
+   ENDIF
+   IF Len( s_aPlanSteps ) >= 2
+      s_aPlanSteps[ 2 ][ "state" ] := "active"
+   ENDIF
+   hb_idleSleep( 0.2 )
+
+   AGREPL_Out( Chr(10) + AGREPL_ToolCard( AGUI_Color( Chr(226)+Chr(151)+Chr(143), "97" ) + " Running edit" + ;
       AGUI_Color( Chr(226)+Chr(128)+Chr(166), AGUI_Pal( "dim" ) ) ) )
+   hb_MemoWrit( cFile, hSc[ "body" ] + Chr(10) + "Actualizado por /demo @" + Time() + Chr(10) )
    AGREPL_Out( AGREPL_ToolCard( AGUI_Color( cCheck, "92" ) + " edit " + ;
-      AGUI_Color( "bienvenida.md: 1 removed, 3 added", AGUI_Pal( "dim" ) ) ) )
+      AGUI_Color( cFile + ": footer added", AGUI_Pal( "dim" ) ) ) )
    AGREPL_Out( AGREPL_ToolCard( AGUI_ResultSummary( "edit", ;
-      "     1   # Agents" + Chr(10) + ;
-      "     2 - Agente IA en tu terminal." + Chr(10) + ;
-      "     2 + Agente IA en tu terminal, con cards como la web." + Chr(10) + ;
-      "     3 + " + Chr(10) + ;
-      "     4 + Comandos: /plan, /run, /cost, /demo" ) ) )
-   hb_idleSleep( 0.35 )
-   // assistant reply card
-   AGREPL_Out( Chr(10) )
-   AGREPL_Out( AGUI_CardLine( "Listo: he creado bienvenida.md y lo he ampliado.", ;
-               "card", nW ) + Chr(10) )
-   AGREPL_Out( AGUI_CardLine( "El diff de arriba muestra los cambios linea a linea.", ;
-               "card", nW ) + Chr(10) )
-   hb_idleSleep( 0.35 )
-   // error card
-   AGREPL_Out( AGUI_RenderEvent( { "type" => "error", ;
-      "message" => "Cannot find module 'clsx' (ejemplo de error simulado)" } ) )
-   hb_idleSleep( 0.35 )
-   // permit card (visual only)
+      "     1   # " + hSc[ "title" ] + Chr(10) + ;
+      "     2   ..." + Chr(10) + ;
+      "     3 + Actualizado por /demo @" + Time() ) ) )
+   hb_idleSleep( 0.2 )
+
+   // real shell samples + file read (portable)
+   IF oReg != NIL
+      AGREPL_Out( AGREPL_UserCard( "/sh echo demo && pwd" ) )
+      AGREPL_ShellCmd( "echo Agents /demo shell OK && pwd", oReg )
+      hb_idleSleep( 0.15 )
+      AGREPL_Out( AGREPL_UserCard( "/git status" ) )
+      AGREPL_ShellCmd( "git status -sb", oReg )
+      hb_idleSleep( 0.15 )
+   ENDIF
+   AGREPL_Out( AGREPL_UserCard( "read " + cFile ) )
+   AGREPL_Out( AGREPL_ToolCard( AGUI_Color( cCheck, "92" ) + " read " + ;
+      AGUI_Color( cFile, AGUI_Pal( "dim" ) ) + Chr(10) + ;
+      Left( hb_MemoRead( cFile ), 400 ) ) )
+   hb_idleSleep( 0.15 )
+
+   IF Len( s_aPlanSteps ) >= 2
+      s_aPlanSteps[ 2 ][ "state" ] := "done"
+   ENDIF
+   IF Len( s_aPlanSteps ) >= 3
+      s_aPlanSteps[ 3 ][ "state" ] := "active"
+   ENDIF
+   AGREPL_Out( AGREPL_UserCard( "/plan (progress)" ) )
+   AGREPL_PlanCard()
+   hb_idleSleep( 0.15 )
+
+   // ?? 4. Interaction cards ????????????????????????????????????????????
+   aOpts := { "Aplicar el fix automaticamente", ;
+              "Solo documentar el hallazgo", ;
+              "Cancelar y revisar a mano" }
+   oSel := AGSEL_New( "Como quieres continuar con '" + hSc[ "title" ] + "'?", aOpts )
+   AGREPL_Out( Chr(10) + AGREPL_ToolCard( AGUI_Color( "?", "97" ) + " ask_user" ) )
+   AGREPL_Out( AGUI_QuestionBlock( oSel ) )
+   AGREPL_Out( AGUI_Color( "  (demo: no espera respuesta ? selecciona mentalmente la 1)", ;
+                           AGUI_Pal( "dim" ) ) + Chr(10) )
+   hb_idleSleep( 0.25 )
+
+   // permit
    AGREPL_Out( Chr(10) + AGUI_Card( ;
       AGUI_Color( "CONFIRMATION REQUIRED", "1;33" ) + Chr(10) + ;
       "The agent wants to run " + AGUI_Color( "shell", "1" ) + ;
-      ": npm install clsx   (demo: no espera respuesta)", ;
+      ": npm test -- --watch=false   (demo: no espera)", ;
       "card_warn", nW ) + Chr(10) )
-   hb_idleSleep( 0.35 )
-   // cost card
+   hb_idleSleep( 0.2 )
+
+   // error
+   AGREPL_Out( AGUI_RenderEvent( { "type" => "error", ;
+      "message" => "Demo simulated error: Cannot find module 'clsx' " + ;
+                   "(scenario " + hSc[ "title" ] + ")" } ) )
+   hb_idleSleep( 0.2 )
+
+   // propose subagents (visual)
+   AGREPL_Out( Chr(10) + AGUI_CardLine( AGUI_Color( "PROPOSE AGENTS", "1;36" ), ;
+               "card", nW ) + Chr(10) )
+   AGREPL_Out( AGUI_CardLine( cDot + " explore  ? map project layout", "card", nW ) + Chr(10) )
+   AGREPL_Out( AGUI_CardLine( cDot + " docs     ? write " + hSc[ "file" ], "card", nW ) + Chr(10) )
+   AGREPL_Out( AGUI_CardLine( cDot + " test     ? smoke-check shell tools", "card", nW ) + Chr(10) )
+   AGREPL_Out( AGUI_Color( "  (demo: propose_agents visual ? sin spawn real)", ;
+                           AGUI_Pal( "dim" ) ) + Chr(10) )
+   hb_idleSleep( 0.2 )
+
+   // assistant reply
+   AGREPL_Out( Chr(10) )
+   aLines := { ;
+      "Sesion demo '" + hSc[ "title" ] + "' completada en modo offline.", ;
+      "Se ejercitaron help/model/provider/tool/skill/tasks/ctx/lean,", ;
+      "goal/plan/todo, write/edit/shell/git, ask_user, permit, error,", ;
+      "propose, cost, compact y contexto. Fichero: " + cFile }
+   FOR i := 1 TO Len( aLines )
+      AGREPL_Out( AGUI_CardLine( aLines[ i ], "card", nW ) + Chr(10) )
+   NEXT
+   hb_idleSleep( 0.2 )
+
+   // ?? 5. Cost / compact / context ??????????????????????????????????????
+   hUsage := { "prompt_tokens" => 40000 + Int( hb_Random() * 90000 ), ;
+               "completion_tokens" => 3000 + Int( hb_Random() * 7000 ), ;
+               "prompt_cache_hit_tokens" => 25000 + Int( hb_Random() * 50000 ) }
    AGREPL_Out( AGREPL_UserCard( "/cost" ) )
    AGREPL_Out( AGUI_CostReport( hUsage ) )
-   hb_idleSleep( 0.35 )
-   // compact card
+   // also fold into session usage for a live /cost after demo
+   AGREPL_AccumUsage( hUsage )
+   hb_idleSleep( 0.15 )
+
    AGREPL_Out( AGREPL_UserCard( "/compact" ) )
    AGREPL_Out( AGUI_Card( ;
       AGUI_Color( "CONTEXT COMPACTED", "1;38;2;192;132;252" ) + Chr(10) + ;
-      AGUI_Color( "12 turns -> 1 summary, kept last 4 verbatim", ;
+      AGUI_Color( "demo: 8 turns -> 1 summary (simulado, sin LLM)", ;
                   "38;2;232;226;248" ), ;
       "card_think", nW ) + Chr(10) )
-   hb_idleSleep( 0.35 )
-   // context-critical card
+   hb_idleSleep( 0.15 )
+
    AGREPL_Out( Chr(10) + AGUI_Card( ;
       AGUI_Color( "CONTEXT WINDOW CRITICAL", "1;38;2;251;146;60" ) + "   " + ;
       AGUI_Color( "112000 / 128000 tkns  (87%)", "2" ) + Chr(10) + ;
       "Memory is filling up: run /compact to summarise old turns, or " + ;
       "/clear to start fresh.", "card_ctx", nW ) + Chr(10) )
-   hb_idleSleep( 0.35 )
-   AGREPL_Out( Chr(10) + AGUI_Color( "[" + cCheck + " Demo completada - " + ;
-      "goal - plan - thinking - acciones - diff - respuesta - error - " + ;
-      "permit - cost - compact - contexto]", "92" ) + Chr(10) )
-   // restore the real session state
+   hb_idleSleep( 0.15 )
+
+   // finish plan
+   FOR i := 1 TO Len( s_aPlanSteps )
+      s_aPlanSteps[ i ][ "state" ] := "done"
+   NEXT
+   aTodos := AGTODO_Get()
+   FOR i := 1 TO Len( aTodos )
+      aTodos[ i ][ "status" ] := "completed"
+   NEXT
+   AGTODO_Set( aTodos )
+   AGREPL_Out( AGREPL_UserCard( "/plan (done)" ) )
+   AGREPL_PlanCard()
+   AGREPL_Out( AGUI_TodoBlock( AGTODO_Get() ) )
+   hb_idleSleep( 0.15 )
+
+   AGREPL_Out( Chr(10) + AGUI_Color( "[" + cCheck + " Demo #" + ;
+      LTrim( Str( nPick ) ) + " OK ? " + hSc[ "title" ] + " ? " + ;
+      "help model provider tool skill tasks ctx lean goal plan todo " + ;
+      "write edit shell git ask permit error propose cost compact context]", ;
+      "92" ) + Chr(10) )
+   AGREPL_Out( AGUI_Color( "  Tip: vuelve a /demo para otro escenario al azar. " + ;
+      "Fichero de muestra: " + cFile, AGUI_Pal( "dim" ) ) + Chr(10) )
+
+   // restore session state
    s_cGoal        := cOldGoal
    s_lGoalLooping := lOldLoop
    s_aPlanSteps   := aOldPlan
+   AGTODO_Set( aOldTodos )
+   IF oPrompt != NIL
+      AGPROMPT_Redraw( oPrompt )
+   ENDIF
    RETURN NIL
 
 // /sh /git /clone: run a shell command directly (no LLM) and print it as a
@@ -2924,10 +3146,13 @@ FUNCTION AGREPL_BoxCursorSeq()
    RETURN Chr(27) + "[" + LTrim( Str( hReg[ "box_top" ] + 1 ) ) + ";" + ;
           LTrim( Str( 3 + hW[ "col" ] ) ) + "H"
 
-// Sets the Windows console to the UTF-8 code page (65001) so the model's
-// UTF-8 output renders, and enables virtual-terminal mode so ANSI colours
-// work. Returns .T. when VT mode was accepted (so the caller can decide
-// whether to colour output). Wrapped so a missing console API never aborts.
+// Prepares the console for UTF-8 + virtual-terminal (ANSI) output so colours
+// and the persistent prompt box work.
+//   Windows: kernel32 SetConsoleOutputCP(65001) + VIRTUAL_TERMINAL_PROCESSING.
+//   Linux / macOS / WSL: kernel32 is absent; modern terminals speak ANSI
+//   natively, so VT is enabled whenever we have an interactive console
+//   (or TERM is set, which every Unix terminal exports).
+// Returns .T. when colour/VT output should be used. Never aborts.
 STATIC FUNCTION AGREPL_InitConsole()
    LOCAL oErr, hOut, lVT := .F.
    BEGIN SEQUENCE WITH {| o | Break( o ) }
@@ -2943,8 +3168,22 @@ STATIC FUNCTION AGREPL_InitConsole()
          { HB_DYN_CTYPE_VOID_PTR, HB_DYN_CTYPE_LONG_UNSIGNED } }, hOut, 7 )
    RECOVER USING oErr
       HB_SYMBOL_UNUSED( oErr )
-      // console API unavailable -> leave the console as is
+      // kernel32 unavailable (Linux/macOS/native WSL, or no console).
+      // ANSI/VT is the native language of Unix terminals -- enable it so
+      // the box editor paints and typed characters are visible.
+      lVT := AGCON_HasConsole()
    END SEQUENCE
+   // dynCall can return .F. without throwing (DLL present, call rejected).
+   // When TERM is set we are almost certainly on a Unix-style terminal
+   // that understands ANSI; enable VT so the prompt box works there too.
+   IF lVT != .T. .AND. !Empty( hb_GetEnv( "TERM" ) )
+      lVT := .T.
+   ENDIF
+   // Put the TTY in raw mode immediately so the first keystrokes after
+   // the banner are not line-buffered / echoed by the kernel.
+   IF lVT == .T.
+      AGCON_RawMode( .T. )
+   ENDIF
    RETURN ( lVT == .T. )
 
 // Permission prompt for a tool in "ask" mode. Returns the typed answer

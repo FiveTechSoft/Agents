@@ -658,7 +658,7 @@ STATIC FUNCTION AGUI_PadCell( cText, nWidth, cAlign )
 // version in releasenotes.md and the Releases section of README.md, then
 // tag the commit v<x.y.z>. All four must stay in sync.
 FUNCTION AGUI_Version()
-   RETURN "0.8.28"
+   RETURN "2.0.0"
 
 // The pool of short usage tips shown on the banner and at the idle prompt.
 FUNCTION AGUI_Tips()
@@ -1146,7 +1146,7 @@ FUNCTION AGUI_Help()
           "  /plan [tarea]  generate a 3-6 step plan card (web Agents style)" + Chr(10) + ;
           "  /plan add|del|done|edit <n>  edit the plan steps" + Chr(10) + ;
           "  /run           execute the plan step by step (pauses on questions)" + Chr(10) + ;
-          "  /demo          showcase the card UI with sample content (no API)" + Chr(10) + ;
+          "  /demo          full random offline session (cards + most cmds, no API)" + Chr(10) + ;
           "  /sh <cmd>      run a shell command directly (also /shell /bash)" + Chr(10) + ;
           "  /git [args]    git passthrough (default: status); /clone <repo>" + Chr(10) + ;
           "  /key <secret>  save the API key (alias of /provider key)" + Chr(10) + ;
