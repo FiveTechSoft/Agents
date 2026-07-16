@@ -220,9 +220,10 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
       CASE hAction[ "type" ] == "empty"
          // nothing
       CASE hAction[ "type" ] == "exit"
+         AGREPL_DoExit( oPrompt )
          EXIT
       CASE hAction[ "type" ] == "help"
-         AGREPL_Out( AGUI_Help() + Chr(10) )
+         AGREPL_ShowHelp( oPrompt )
       CASE hAction[ "type" ] == "clear"
          AGREPL_ClearScreen( oPrompt )
          aMsgs := { { "role" => "system", "content" => AGUI_SystemPrompt() } }
@@ -435,9 +436,12 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
          ENDDO
       ENDCASE
    ENDDO
-   IF oPrompt != NIL
+   // Teardown if still mounted (e.g. EOF / Ctrl+C path). /exit already
+   // called AGREPL_DoExit which nils s_oBoxPrompt and tears down once.
+   IF oPrompt != NIL .AND. s_oBoxPrompt != NIL
       s_oBoxPrompt := NIL
       AGPROMPT_Teardown( oPrompt )
+      AGCON_RawMode( .F. )
    ENDIF
    RETURN NIL
 
@@ -2519,6 +2523,36 @@ STATIC FUNCTION AGREPL_ThinkPrintWrapped( cText, nWrap, oRender )
       AGREPL_Out( AGREPL_ThinkLine( cPrefix + cLine ) + Chr(10) )
       cPrefix := cPCont   // continuation lines use plain spaces
    ENDDO
+   RETURN NIL
+
+// /help: pin the prompt box to the floor (full scroll region), print the
+// command list, then repaint the box so the help text stays readable above
+// it. Without ForcePin the multi-line dump can land in a tiny mid-screen
+// scroll window and look like "/help does nothing".
+// /exit /quit: restore cooked TTY, drop the scroll region and prompt box,
+// print a short goodbye. Called before the REPL loop breaks so the shell
+// prompt is not left mid-box or with raw-mode still on.
+STATIC FUNCTION AGREPL_DoExit( oPrompt )
+   // Drop box routing first so the goodbye line is not trapped in the
+   // scroll region / cursor-restore path of AGREPL_Out.
+   s_oBoxPrompt := NIL
+   IF oPrompt != NIL
+      AGPROMPT_Teardown( oPrompt )
+   ENDIF
+   AGCON_RawMode( .F. )
+   FWrite( hb_GetStdOut(), Chr(27) + "[r" + Chr(10) + "[bye]" + Chr(10) )
+   RETURN NIL
+
+STATIC FUNCTION AGREPL_ShowHelp( oPrompt )
+   IF oPrompt != NIL
+      AGPROMPT_ForcePin( oPrompt )
+   ENDIF
+   AGREPL_Out( Chr(10) + AGUI_Color( "── /help ──", AGUI_Pal( "accent" ) ) + ;
+               Chr(10) )
+   AGREPL_Out( AGUI_Help() + Chr(10) )
+   IF oPrompt != NIL
+      AGPROMPT_Redraw( oPrompt )
+   ENDIF
    RETURN NIL
 
 // /demo -- full random offline session that showcases most cards and

@@ -5,16 +5,32 @@ STATIC s_lColor := .F.
 //   "type" => "exit"|"clear"|"help"|"init"|"model"|"cost"|"message"|"empty"
 //   "text" => the trimmed line, or the command argument for "model"
 FUNCTION AGUI_ParseCommand( cLine )
-   LOCAL cTrim := AllTrim( hb_CStr( cLine ) )
-   LOCAL cLow  := Lower( cTrim )
+   LOCAL cTrim := hb_CStr( cLine )
+   LOCAL cLow
+   // Normalize: drop CR/LF/TAB and UTF-8 BOM so "/help" from the box or
+   // paste always matches (AllTrim alone does not strip Chr(13)).
+   cTrim := StrTran( cTrim, Chr(13), "" )
+   cTrim := StrTran( cTrim, Chr(10), "" )
+   cTrim := StrTran( cTrim, Chr(9), " " )
+   IF Left( cTrim, 3 ) == Chr(239) + Chr(187) + Chr(191)
+      cTrim := SubStr( cTrim, 4 )
+   ENDIF
+   cTrim := AllTrim( cTrim )
+   cLow  := Lower( cTrim )
    DO CASE
    CASE Empty( cTrim )
       RETURN { "type" => "empty", "text" => "" }
-   CASE cLow == "/exit" .OR. cLow == "/quit"
+   // /exit, /quit, /bye (+ bare exit/quit/bye). Same action: leave the REPL.
+   CASE cLow == "/exit" .OR. Left( cLow, 6 ) == "/exit " .OR. ;
+        cLow == "/quit" .OR. Left( cLow, 6 ) == "/quit " .OR. ;
+        cLow == "/bye"  .OR. Left( cLow, 5 ) == "/bye "  .OR. ;
+        cLow == "exit"  .OR. cLow == "quit" .OR. cLow == "bye"
       RETURN { "type" => "exit", "text" => cTrim }
    CASE cLow == "/clear"
       RETURN { "type" => "clear", "text" => cTrim }
-   CASE cLow == "/help"
+   // /help, /help ..., help, ?
+   CASE cLow == "/help" .OR. Left( cLow, 6 ) == "/help " .OR. ;
+        cLow == "help" .OR. cLow == "?"
       RETURN { "type" => "help", "text" => cTrim }
    CASE cLow == "/init"
       RETURN { "type" => "init", "text" => "" }
@@ -658,7 +674,7 @@ STATIC FUNCTION AGUI_PadCell( cText, nWidth, cAlign )
 // version in releasenotes.md and the Releases section of README.md, then
 // tag the commit v<x.y.z>. All four must stay in sync.
 FUNCTION AGUI_Version()
-   RETURN "2.0.0"
+   RETURN "2.1.0"
 
 // The pool of short usage tips shown on the banner and at the idle prompt.
 FUNCTION AGUI_Tips()
@@ -945,7 +961,7 @@ FUNCTION AGUI_InputHint( nLines )
       cSuffix := "  " + Chr(226)+Chr(128)+Chr(162) + "  " + LTrim( Str( nLines ) ) + " lines"
    ENDIF
    RETURN AGUI_Color( "  /help for commands" + cSuffix + ;
-          "  " + Chr(226)+Chr(128)+Chr(162) + "  /exit to quit", AGUI_Pal( "dim" ) )
+          "  " + Chr(226)+Chr(128)+Chr(162) + "  /exit /quit /bye", AGUI_Pal( "dim" ) )
 
 // The text-column width available inside the input box. Adapts to the
 // current terminal width (AGREPL_Cols) minus a one-column safety margin
@@ -1177,5 +1193,5 @@ FUNCTION AGUI_Help()
           "  /rewind        undo the last conversation turn (double-tap Esc)" + Chr(10) + ;
           "  /rewind <N>    undo the last N turns" + Chr(10) + ;
           "  /btw <text>    interrupt the running turn; answer <text> next" + Chr(10) + ;
-          "  /exit          quit (alias: /quit)" + Chr(10) + ;
+          "  /exit          quit (aliases: /quit, /bye)" + Chr(10) + ;
           "Type anything else to talk to the assistant."

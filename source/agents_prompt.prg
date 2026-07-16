@@ -89,7 +89,9 @@ FUNCTION AGPROMPT_IsPlaceholder( cText )
 //   action "btw"   -> /btw line, text is the remainder (an interrupt)
 //   action "queue" -> a normal message to queue
 FUNCTION AGPROMPT_Classify( cLine )
-   LOCAL cTrim := AllTrim( hb_CStr( cLine ) )
+   LOCAL cTrim := hb_CStr( cLine )
+   cTrim := StrTran( StrTran( cTrim, Chr(13), "" ), Chr(10), "" )
+   cTrim := AllTrim( cTrim )
    IF Empty( cTrim )
       RETURN { "action" => "empty", "text" => "" }
    ENDIF

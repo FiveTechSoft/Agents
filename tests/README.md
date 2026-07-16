@@ -1,8 +1,16 @@
 # Tests E2E (Playwright)
 
-Black-box tests against the deployed Agents Web app (or a local build): page load,
+Black-box tests against the deployed Agents **Web** app (or a local build): page load,
 console errors, simulated shell, disk panel, slash-command cards, prompt history
 persistence and Markdown preview.
+
+## Layout 2.0
+
+| Path | Content |
+|------|---------|
+| `../source/` | Console Harbour sources |
+| `../docs/` | Web UI (GitHub Pages) |
+| `../agents` | Linux console binary (not used by these web tests) |
 
 ## Setup (once)
 
@@ -13,12 +21,14 @@ npx playwright install chromium firefox
 
 ## Run
 
+From the **repository root**:
+
 ```sh
 # against the live site (default: chromium)
 node tests/test-agents.mjs
 node tests/test-agents.mjs firefox
 
-# against a local build (serve docs/ first)
+# against a local build — serve docs/ first
 npx http-server docs -p 8123
 node tests/test-agents.mjs firefox http://127.0.0.1:8123/
 ```

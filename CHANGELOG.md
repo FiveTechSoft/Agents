@@ -1,21 +1,23 @@
 # Changelog
 
+## [2.1.0] ? 2026-07-16
+
+### Fixed
+- **`/help`**: normalize CR/LF/BOM so the command always matches; pin prompt box and redraw so the command list is visible above the TUI.
+- **`/exit` / `/quit` / `/bye`**: same robust parsing; clean terminal teardown (drop scroll region, restore cooked TTY) and print `[bye]`.
+- Accept bare `help`, `?`, `exit`, `quit`, `bye` as aliases.
+
+### Changed
+- `AGREPL_ShowHelp` / `AGREPL_DoExit` helpers for reliable slash-command UX in box mode.
+
 ## [2.0.0] ? 2026-07-16
 
 ### Highlights
-- **Harbour-standard keyboard** (hbIDE style): `Inkey()` + `hb_keyStd()` / `hb_keyChar()`; no more silent input on Linux/WSL.
-- **Linux build**: `gttrm` + **static** Harbour link; binary at repo root without `libharbour.so`.
-- **Repo layout 2.0**: binaries at root; `source/`, `android/`, `scripts/`, `screenshots/`, `.agents/`.
-- **`/demo`**: full random offline session (cards + most slash commands, no API key).
-- **`/help`**: complete command list (plan, goal, tools, skills, provider, tasks, loop, ?).
+- Harbour-standard keyboard (`Inkey` + `hb_keyStd` / `hb_keyChar`); Linux `gttrm` + static binary.
+- Repo layout 2.0: binaries at root; `source/`, `android/`, `scripts/`, `screenshots/`.
+- `/demo` full random offline session; `/help` command list.
+- Local `settings.json` gitignored (no API keys in tree).
 
-### Fixed
-- Prompt box did not show typed characters on Linux (`hb_keyVal` returned 0 for plain ASCII).
-- VT/ANSI enable path for non-Windows terminals so the persistent prompt box mounts.
-- Secrets: `.agents/settings.json` is gitignored; only `settings.example.json` is shipped (no API keys).
+## [0.8.28] ? previous
 
-### Changed
-- Build helpers: `./go.sh` / `source/go.sh` ? `./agents` at root.
-- README paths and repository layout section updated.
-
-## [0.8.28] ? previous console TUI baseline
+- Console TUI baseline with tools, skills, multi-agent dispatch.
