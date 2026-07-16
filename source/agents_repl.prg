@@ -73,6 +73,10 @@ STATIC s_nWorkAction := 0
 // to the input box, so the visible cursor stays inside the box.
 STATIC s_oBoxPrompt := NIL
 
+// .T. while we are on the terminal alternate screen buffer (DECSET
+// 1049). Leaving it on exit restores the previous shell contents.
+STATIC s_lAltScreen := .F.
+
 // .T. while the user has put the session in plan-mode (/plan). The permission
 // gate blocks write/edit/shell so the agent can plan freely without touching
 // the codebase. Cleared by /plan accept (proceed) or /plan cancel (drop).
@@ -86,6 +90,9 @@ STATIC s_lLeanMode := .F.
 // Index into the AGUI tip pool, advanced once per idle prompt so the idle
 // line cycles through the tips rather than always showing the same one.
 STATIC s_nTipIdx := 0
+
+// Startup notice (e.g. auto-switched to Ollama).
+STATIC s_cBootNote := ""
 
 // Program entry point. Optional cModel CLI argument overrides the settings model.
 FUNCTION Main( cModel )
@@ -101,12 +108,20 @@ FUNCTION Main( cModel )
    IF Empty( cModel )
       cModel := hSet[ "model" ]
    ENDIF
-   // No-key path: still start the REPL so the user can use /provider to
-   // configure a backend. The warning itself is printed BELOW the banner
-   // from inside AGREPL_Run (otherwise it would shift the banner down and
-   // throw off the dynamic-box header-row count).
+   // No-key path: if Ollama is running locally, use it automatically.
+   // Otherwise still start the REPL so the user can use /provider.
+   // The notice is printed BELOW the banner from inside AGREPL_Run.
    hCfg := AGCFG_Resolve( {=>} )
-   HB_SYMBOL_UNUSED( hCfg )
+   s_cBootNote := ""
+   IF Empty( hCfg[ "api_key" ] )
+      hCfg := AGCFG_AutoOllama( hSet )
+      IF hb_HGetDef( hCfg, "ok", .F. )
+         cModel := hCfg[ "model" ]
+         s_cBootNote := hCfg[ "message" ]
+         // reload settings after AutoOllama saved them
+         hSet := AGSETTINGS_Load()
+      ENDIF
+   ENDIF
    oClient := AG_Client( { "model" => cModel, "base_url" => hSet[ "base_url" ], ;
                            "timeout" => AGREPL_ApiTimeout( hSet ) } )
    oReg    := AGTOOLS_Registry( { ;
@@ -119,7 +134,8 @@ FUNCTION Main( cModel )
       AGREPL_Run( oClient, oReg, cModel, bGate, hSet[ "max_iterations" ] )
    RECOVER USING oErr
       AGCON_RawMode( .F. )   // restore the console if a crash happened mid-editor
-      AGREPL_Out( Chr(27) + "[r" )   // reset any VT scroll region the prompt set
+      s_oBoxPrompt := NIL
+      AGREPL_LeaveScreen()
       AGREPL_Out( Chr(10) + "Fatal: " + ;
               iif( ValType( oErr ) == "O", hb_CStr( oErr:Description ), "exception" ) + ;
               Chr(10) )
@@ -149,6 +165,9 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
    // overwrites the banner. Only do it in box mode; the cooked path streams
    // to a non-VT terminal where ESC[H/ESC[2J would print as literal junk.
    IF AGCON_HasConsole() .AND. AGUI_ColorOn()
+      // Alternate screen buffer: the shell scrollback stays intact and is
+      // restored on /exit /quit /bye (or any clean leave).
+      AGREPL_EnterScreen()
       AGREPL_Out( Chr(27) + "[H" + Chr(27) + "[2J" )
    ENDIF
    AGREPL_Out( cBanner )
@@ -166,10 +185,15 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
       AGPROMPT_Activate( oPrompt, nHeaderRows + 1 )
       s_oBoxPrompt := oPrompt
    ENDIF
-   // Surface the no-key warning AFTER the banner so the banner is not
-   // pushed off the top row and the dynamic-box content-row counter
-   // remains correct. The warning lives in the scrollable content area.
-   IF Empty( AGCFG_Resolve( {=>} )[ "api_key" ] )
+   // Surface boot notes AFTER the banner so the banner is not pushed off
+   // the top row. Lives in the scrollable content area.
+   IF ! Empty( s_cBootNote )
+      AGREPL_Out( AGUI_Color( s_cBootNote, AGUI_Pal( "accent" ) ) + Chr(10) )
+      // Banner already showed the old model if paint raced; re-state model.
+      AGREPL_Out( AGUI_Color( "[model -> " + cModel + "]", ;
+                              AGUI_Pal( "accent" ) ) + Chr(10) )
+      s_cBootNote := ""
+   ELSEIF Empty( AGCFG_Resolve( {=>} )[ "api_key" ] )
       AGREPL_Out( AGUI_Color( "[no API key configured -- type /provider to " + ;
                               "set up a backend (deepseek/glm/moonshot/openai/" + ;
                               "ollama), or export DEEPSEEK_API_KEY before " + ;
@@ -303,7 +327,19 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
       CASE hAction[ "type" ] == "run"
          AGREPL_RunPlan( @aMsgs, oClient, oReg, cModel, bGate, nMaxIter, oPrompt )
       CASE hAction[ "type" ] == "demo"
-         AGREPL_Demo( oReg, oPrompt, cModel, aMsgs )
+         IF oPrompt != NIL
+            AGPROMPT_ForcePin( oPrompt )
+         ENDIF
+         BEGIN SEQUENCE WITH {| o | Break( o ) }
+            AGREPL_Demo( oReg, oPrompt, cModel, aMsgs )
+         RECOVER USING oErr
+            AGREPL_Out( AGUI_Color( "[demo error: " + ;
+               iif( ValType( oErr ) == "O", hb_CStr( oErr:Description ), ;
+                    "exception" ) + "]", AGUI_Pal( "error" ) ) + Chr(10) )
+         END SEQUENCE
+         IF oPrompt != NIL
+            AGPROMPT_Redraw( oPrompt )
+         ENDIF
       CASE hAction[ "type" ] == "shx"
          AGREPL_ShellCmd( hAction[ "text" ], oReg )
       CASE hAction[ "type" ] == "gitx"
@@ -436,11 +472,10 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
          ENDDO
       ENDCASE
    ENDDO
-   // Teardown if still mounted (e.g. EOF / Ctrl+C path). /exit already
-   // called AGREPL_DoExit which nils s_oBoxPrompt and tears down once.
-   IF oPrompt != NIL .AND. s_oBoxPrompt != NIL
-      s_oBoxPrompt := NIL
-      AGPROMPT_Teardown( oPrompt )
+   // EOF / natural end: same full restore as /exit if still active.
+   IF s_oBoxPrompt != NIL .OR. s_lAltScreen
+      AGREPL_DoExit( oPrompt )
+   ELSE
       AGCON_RawMode( .F. )
    ENDIF
    RETURN NIL
@@ -1992,42 +2027,120 @@ STATIC FUNCTION AGREPL_ApplyAutoSkills( cMsg, aMsgs, oPrompt )
 // Idles on the persistent box until the user submits a line (Enter on a
 // non-empty buffer, or a /btw line). Returns the submitted text, or loops
 // on a bare Esc.
+// Idle prompt: pure Harbour Inkey(0) via AGCON_ReadKey.
+// Enter submits. Empty Enter (incl. 2nd half of CRLF) is ignored. No peeks.
 STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
-   LOCAL cAction, cText, nKey
+   LOCAL nKey, cBuf, oEd, cCh, cHist
    AGCON_RawMode( .T. )
    DO WHILE .T.
-      // Block for one key, then let Poll drain any burst that arrived with it.
-      // ReadKey is blocking; this avoids the KeyPending/WaitKey dance that
-      // could desync under WSL.
       nKey := AGCON_ReadKey()
       IF nKey == 0
          RETURN NIL
       ENDIF
-      // Push the key back into the pending slot so Poll sees it.
-      AGCON_PushKey( nKey )
-      cAction := AGPROMPT_Poll( oPrompt )
-      IF cAction == "queued"
-         RETURN AGPROMPT_Dequeue( oPrompt )
-      ELSEIF cAction == "interrupt"
-         IF oPrompt[ "interrupt" ][ "kind" ] == "btw" .AND. ;
-            !Empty( oPrompt[ "interrupt" ][ "text" ] )
-            cText := oPrompt[ "interrupt" ][ "text" ]
-            oPrompt[ "interrupt" ] := NIL
-            RETURN cText
+
+      // Enter -> submit line
+      IF nKey == -1 .OR. nKey == 13 .OR. nKey == 10
+         oEd := oPrompt[ "editor" ]
+         cBuf := ""
+         IF ValType( oEd ) == "H"
+            cBuf := AllTrim( StrTran( StrTran( hb_CStr( oEd[ "buf" ] ), Chr(13), "" ), Chr(10), "" ) )
          ENDIF
-         IF oPrompt[ "interrupt" ][ "kind" ] == "rewind"
-            oPrompt[ "interrupt" ] := NIL
-            RETURN "/rewind"
-         ENDIF
+         oPrompt[ "editor" ] := AGIN_New( "" )
          oPrompt[ "interrupt" ] := NIL
+         IF hb_HHasKey( oPrompt, "paste" )
+            hb_HDel( oPrompt, "paste" )
+         ENDIF
+         AGPROMPT_Redraw( oPrompt )
+         IF Empty( cBuf )
+            LOOP
+         ENDIF
+         AGIN_HistoryAdd( cBuf )
+         RETURN cBuf
       ENDIF
+
+      oEd := oPrompt[ "editor" ]
+      IF ValType( oEd ) != "H"
+         oEd := AGIN_New( "" )
+         oPrompt[ "editor" ] := oEd
+      ENDIF
+
+      // Esc -> double-tap rewind (via Poll) or ignore
+      IF nKey == -13
+         AGCON_PushKey( nKey )
+         IF AGPROMPT_Poll( oPrompt ) == "interrupt"
+            IF oPrompt[ "interrupt" ] != NIL .AND. ;
+               hb_HGetDef( oPrompt[ "interrupt" ], "kind", "" ) == "rewind"
+               oPrompt[ "interrupt" ] := NIL
+               RETURN "/rewind"
+            ENDIF
+            oPrompt[ "interrupt" ] := NIL
+         ENDIF
+         LOOP
+      ENDIF
+
+      IF AGIN_HasSuggestion( oEd )
+         IF nKey == -12
+            AGIN_ClearSuggestion( oEd )
+            oEd[ "cursor" ] := hb_UTF8Len( oEd[ "buf" ] )
+            AGPROMPT_Redraw( oPrompt )
+            LOOP
+         ENDIF
+         IF nKey == -2 .OR. nKey == -7
+            AGIN_ClearSuggestion( oEd )
+            oEd[ "buf" ] := ""
+            oEd[ "cursor" ] := 0
+            AGPROMPT_Redraw( oPrompt )
+            LOOP
+         ENDIF
+         IF nKey > 0 .OR. nKey == -11 .OR. nKey == -9 .OR. nKey == -10
+            AGIN_ClearSuggestion( oEd )
+            oEd[ "buf" ] := ""
+            oEd[ "cursor" ] := 0
+         ENDIF
+      ENDIF
+
+      DO CASE
+      CASE nKey == -2
+         AGIN_Backspace( oEd )
+      CASE nKey == -3
+         AGIN_Left( oEd )
+      CASE nKey == -4
+         AGIN_Right( oEd )
+      CASE nKey == -5
+         AGIN_Home( oEd )
+      CASE nKey == -6
+         AGIN_End( oEd )
+      CASE nKey == -7
+         AGIN_Delete( oEd )
+      CASE nKey == -9
+         cHist := AGIN_HistoryPrev( oEd[ "buf" ] )
+         IF cHist != NIL
+            oEd[ "buf" ] := cHist
+            oEd[ "cursor" ] := hb_UTF8Len( cHist )
+         ENDIF
+      CASE nKey == -10
+         cHist := AGIN_HistoryNext( oEd[ "buf" ] )
+         IF cHist != NIL
+            oEd[ "buf" ] := cHist
+            oEd[ "cursor" ] := hb_UTF8Len( cHist )
+         ENDIF
+      CASE nKey == -11
+         AGIN_Insert( oEd, Chr(10) )
+      CASE nKey > 0
+         cCh := AGCON_PrintableText( nKey )
+         IF Empty( cCh )
+            cCh := AGIN_Utf8Chr( nKey )
+         ENDIF
+         IF !Empty( cCh )
+            AGIN_Insert( oEd, cCh )
+         ENDIF
+      ENDCASE
+      oPrompt[ "editor" ] := oEd
+      AGPROMPT_Redraw( oPrompt )
    ENDDO
    RETURN NIL
 
-// Wipes the terminal screen for /clear. Skipped when there is no console or
-// colour/VT output is off (piped input) -- the escape bytes would be garbage.
-// When the persistent box is mounted, ESC[2J also clears it, so the box and
-// its scroll region are rebuilt with AGPROMPT_Activate.
+
 STATIC FUNCTION AGREPL_ClearScreen( oPrompt )
    IF !AGCON_HasConsole() .OR. !AGUI_ColorOn()
       RETURN NIL
@@ -2532,16 +2645,59 @@ STATIC FUNCTION AGREPL_ThinkPrintWrapped( cText, nWrap, oRender )
 // /exit /quit: restore cooked TTY, drop the scroll region and prompt box,
 // print a short goodbye. Called before the REPL loop breaks so the shell
 // prompt is not left mid-box or with raw-mode still on.
+// Switch to the terminal alternate screen buffer (xterm/Windows Terminal
+// DECSET 1049). The primary buffer -- shell prompt and scrollback -- is
+// preserved until AGREPL_LeaveScreen.
+STATIC FUNCTION AGREPL_EnterScreen()
+   IF s_lAltScreen
+      RETURN NIL
+   ENDIF
+   IF !AGUI_ColorOn()
+      RETURN NIL
+   ENDIF
+   // 1049h = alt screen + save cursor; ?25h ensure cursor is on for the TUI
+   FWrite( hb_GetStdOut(), Chr(27) + "[?1049h" + Chr(27) + "[?25h" )
+   s_lAltScreen := .T.
+   RETURN NIL
+
+// Leave the alternate screen, reset scroll region / SGR / cursor, and hand
+// the terminal back with the previous contents restored.
+STATIC FUNCTION AGREPL_LeaveScreen()
+   LOCAL cSeq
+   // Always restore keyboard first
+   AGCON_RawMode( .F. )
+   cSeq := ""
+   // Reset scroll region, SGR, show cursor
+   cSeq += Chr(27) + "[r"
+   cSeq += Chr(27) + "[0m"
+   cSeq += Chr(27) + "[?25h"
+   IF s_lAltScreen
+      // Exit alternate screen -- restores the previous buffer
+      cSeq += Chr(27) + "[?1049l"
+      s_lAltScreen := .F.
+   ELSE
+      // No alt buffer: clear the visible screen so Agents does not leave
+      // a half-drawn TUI behind the shell prompt.
+      cSeq += Chr(27) + "[H" + Chr(27) + "[2J" + Chr(27) + "[3J"
+   ENDIF
+   FWrite( hb_GetStdOut(), cSeq )
+   RETURN NIL
+
 STATIC FUNCTION AGREPL_DoExit( oPrompt )
-   // Drop box routing first so the goodbye line is not trapped in the
-   // scroll region / cursor-restore path of AGREPL_Out.
+   // Tear down TUI and restore terminal, then force process exit.
    s_oBoxPrompt := NIL
    IF oPrompt != NIL
-      AGPROMPT_Teardown( oPrompt )
+      IF ! s_lAltScreen
+         AGPROMPT_Teardown( oPrompt )
+      ELSE
+         FWrite( hb_GetStdOut(), Chr(27) + "[r" )
+      ENDIF
    ENDIF
    AGCON_RawMode( .F. )
-   FWrite( hb_GetStdOut(), Chr(27) + "[r" + Chr(10) + "[bye]" + Chr(10) )
+   AGREPL_LeaveScreen()
+   QUIT
    RETURN NIL
+
 
 STATIC FUNCTION AGREPL_ShowHelp( oPrompt )
    IF oPrompt != NIL
@@ -2568,6 +2724,10 @@ STATIC FUNCTION AGREPL_Demo( oReg, oPrompt, cModel, aMsgs )
    LOCAL cTitle, aLines
 
    HB_SYMBOL_UNUSED( aMsgs )
+
+   IF oPrompt != NIL
+      AGPROMPT_ForcePin( oPrompt )
+   ENDIF
 
    cCorner := "  " + Chr(226)+Chr(142)+Chr(191) + "  "
    cCheck  := Chr(226)+Chr(156)+Chr(147)

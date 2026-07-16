@@ -312,10 +312,14 @@ FUNCTION AGPROMPT_Redraw( oPrompt )
 // placeholder swaps the real content back in transparently.
 FUNCTION AGPROMPT_Poll( oPrompt )
    LOCAL oEd := oPrompt[ "editor" ], nKey, hC, cAction := "none", lDrained := .F.
-   LOCAL cHist, nNow, lBurst := .F., nLines, cSubmit, cPlaceholder
+   LOCAL cHist, nNow, lBurst := .F., nLines, cSubmit, cPlaceholder, nNext
    DO WHILE AGCON_KeyPending()
       lDrained := .T.
       nKey := AGCON_ReadKey()
+      // Safety: never treat raw CR/LF as printable insert
+      IF nKey == 13 .OR. nKey == 10
+         nKey := -1
+      ENDIF
       nNow := hb_milliseconds()
       IF s_nLastKeyMs > 0 .AND. ( nNow - s_nLastKeyMs ) < 50
          lBurst := .T.
@@ -325,12 +329,6 @@ FUNCTION AGPROMPT_Poll( oPrompt )
       // be back-to-back, not Esc+other+Esc many seconds later
       IF nKey != -13 .AND. s_nLastEscMs > 0
          s_nLastEscMs := 0
-      ENDIF
-      // Enter inside a paste burst becomes a newline: many editors send LF
-      // mid-paste and the user does not want to submit half a paste
-      IF lBurst .AND. nKey == -1
-         AGIN_Insert( oEd, Chr(10) )
-         LOOP
       ENDIF
       // when a suggestion is active, the next key either accepts it (Tab/Enter)
       // or cancels it (any edit). Tab/Backspace/Delete are handled here in full;
@@ -440,6 +438,9 @@ FUNCTION AGPROMPT_Poll( oPrompt )
       ENDIF
       // After Enter queued a message, stop draining so the REPL can run it
       IF cAction == "queued"
+         // Ensure the box shows empty after submit (Enter path may skip
+         // the per-key redraw when nKey == -1).
+         AGPROMPT_Redraw( oPrompt )
          EXIT
       ENDIF
    ENDDO

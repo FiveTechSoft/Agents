@@ -48,7 +48,7 @@ FUNCTION AGUI_ParseCommand( cLine )
       RETURN { "type" => "plan", "text" => AllTrim( SubStr( cTrim, 6 ) ) }
    CASE cLow == "/run"
       RETURN { "type" => "run", "text" => "" }
-   CASE cLow == "/demo"
+   CASE cLow == "/demo" .OR. Left( cLow, 6 ) == "/demo " .OR. cLow == "demo"
       RETURN { "type" => "demo", "text" => "" }
    CASE cLow == "/sh" .OR. Left( cLow, 4 ) == "/sh " .OR. ;
         cLow == "/shell" .OR. Left( cLow, 7 ) == "/shell " .OR. ;
@@ -674,7 +674,7 @@ STATIC FUNCTION AGUI_PadCell( cText, nWidth, cAlign )
 // version in releasenotes.md and the Releases section of README.md, then
 // tag the commit v<x.y.z>. All four must stay in sync.
 FUNCTION AGUI_Version()
-   RETURN "2.1.0"
+   RETURN "2.2.0"
 
 // The pool of short usage tips shown on the banner and at the idle prompt.
 FUNCTION AGUI_Tips()

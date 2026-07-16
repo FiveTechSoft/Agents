@@ -56,11 +56,23 @@ STATIC FUNCTION _MapRaw( nRaw )
    IF nRaw == 0
       RETURN 0
    ENDIF
+   // Enter FIRST -- raw codes before keyStd/keyChar can mis-classify them.
+   // 13 = CR, 10 = LF, K_ENTER = 13. Always submit (-1). Ctrl+Enter = newline.
+   IF nRaw == 13 .OR. nRaw == 10 .OR. nRaw == K_ENTER
+      nMod := hb_keyMod( nRaw )
+      IF hb_bitAnd( nMod, HB_GTI_KBD_CTRL ) != 0
+         RETURN -11
+      ENDIF
+      RETURN -1
+   ENDIF
    nStd := hb_keyStd( nRaw )
    nMod := hb_keyMod( nRaw )
    DO CASE
-   CASE nStd == K_ENTER
-      RETURN iif( hb_bitAnd( nMod, HB_GTI_KBD_SHIFT ) != 0, -11, -1 )
+   CASE nStd == K_ENTER .OR. nStd == 10
+      IF hb_bitAnd( nMod, HB_GTI_KBD_CTRL ) != 0
+         RETURN -11
+      ENDIF
+      RETURN -1
    CASE nStd == K_BS     ; RETURN -2
    CASE nStd == K_LEFT   ; RETURN -3
    CASE nStd == K_RIGHT  ; RETURN -4
@@ -77,6 +89,10 @@ STATIC FUNCTION _MapRaw( nRaw )
    // Printable: hbIDE inserts with hb_keyChar(nKey), never hb_keyVal()
    cKey := hb_keyChar( nRaw )
    IF ! Empty( cKey )
+      // Never insert CR/LF as text -- always submit
+      IF cKey == Chr(13) .OR. cKey == Chr(10) .OR. Left( cKey, 1 ) == Chr(13)
+         RETURN -1
+      ENDIF
       s_cLastChar := cKey
       nCP := hb_UCode( cKey )
       IF nCP <= 0
@@ -106,25 +122,44 @@ FUNCTION AGCON_KeyText()
 
 /* Resolve what to insert for a positive AGCON code. */
 FUNCTION AGCON_PrintableText( nKey )
+   // If last MapRaw stored text for THIS codepoint, use it (UTF-8 safe).
+   // Otherwise derive from the numeric code so PushKey/pending paths work
+   // even when s_cLastChar is stale or empty.
+   IF ValType( nKey ) != "N" .OR. nKey <= 0
+      RETURN ""
+   ENDIF
    IF ! Empty( s_cLastChar )
-      RETURN s_cLastChar
+      // Accept only if it matches the codepoint (avoid stale char after pending)
+      IF hb_UCode( s_cLastChar ) == nKey .OR. Asc( s_cLastChar ) == nKey
+         RETURN s_cLastChar
+      ENDIF
    ENDIF
-   IF ValType( nKey ) == "N" .AND. nKey > 0
-      RETURN AGIN_Utf8Chr( nKey )
-   ENDIF
-   RETURN ""
+   RETURN AGIN_Utf8Chr( nKey )
 
 /* Push one already-mapped key so the next ReadKey/Poll sees it. */
 FUNCTION AGCON_PushKey( nKey )
    s_nPending := nKey
    RETURN NIL
 
-/* Non-blocking peek of one raw key -> mapped, or NIL. */
+/* Non-blocking: one raw key -> mapped, or NIL.
+ * CRITICAL: must never block. Inkey(0) waits forever; that made
+ * AGCON_KeyPending hang after Enter (no trailing LF yet) and broke
+ * single-Enter /exit and every Poll drain when the queue was empty. */
 STATIC FUNCTION _ReadKeyNB()
    LOCAL nRaw
    _Init()
+   // Peek first -- NextKey does not wait
+   nRaw := NextKey( AGCON_INKEY_MASK )
+   IF nRaw == 0
+      RETURN NIL
+   ENDIF
+   // Consume the peeked key
    nRaw := Inkey( 0, AGCON_INKEY_MASK )
    DO WHILE nRaw == HB_K_RESIZE
+      nRaw := NextKey( AGCON_INKEY_MASK )
+      IF nRaw == 0
+         RETURN NIL
+      ENDIF
       nRaw := Inkey( 0, AGCON_INKEY_MASK )
    ENDDO
    IF nRaw == 0
@@ -145,7 +180,6 @@ FUNCTION AGCON_ReadKey()
       RETURN nKey
    ENDIF
    DO WHILE .T.
-      // Blocking wait -- same as hbIDE Activate() loop
       nRaw := Inkey( 0, AGCON_INKEY_MASK )
       IF nRaw == 0
          RETURN 0
@@ -173,6 +207,10 @@ FUNCTION AGCON_WaitKey( nMs )
    ENDIF
    nRaw := Inkey( nSec, AGCON_INKEY_MASK )
    DO WHILE nRaw == HB_K_RESIZE
+      // Non-blocking: do not hang if only a resize was pending
+      IF NextKey( AGCON_INKEY_MASK ) == 0
+         RETURN .F.
+      ENDIF
       nRaw := Inkey( 0, AGCON_INKEY_MASK )
    ENDDO
    IF nRaw == 0

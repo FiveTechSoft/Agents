@@ -96,3 +96,96 @@ FUNCTION AGCFG_ResolveKey( cEnvName, cSettingKey, hSettings )
       RETURN hSettings[ cSettingKey ]
    ENDIF
    RETURN ""
+// When no cloud API key is set, probe the local Ollama daemon. If it answers,
+// switch settings to Ollama (placeholder api_key, localhost base_url, a
+// pulled model) and return a short status hash. Caller should rebuild the
+// client with the new base_url / model.
+//
+// Returns: { ok, model, base_url, message }  or  { ok => .F. }
+FUNCTION AGCFG_AutoOllama( hSet )
+   LOCAL hHttp, xJson, aList, hM, cName, cPick := ""
+   LOCAL aPrefer, cPref, cBase, i, n
+   LOCAL cUrl := "http://127.0.0.1:11434/api/tags"
+
+   IF ValType( hSet ) != "H"
+      hSet := AGSETTINGS_Load()
+   ENDIF
+
+   // Short timeout: if Ollama is not up we must not delay startup.
+   hHttp := AGHTTP_Fetch( { "url" => cUrl, "timeout" => 2 } )
+   IF ! hb_HGetDef( hHttp, "ok", .F. )
+      RETURN { "ok" => .F. }
+   ENDIF
+   n := hb_HGetDef( hHttp, "status", 0 )
+   IF n < 200 .OR. n >= 300
+      RETURN { "ok" => .F. }
+   ENDIF
+
+   xJson := hb_jsonDecode( hb_HGetDef( hHttp, "body", "" ) )
+   aList := {}
+   IF ValType( xJson ) == "H" .AND. hb_HHasKey( xJson, "models" ) .AND. ;
+      ValType( xJson[ "models" ] ) == "A"
+      FOR EACH hM IN xJson[ "models" ]
+         IF ValType( hM ) == "H"
+            cName := hb_HGetDef( hM, "name", hb_HGetDef( hM, "model", "" ) )
+            IF ! Empty( cName )
+               AAdd( aList, cName )
+            ENDIF
+         ENDIF
+      NEXT
+   ENDIF
+
+   // Prefer the model already in settings if Ollama has it.
+   cName := hb_HGetDef( hSet, "model", "" )
+   IF ! Empty( cName )
+      FOR i := 1 TO Len( aList )
+         IF Lower( aList[ i ] ) == Lower( cName ) .OR. ;
+            Left( Lower( aList[ i ] ), Len( cName ) + 1 ) == Lower( cName ) + ":"
+            cPick := aList[ i ]
+            EXIT
+         ENDIF
+      NEXT
+   ENDIF
+
+   // Then prefer models known to work well with tool_calls.
+   IF Empty( cPick )
+      aPrefer := { "llama3.1:8b", "llama3.1", "mistral-nemo", ;
+                   "command-r", "llama3.2", "llama3", "mistral", ;
+                   "phi3", "gemma2", "qwen2.5" }
+      FOR EACH cPref IN aPrefer
+         FOR i := 1 TO Len( aList )
+            IF Lower( aList[ i ] ) == Lower( cPref ) .OR. ;
+               Left( Lower( aList[ i ] ), Len( cPref ) + 1 ) == Lower( cPref ) + ":" .OR. ;
+               Left( Lower( aList[ i ] ), Len( cPref ) ) == Lower( cPref )
+               cPick := aList[ i ]
+               EXIT
+            ENDIF
+         NEXT
+         IF ! Empty( cPick )
+            EXIT
+         ENDIF
+      NEXT
+   ENDIF
+
+   // Any installed model, else the preset default (user must pull it).
+   IF Empty( cPick ) .AND. Len( aList ) > 0
+      cPick := aList[ 1 ]
+   ENDIF
+   IF Empty( cPick )
+      cPick := "llama3.1:8b"
+   ENDIF
+
+   cBase := "http://localhost:11434/v1"
+   hSet[ "base_url" ] := cBase
+   hSet[ "model" ]    := cPick
+   // Placeholder key: AG_ChatCompletion rewrites the header for Ollama URLs.
+   IF Empty( hb_HGetDef( hSet, "api_key", "" ) )
+      hSet[ "api_key" ] := "ollama"
+   ENDIF
+   AGSETTINGS_Save( hSet )
+
+   RETURN { "ok" => .T., ;
+            "model" => cPick, ;
+            "base_url" => cBase, ;
+            "message" => "[no API key -- Ollama is running; switched to model " + ;
+                           cPick + " @ " + cBase + "]" }

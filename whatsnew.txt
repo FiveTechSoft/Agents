@@ -1,6 +1,12 @@
 Agents ? What's new
 ===================
 
+v2.2.0 (2026-07-16)
+-------------------
+* Single Enter submits slash commands (/exit, /help, …); no hang after CR.
+* No API key + Ollama running -> auto-switch to local model (notice on start).
+* Windows agents.exe + Linux agents rebuilt.
+
 v2.1.0 (2026-07-16)
 -------------------
 * /help reliable in prompt box (parse + pin/redraw).

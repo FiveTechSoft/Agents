@@ -7,7 +7,7 @@
 *Streaming chat, 17 built-in tools, skills system, multi-agent dispatch.
 One engine, three platforms. Written 100% in Harbour.*
 
-**Version 2.1.0**
+**Version 2.2.0**
 
 **Web:** https://fivetechsoft.github.io/Agents/
 
@@ -35,7 +35,7 @@ The core agent engine (ReAct loop + tool-calling + streaming SSE) is shared acro
 | **Transport** | `fetch()` (browser) | curl subprocess | Java `HttpsURLConnection` |
 | **Storage** | IndexedDB + GitHub sync | Local filesystem | App private storage |
 | **Concurrency** | Web Workers | Single-thread | Harbour MT threads |
-| **Binary / size** | ~500 KB (HTML+JS+Wasm) | ~2.2 MB Linux static / ~1.3 MB Windows | ~773 KB APK |
+| **Binary / size** | ~500 KB (HTML+JS+Wasm) | ~2.2 MB Linux static / ~2.0 MB Windows | ~773 KB APK |
 | **Runtimes** | Python, PHP, C, SQLite | Native shell | Shell via `/sh` |
 | **Keyboard (console)** | — | Harbour GT: `Inkey` + `hb_keyStd` / `hb_keyChar` | Soft keyboard |
 
@@ -244,7 +244,7 @@ Wiki: https://github.com/FiveTechSoft/Agents/wiki/Class-Agent
 | `agents_settings.prg` | Load/save `.agents/settings.json` |
 | `go.sh` / `go.bat` | One-shot build helpers |
 
-Version string: `AGUI_Version()` in `agents_ui.prg` (currently **2.1.0**).
+Version string: `AGUI_Version()` in `agents_ui.prg` (currently **2.2.0**).
 
 ---
 
