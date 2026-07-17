@@ -2294,11 +2294,14 @@ STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
       CASE nKey == -11
          AGIN_Insert( oEd, Chr(10) )
       CASE nKey > 0
+         // Use Len(), never Empty(): Empty(" ") is .T. in Harbour, so the
+         // space bar (codepoint 32) produced a valid " " that this guard
+         // then discarded -- the space key did nothing while typing.
          cCh := AGCON_PrintableText( nKey )
-         IF Empty( cCh )
+         IF Len( cCh ) == 0
             cCh := AGIN_Utf8Chr( nKey )
          ENDIF
-         IF !Empty( cCh )
+         IF Len( cCh ) > 0
             AGIN_Insert( oEd, cCh )
          ENDIF
       ENDCASE
