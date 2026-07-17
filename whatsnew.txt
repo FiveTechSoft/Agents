@@ -1,6 +1,17 @@
 Agents ? What's new
 ===================
 
+v2.4.7 (2026-07-17)
+-------------------
+* FIX space bar dropped while typing: the box editor guarded the insert
+  with !Empty(cCh), and Empty(" ") is .T. in Harbour, so the space key
+  (codepoint 32) mapped correctly then got discarded -- multi-word prompts
+  were impossible. Guard on Len() now.
+* FIX queued slash commands: a /exit, /save or /clear typed while the model
+  was answering went to the model as a chat message instead of executing.
+  The post-turn drain now re-parses each queued line and runs commands
+  through the normal command path.
+
 v2.4.6 (2026-07-17)
 -------------------
 * FIX interactive freeze: Inkey(0.001) still blocked forever (Harbour clamps
