@@ -496,6 +496,14 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
             IF Empty( cMsg )
                EXIT
             ENDIF
+            // A queued SLASH COMMAND (/exit, /clear, /save…) must run as a
+            // command, not go to the model as a chat message. Put it back
+            // at the front of the FIFO and leave the drain: PromptIdle pops
+            // the queue before blocking, so the main loop parses it next.
+            IF !( AGUI_ParseCommand( cMsg )[ "type" ] $ "message|init" )
+               hb_AIns( oPrompt[ "queue" ], 1, cMsg, .T. )
+               EXIT
+            ENDIF
             // User line is shown by RunTurn (wait → > msg + time → reply)
             IF oPrompt != NIL
                AGPROMPT_Redraw( oPrompt )
@@ -2186,6 +2194,11 @@ STATIC FUNCTION AGREPL_BusyPoll( oPrompt )
 STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
    LOCAL nKey, cBuf, oEd, cCh, cHist
    AGCON_RawMode( .T. )
+   // Queued lines left over from the mid-turn FIFO (e.g. a /exit typed
+   // while the model was answering) run before blocking for new keys.
+   IF AGPROMPT_QueueLen( oPrompt ) > 0
+      RETURN AGPROMPT_Dequeue( oPrompt )
+   ENDIF
    DO WHILE .T.
       nKey := AGCON_ReadKey()
       IF nKey == 0
