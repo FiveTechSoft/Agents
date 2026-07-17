@@ -76,6 +76,11 @@ FUNCTION AG_AgentRun( oClient, aMessages, hOpts, bOnEvent )
       IF hb_HHasKey( hOpts, "max_tokens" )
          hChatParams[ "max_tokens" ] := hOpts[ "max_tokens" ]
       ENDIF
+      // Heartbeat while curl waits for SSE (Ollama reasoning can be silent
+      // 30-90s). Ticks "Working Xs" and accepts Esc / mid-turn typed lines.
+      IF hb_HHasKey( hOpts, "on_idle" ) .AND. ValType( hOpts[ "on_idle" ] ) == "B"
+         hChatParams[ "on_idle" ] := hOpts[ "on_idle" ]
+      ENDIF
 
       hChat := AG_ChatCompletion( oClient, aMsgs, hChatParams, bOnEvent )
 

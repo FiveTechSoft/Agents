@@ -1,50 +1,63 @@
 // HTTP transport for the DeepSeek client.
 //
-// Transport path: curl subprocess (NOT hbcurl).
-// The installed hbcurl contrib exposes no per-chunk Harbour write callback
-// -- HB_CURLOPT_WRITEFUNCTION is hidden at the Harbour level (see
-// contrib/hbcurl/core.c: only file/fhandle/buffer download setups exist).
-// Real incremental streaming therefore uses the libcurl CLI: curl is
-// spawned per request, the body is fed to its stdin, and its stdout is read
-// chunk-by-chunk. curl ships with Windows 10/11 (system32). Each call
-// spawns its own process -> pool-safe, no shared state.
+// curl CLI subprocess (not hbcurl). Interactive-safe on Windows:
+//
+//   * Body on disk (--data-binary @file) — no stdin pipe deadlock.
+//   * Response on STDOUT pipe.
+//   * NEVER block on FRead unless PeekNamedPipe says bytes are waiting.
+//   * When the pipe is empty: run on_idle (spinner + keyboard) + sleep.
+//   * Process liveness via GetExitCodeProcess (STILL_ACTIVE=259).
+//   * NO reader threads — they deadlock with Harbour GT on this build.
+//
+// Verified: blocking FRead works; threaded reader hung; Peek+idle produces
+// dots while waiting and stars for each chunk.
 
 #include "fileio.ch"
+#include "hbdyn.ch"
 
-// Module-level test transport. When set (and no per-request transport is
-// given), AGHTTP_Fetch routes through it instead of curl. Tests only.
 STATIC s_bTestTransport := NIL
 
-// Performs a streaming POST. hReq: { url, headers (array of "K: V"), body, timeout }.
-// bOnChunk is called with each received raw text chunk.
-// bTransport (optional codeblock {|hReq,bOnChunk| -> hResult }) overrides curl;
-// when NIL the real curl transport (AGHTTP_CurlPost) is used.
-// Returns: { ok, status, curl_code, error }
+#define AGHTTP_STILL_ACTIVE  259
+
+// Normalizes an hb_dynCall BOOL result. The call may return a logical OR
+// a numeric depending on the ABI wrapper; comparing a logical against a
+// number ("xOk == 1") throws BASE/1 Argument error in Harbour — that
+// crash killed /plan whenever PeekNamedPipe failed on a closed pipe.
+STATIC FUNCTION AGHTTP_DynBool( xVal )
+   DO CASE
+   CASE ValType( xVal ) == "L" ; RETURN xVal
+   CASE ValType( xVal ) == "N" ; RETURN xVal != 0
+   ENDCASE
+   RETURN .F.
+
 FUNCTION AGHTTP_Post( hReq, bOnChunk, bTransport )
    IF bTransport != NIL
       RETURN Eval( bTransport, hReq, bOnChunk )
    ENDIF
    RETURN AGHTTP_CurlPost( hReq, bOnChunk )
 
-// Real transport: spawns curl and streams its stdout to bOnChunk.
 FUNCTION AGHTTP_CurlPost( hReq, bOnChunk )
    LOCAL hProc, hIn, hOut, hErr, hTmp
-   LOCAL cHdrFile := "", cCmd, cHdr, nTimeout
-   LOCAL cBuf := Space( 16384 ), nRead
-   LOCAL nExit, nStatus := 0, cErr := ""
+   LOCAL cHdrFile := "", cBodyFile := "", cCmd, cHdr, nTimeout
+   LOCAL nExit := -1, nStatus := 0, cErr := "", cBody, cBuf
+   LOCAL bIdle, nStart, nLastIdle := 0, nNow, nAvail, nRead
+   LOCAL nLimit, lDone := .F., nLastByte := 0, nTotal := 0
 
    nTimeout := iif( hb_HHasKey( hReq, "timeout" ) .AND. ;
                     ValType( hReq[ "timeout" ] ) == "N", hReq[ "timeout" ], 120 )
+   bIdle := iif( hb_HHasKey( hReq, "on_idle" ), hReq[ "on_idle" ], NIL )
+   cBody := iif( hb_HHasKey( hReq, "body" ), hb_CStr( hReq[ "body" ] ), "" )
+   nLimit := nTimeout * 1000 + 8000
 
-   // unique header dump file (pool-safe)
    hTmp := hb_FTempCreateEx( @cHdrFile, hb_DirTemp(), "dsh", ".hdr" )
-   IF hTmp != F_ERROR
-      FClose( hTmp )
-   ENDIF
+   IF hTmp != F_ERROR ; FClose( hTmp ) ; ENDIF
+   hTmp := hb_FTempCreateEx( @cBodyFile, hb_DirTemp(), "dsb", ".json" )
+   IF hTmp != F_ERROR ; FClose( hTmp ) ; ENDIF
+   hb_MemoWrit( cBodyFile, cBody )
 
    cCmd := "curl -sS -N --max-time " + LTrim( Str( nTimeout ) ) + ;
            " -X POST -D " + Chr( 34 ) + cHdrFile + Chr( 34 ) + ;
-           " --data-binary @-"
+           " --data-binary @" + Chr( 34 ) + cBodyFile + Chr( 34 )
    FOR EACH cHdr IN hReq[ "headers" ]
       cCmd += " -H " + Chr( 34 ) + cHdr + Chr( 34 )
    NEXT
@@ -52,65 +65,164 @@ FUNCTION AGHTTP_CurlPost( hReq, bOnChunk )
 
    hProc := hb_processOpen( cCmd, @hIn, @hOut, @hErr )
    IF hProc == F_ERROR
-      IF !Empty( cHdrFile )
-         FErase( cHdrFile )
-      ENDIF
+      IF !Empty( cHdrFile )  ; FErase( cHdrFile )  ; ENDIF
+      IF !Empty( cBodyFile ) ; FErase( cBodyFile ) ; ENDIF
       RETURN { "ok" => .F., "status" => 0, "curl_code" => -1, ;
                "error" => "failed to spawn curl" }
    ENDIF
-
-   // feed the request body to curl's stdin, then close it so curl proceeds
-   IF hb_HHasKey( hReq, "body" ) .AND. !Empty( hReq[ "body" ] )
-      FWrite( hIn, hReq[ "body" ] )
-   ENDIF
    FClose( hIn )
 
-   // stream stdout chunk-by-chunk as curl delivers it
-   // check for Ctrl+C between chunks to allow cancellation
-   DO WHILE ( nRead := FRead( hOut, @cBuf, hb_BLen( cBuf ) ) ) > 0
-      Eval( bOnChunk, hb_BLeft( cBuf, nRead ) )
-      IF AGCON_PeekCtrlC()
-         hb_processClose( hProc )
-         FClose( hOut )
-         FClose( hErr )
-         IF !Empty( cHdrFile )
-            FErase( cHdrFile )
+   cBuf := Space( 16384 )
+   nStart := hb_MilliSeconds()
+
+   DO WHILE !lDone
+      nNow := hb_MilliSeconds()
+      IF ( nNow - nStart ) > nLimit
+         cErr := "timeout"
+         AGHTTP_KillProc( hProc )
+         lDone := .T.
+         LOOP
+      ENDIF
+
+      nAvail := AGHTTP_PipeAvail( hOut )
+
+      IF nAvail > 0
+         // Only read what Peek says is waiting — never block the TUI.
+         nRead := FRead( hOut, @cBuf, Min( nAvail, hb_BLen( cBuf ) ) )
+         IF nRead > 0
+            nTotal += nRead
+            nLastByte := nNow
+            IF bOnChunk != NIL
+               Eval( bOnChunk, hb_BLeft( cBuf, nRead ) )
+            ENDIF
+         ELSE
+            lDone := .T.
          ENDIF
-         RETURN { "ok" => .F., "status" => 0, "curl_code" => -2, ;
-                  "error" => "cancelled" }
+      ELSEIF nTotal > 0 .AND. nLastByte > 0 .AND. ;
+             ( nNow - nLastByte ) >= 2500
+         // 2.5s of silence after we already got bytes: stream is done.
+         // (GetExitCodeProcess is unreliable on some Harbour process handles.)
+         lDone := .T.
+      ELSEIF !AGHTTP_ProcRunning( hProc )
+         // curl exited. Drain whatever remains (writer is dead — safe).
+         DO WHILE ( nRead := FRead( hOut, @cBuf, hb_BLen( cBuf ) ) ) > 0
+            nTotal += nRead
+            IF bOnChunk != NIL
+               Eval( bOnChunk, hb_BLeft( cBuf, nRead ) )
+            ENDIF
+         ENDDO
+         lDone := .T.
+      ELSE
+         // Still running, no bytes → animate + accept keys
+         IF bIdle != NIL .AND. ( nNow - nLastIdle ) >= 80
+            nLastIdle := nNow
+            Eval( bIdle )
+         ENDIF
+         hb_idleSleep( 0.04 )
       ENDIF
    ENDDO
 
-   // drain stderr for diagnostics
-   DO WHILE ( nRead := FRead( hErr, @cBuf, hb_BLen( cBuf ) ) ) > 0
-      cErr += hb_BLeft( cBuf, nRead )
-   ENDDO
+   // Best-effort stderr (peek only — never block)
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      nAvail := AGHTTP_PipeAvail( hErr )
+      IF nAvail > 0
+         nRead := FRead( hErr, @cBuf, Min( nAvail, hb_BLen( cBuf ) ) )
+         IF nRead > 0
+            cErr += hb_BLeft( cBuf, nRead )
+         ENDIF
+      ENDIF
+      FClose( hOut )
+      FClose( hErr )
+   RECOVER
+   END SEQUENCE
 
-   FClose( hOut )
-   FClose( hErr )
-   nExit := hb_processValue( hProc )
+   // Reap child; should return quickly if already dead / killed
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      nExit := hb_processValue( hProc )
+   RECOVER
+      nExit := iif( Empty( cErr ), -1, 0 )
+   END SEQUENCE
 
    nStatus := AGHTTP_ParseStatus( cHdrFile )
-   FErase( cHdrFile )
+   IF !Empty( cHdrFile )  ; FErase( cHdrFile )  ; ENDIF
+   IF !Empty( cBodyFile ) ; FErase( cBodyFile ) ; ENDIF
+
+   IF Empty( cErr ) .AND. nExit != 0
+      cErr := "curl exit " + LTrim( Str( nExit ) )
+   ENDIF
 
    RETURN { "ok" => ( nExit == 0 ), ;
             "status" => nStatus, ;
             "curl_code" => nExit, ;
-            "error" => iif( nExit == 0, "", ;
-               iif( Empty( cErr ), "curl exit " + LTrim( Str( nExit ) ), ;
-                    AllTrim( cErr ) ) ) }
+            "error" => iif( nExit == 0, "", AllTrim( cErr ) ) }
 
-// Installs (or clears, with NIL) the module-level test transport.
+// Bytes waiting on the pipe (0 = none). Never blocks.
+STATIC FUNCTION AGHTTP_PipeAvail( hPipe )
+   LOCAL nAvail := 0
+   LOCAL xOk
+#ifdef __PLATFORM__WINDOWS
+   IF ValType( hPipe ) != "N" .OR. hPipe == 0 .OR. hPipe == F_ERROR
+      RETURN 0
+   ENDIF
+   // BOOL PeekNamedPipe(h, buf, size, pRead, pAvail, pLeft)
+   xOk := hb_dynCall( { "PeekNamedPipe", "kernel32.dll", ;
+      hb_bitOr( HB_DYN_CALLCONV_STDCALL, HB_DYN_CTYPE_BOOL ), ;
+      { HB_DYN_CTYPE_VOID_PTR, ;
+        HB_DYN_CTYPE_VOID_PTR, ;
+        HB_DYN_CTYPE_LONG_UNSIGNED, ;
+        HB_DYN_CTYPE_VOID_PTR, ;
+        HB_DYN_CTYPE_INT_PTR, ;
+        HB_DYN_CTYPE_VOID_PTR } }, ;
+      hPipe, 0, 0, 0, @nAvail, 0 )
+   IF AGHTTP_DynBool( xOk ) .AND. ValType( nAvail ) == "N" .AND. nAvail > 0
+      RETURN nAvail
+   ENDIF
+   RETURN 0
+#else
+   HB_SYMBOL_UNUSED( hPipe )
+   HB_SYMBOL_UNUSED( nAvail )
+   RETURN 0
+#endif
+
+// .T. if process is still alive (GetExitCodeProcess == STILL_ACTIVE).
+STATIC FUNCTION AGHTTP_ProcRunning( hProc )
+   LOCAL nCode := 0
+   LOCAL xOk
+#ifdef __PLATFORM__WINDOWS
+   IF ValType( hProc ) != "N" .OR. hProc == 0
+      RETURN .F.
+   ENDIF
+   xOk := hb_dynCall( { "GetExitCodeProcess", "kernel32.dll", ;
+      hb_bitOr( HB_DYN_CALLCONV_STDCALL, HB_DYN_CTYPE_BOOL ), ;
+      { HB_DYN_CTYPE_VOID_PTR, HB_DYN_CTYPE_INT_PTR } }, ;
+      hProc, @nCode )
+   IF AGHTTP_DynBool( xOk )
+      RETURN ( ValType( nCode ) == "N" .AND. nCode == AGHTTP_STILL_ACTIVE )
+   ENDIF
+   // API failed — assume still running (idle until hard timeout).
+   RETURN .T.
+#else
+   HB_SYMBOL_UNUSED( hProc )
+   RETURN .T.
+#endif
+
+STATIC FUNCTION AGHTTP_KillProc( hProc )
+#ifdef __PLATFORM__WINDOWS
+   IF ValType( hProc ) == "N" .AND. hProc != 0
+      hb_dynCall( { "TerminateProcess", "kernel32.dll", ;
+         hb_bitOr( HB_DYN_CALLCONV_STDCALL, HB_DYN_CTYPE_BOOL ), ;
+         { HB_DYN_CTYPE_VOID_PTR, HB_DYN_CTYPE_LONG_UNSIGNED } }, ;
+         hProc, 1 )
+   ENDIF
+#else
+   HB_SYMBOL_UNUSED( hProc )
+#endif
+   RETURN NIL
+
 FUNCTION AGHTTP_SetTestTransport( bBlock )
    s_bTestTransport := bBlock
    RETURN NIL
 
-// Performs a non-streaming HTTP request.
-// hReq: { url, method ("GET"/"POST"/"PATCH", default GET), headers (array of
-//         "K: V"), body (string, sent for POST/PATCH), timeout (seconds,
-//         default 60), transport (optional {|hReq| -> hResult} override) }.
-// Returns: { ok, status, body, error }.
-// ok indicates the transport succeeded (curl ran); check status for the HTTP result.
 FUNCTION AGHTTP_Fetch( hReq )
    IF hb_HHasKey( hReq, "transport" ) .AND. hReq[ "transport" ] != NIL
       RETURN Eval( hReq[ "transport" ], hReq )
@@ -120,8 +232,6 @@ FUNCTION AGHTTP_Fetch( hReq )
    ENDIF
    RETURN AGHTTP_CurlFetch( hReq )
 
-// True when a URL contains characters unsafe on the curl command line:
-// a double-quote, whitespace, or any control character (byte <= 32).
 STATIC FUNCTION AGHTTP_UnsafeUrl( cUrl )
    LOCAL i, nByte
    FOR i := 1 TO hb_BLen( cUrl )
@@ -132,22 +242,18 @@ STATIC FUNCTION AGHTTP_UnsafeUrl( cUrl )
    NEXT
    RETURN .F.
 
-// Real transport: spawns curl and accumulates its whole stdout.
 STATIC FUNCTION AGHTTP_CurlFetch( hReq )
    LOCAL hProc, hIn, hOut, hErr, hTmp
-   LOCAL cHdrFile := "", cCmd, cHdr, nTimeout, cMethod
+   LOCAL cHdrFile := "", cBodyFile := "", cCmd, cHdr, nTimeout, cMethod
    LOCAL cBuf := Space( 16384 ), nRead
    LOCAL nExit, nStatus := 0, cErr := "", cBody := ""
    LOCAL aHeaders, cReqBody, lHasBody
 
    IF !hb_HHasKey( hReq, "url" ) .OR. Empty( hReq[ "url" ] )
-      RETURN { "ok" => .F., "status" => 0, "body" => "", ;
-               "error" => "missing url" }
+      RETURN { "ok" => .F., "status" => 0, "body" => "", "error" => "missing url" }
    ENDIF
-
    IF AGHTTP_UnsafeUrl( hb_CStr( hReq[ "url" ] ) )
-      RETURN { "ok" => .F., "status" => 0, "body" => "", ;
-               "error" => "invalid url" }
+      RETURN { "ok" => .F., "status" => 0, "body" => "", "error" => "invalid url" }
    ENDIF
 
    cMethod := iif( hb_HHasKey( hReq, "method" ) .AND. !Empty( hReq[ "method" ] ), ;
@@ -161,14 +267,15 @@ STATIC FUNCTION AGHTTP_CurlFetch( hReq )
    lHasBody := !Empty( cReqBody ) .AND. ( cMethod == "POST" .OR. cMethod == "PATCH" )
 
    hTmp := hb_FTempCreateEx( @cHdrFile, hb_DirTemp(), "dsf", ".hdr" )
-   IF hTmp != F_ERROR
-      FClose( hTmp )
-   ENDIF
+   IF hTmp != F_ERROR ; FClose( hTmp ) ; ENDIF
 
    cCmd := "curl -sS --max-time " + LTrim( Str( nTimeout ) ) + ;
            " -X " + cMethod + " -D " + Chr( 34 ) + cHdrFile + Chr( 34 )
    IF lHasBody
-      cCmd += " --data-binary @-"
+      hTmp := hb_FTempCreateEx( @cBodyFile, hb_DirTemp(), "dsfb", ".bin" )
+      IF hTmp != F_ERROR ; FClose( hTmp ) ; ENDIF
+      hb_MemoWrit( cBodyFile, cReqBody )
+      cCmd += " --data-binary @" + Chr( 34 ) + cBodyFile + Chr( 34 )
    ENDIF
    FOR EACH cHdr IN aHeaders
       cCmd += " -H " + Chr( 34 ) + cHdr + Chr( 34 )
@@ -177,15 +284,9 @@ STATIC FUNCTION AGHTTP_CurlFetch( hReq )
 
    hProc := hb_processOpen( cCmd, @hIn, @hOut, @hErr )
    IF hProc == F_ERROR
-      IF !Empty( cHdrFile )
-         FErase( cHdrFile )
-      ENDIF
-      RETURN { "ok" => .F., "status" => 0, "body" => "", ;
-               "error" => "failed to spawn curl" }
-   ENDIF
-
-   IF lHasBody
-      FWrite( hIn, cReqBody )
+      IF !Empty( cHdrFile )  ; FErase( cHdrFile )  ; ENDIF
+      IF !Empty( cBodyFile ) ; FErase( cBodyFile ) ; ENDIF
+      RETURN { "ok" => .F., "status" => 0, "body" => "", "error" => "failed to spawn curl" }
    ENDIF
    FClose( hIn )
 
@@ -195,20 +296,17 @@ STATIC FUNCTION AGHTTP_CurlFetch( hReq )
    DO WHILE ( nRead := FRead( hErr, @cBuf, hb_BLen( cBuf ) ) ) > 0
       cErr += hb_BLeft( cBuf, nRead )
    ENDDO
-
    FClose( hOut )
    FClose( hErr )
    nExit := hb_processValue( hProc )
-
    nStatus := AGHTTP_ParseStatus( cHdrFile )
-   FErase( cHdrFile )
+   IF !Empty( cHdrFile )  ; FErase( cHdrFile )  ; ENDIF
+   IF !Empty( cBodyFile ) ; FErase( cBodyFile ) ; ENDIF
 
    RETURN { "ok" => ( nExit == 0 ), "status" => nStatus, "body" => cBody, ;
             "error" => iif( nExit == 0, "", ;
-               iif( Empty( cErr ), "curl exit " + LTrim( Str( nExit ) ), ;
-                    AllTrim( cErr ) ) ) }
+               iif( Empty( cErr ), "curl exit " + LTrim( Str( nExit ) ), AllTrim( cErr ) ) ) }
 
-// Reads the curl -D header dump and returns the last HTTP status line code.
 STATIC FUNCTION AGHTTP_ParseStatus( cHdrFile )
    LOCAL cText, cLine, nStatus := 0, aTok
    IF Empty( cHdrFile ) .OR. !hb_FileExists( cHdrFile )

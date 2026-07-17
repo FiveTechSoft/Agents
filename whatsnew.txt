@@ -1,11 +1,58 @@
 Agents ? What's new
 ===================
 
-v2.2.0 (2026-07-16)
+v2.4.6 (2026-07-17)
 -------------------
+* FIX interactive freeze: Inkey(0.001) still blocked forever (Harbour clamps
+  sub-centisecond timeouts to infinite in hb_gt_def_InkeyGet); the first
+  keyboard poll of every turn hung before curl was spawned. Non-blocking
+  polls now use Inkey( , mask ); AGCON_WaitKey floors its timeout at 0.01s.
+* FIX /plan crash: comparing the PeekNamedPipe/GetExitCodeProcess dynCall
+  result against a number threw BASE/1 Argument error when the pipe closed;
+  killed the whole session on /plan. Type-safe AGHTTP_DynBool() now.
+* /plan and /compact show the animated Working status (heartbeat) instead of
+  waiting silently on reasoning models; runtime errors there no longer exit.
+* Rendering cleanups: single status row per turn (no stale spinner rows),
+  status suspend/resume around mid-turn [pending] prints, clock only on the
+  first line of a reply, deferred trailing blank lines, "Worked for Ns"
+  instead of a duplicated model chip, footer no longer truncated to "/he".
+
+v2.4.0 (2026-07-17)
+-------------------
+* OpenCode layout (opencode1.jpg): amber [•]/[ ] todos, amber "Thinking",
+  "Build · model" chip, footer "esc interrupt · tokens · /help".
+
+v2.3.1 (2026-07-17)
+-------------------
+* Grok6 transcript: user bar + AM/PM clock, "♦ Read 1 file" activity lines,
+  "| Thinking… 13s" status with elapsed, full-width green/red diffs,
+  plain assistant text with clock, "Worked for 2m5s."
+
+v2.2.1 (2026-07-17)
+-------------------
+* Grok Build task panel (from grok2.jpg): full-width slate rows with green
+  ✓ for completed todos; badge N/M on the prompt status line; keep the
+  panel visible after every item is done.
+
+v2.2.0 (2026-07-17)
+-------------------
+* Grok Build turn model (from grok1.jpg): gray "> message" bar + 6:31 AM
+  clock, Waiting for response…, diamond (♦) thought/tool lines, footer
+  "Worked for 2m17s."
+
+v2.1.2 (2026-07-17)
+-------------------
+* Mid-turn queue: type while the model is answering; the line shows as
+  [pending] / badge "pending xN", then runs after the current reply
+  (e.g. "Hola" then "quien eres ?" without waiting for the first answer).
+* Fix keyboard poll: Inkey(0) blocked forever and deadlocked curl mid-stream;
+  non-blocking poll restores typing during a turn.
+
+v2.1.1 (2026-07-16)
+-------------------
+* Default backend: if no API key is set, detect a running local Ollama
+  server and use its default/first model (same as /provider ollama).
 * Single Enter submits slash commands (/exit, /help, …); no hang after CR.
-* No API key + Ollama running -> auto-switch to local model (notice on start).
-* Windows agents.exe + Linux agents rebuilt.
 
 v2.1.0 (2026-07-16)
 -------------------

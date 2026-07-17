@@ -141,26 +141,20 @@ FUNCTION AGCON_PushKey( nKey )
    s_nPending := nKey
    RETURN NIL
 
-/* Non-blocking: one raw key -> mapped, or NIL.
- * CRITICAL: must never block. Inkey(0) waits forever; that made
- * AGCON_KeyPending hang after Enter (no trailing LF yet) and broke
- * single-Enter /exit and every Poll drain when the queue was empty. */
+/* Non-blocking peek of one raw key -> mapped, or NIL.
+ * IMPORTANT: Inkey(0) waits FOREVER, and so does any timeout below one
+ * hundredth of a second: hbgtcore.c hb_gt_def_InkeyGet() computes
+ *   timeout = ( fWait && dSeconds * 100 >= 1 ) ? dSeconds * 1000 : -1
+ * so Inkey(0.001) -> timeout -1 -> infinite wait (this froze the whole
+ * agent turn: first AGPROMPT_Poll blocked before curl ever spawned).
+ * A true no-wait poll omits the timeout argument: Inkey( , mask ) sets
+ * fWait = .F. and returns 0 immediately when no key is pending. */
 STATIC FUNCTION _ReadKeyNB()
    LOCAL nRaw
    _Init()
-   // Peek first -- NextKey does not wait
-   nRaw := NextKey( AGCON_INKEY_MASK )
-   IF nRaw == 0
-      RETURN NIL
-   ENDIF
-   // Consume the peeked key
-   nRaw := Inkey( 0, AGCON_INKEY_MASK )
+   nRaw := Inkey( , AGCON_INKEY_MASK )
    DO WHILE nRaw == HB_K_RESIZE
-      nRaw := NextKey( AGCON_INKEY_MASK )
-      IF nRaw == 0
-         RETURN NIL
-      ENDIF
-      nRaw := Inkey( 0, AGCON_INKEY_MASK )
+      nRaw := Inkey( , AGCON_INKEY_MASK )
    ENDDO
    IF nRaw == 0
       RETURN NIL
@@ -202,16 +196,14 @@ FUNCTION AGCON_WaitKey( nMs )
       nMs := 200
    ENDIF
    nSec := nMs / 1000
-   IF nSec <= 0
-      nSec := 0.001
+   // Below 0.01s Harbour treats the timeout as infinite (see _ReadKeyNB
+   // comment); clamp to the smallest wait Inkey can actually honour.
+   IF nSec < 0.01
+      nSec := 0.01
    ENDIF
    nRaw := Inkey( nSec, AGCON_INKEY_MASK )
    DO WHILE nRaw == HB_K_RESIZE
-      // Non-blocking: do not hang if only a resize was pending
-      IF NextKey( AGCON_INKEY_MASK ) == 0
-         RETURN .F.
-      ENDIF
-      nRaw := Inkey( 0, AGCON_INKEY_MASK )
+      nRaw := Inkey( , AGCON_INKEY_MASK )
    ENDDO
    IF nRaw == 0
       RETURN .F.

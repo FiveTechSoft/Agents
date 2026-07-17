@@ -10,7 +10,13 @@ STATIC s_hSessionUsage := {=>}
 // RunTurn). Surfaces beside the token bar so the user can track how much of
 // the session has been spent waiting on the model.
 STATIC s_nSessionTurnMs := 0
-
+// Active model id for the OpenCode-style "Build · model" chip.
+STATIC s_cSessionModel := ""
+// Render state of the turn in flight (NIL when idle). Lets out-of-band
+// printers (mid-turn [pending] lines) suspend/re-show the status row so
+// it always stays the LAST content row — the whole row-tracking of the
+// spinner (waitRow/anchor) relies on that invariant.
+STATIC s_oActiveRender := NIL
 // Optional session-wide goal, set via /goal <text>. The intent is
 // "keep working until the condition is met": the goal text is injected
 // into aMsgs as a system note when set, the model emits a sentinel
@@ -91,39 +97,69 @@ STATIC s_lLeanMode := .F.
 // line cycles through the tips rather than always showing the same one.
 STATIC s_nTipIdx := 0
 
-// Startup notice (e.g. auto-switched to Ollama).
-STATIC s_cBootNote := ""
+// Public: total tokens this session (for the OpenCode footer).
+FUNCTION AGREPL_SessionTokens()
+   LOCAL nP, nC
+   nP := hb_HGetDef( s_hSessionUsage, "prompt_tokens", 0 )
+   nC := hb_HGetDef( s_hSessionUsage, "completion_tokens", 0 )
+   IF ValType( nP ) != "N" ; nP := 0 ; ENDIF
+   IF ValType( nC ) != "N" ; nC := 0 ; ENDIF
+   RETURN nP + nC
+
+// Public: model id for UI chips.
+FUNCTION AGREPL_SessionModel()
+   RETURN s_cSessionModel
 
 // Program entry point. Optional cModel CLI argument overrides the settings model.
 FUNCTION Main( cModel )
-   LOCAL hSet, hCfg, oClient, oReg, bGate, oErr, lVT
+   LOCAL hSet, hCfg, oClient, oReg, bGate, oErr, lVT, lCliModel, hAuto
    lVT := AGREPL_InitConsole()
    hSet := AGSETTINGS_Load()
    // colour only when the console accepted virtual-terminal mode AND the
    // settings do not switch it off -- avoids ANSI codes on a plain console
    AGUI_SetColor( lVT .AND. hSet[ "color" ] == .T. )
+   lCliModel := !Empty( cModel )
    IF Empty( cModel )
       cModel := hb_GetEnv( "DEEPSEEK_MODEL" )
    ENDIF
    IF Empty( cModel )
       cModel := hSet[ "model" ]
    ENDIF
-   // No-key path: if Ollama is running locally, use it automatically.
-   // Otherwise still start the REPL so the user can use /provider.
-   // The notice is printed BELOW the banner from inside AGREPL_Run.
-   hCfg := AGCFG_Resolve( {=>} )
-   s_cBootNote := ""
-   IF Empty( hCfg[ "api_key" ] )
-      hCfg := AGCFG_AutoOllama( hSet )
-      IF hb_HGetDef( hCfg, "ok", .F. )
-         cModel := hCfg[ "model" ]
-         s_cBootNote := hCfg[ "message" ]
-         // reload settings after AutoOllama saved them
+   // Default backend selection:
+   //   1. If an API key is already defined (env / settings / opts) keep it.
+   //   2. Else if a local Ollama server answers on :11434, auto-switch to
+   //      it with its default (or first installed) model -- same as
+   //      `/provider ollama`, no cloud key required.
+   //   3. Else start the REPL anyway so the user can /provider configure.
+   // Always normalize Ollama localhost -> 127.0.0.1 (Windows IPv6 trap).
+   IF AGCFG_IsOllamaUrl( hb_HGetDef( hSet, "base_url", "" ) )
+      hAuto := AGCFG_AutoOllama( hSet, .T. )   // normalize + seed key
+      IF hAuto[ "applied" ]
          hSet := AGSETTINGS_Load()
       ENDIF
    ENDIF
-   oClient := AG_Client( { "model" => cModel, "base_url" => hSet[ "base_url" ], ;
-                           "timeout" => AGREPL_ApiTimeout( hSet ) } )
+   // The banner-side message is printed from AGREPL_Run (below the banner).
+   hCfg := AGCFG_Resolve( { "base_url" => hSet[ "base_url" ] } )
+   IF !hCfg[ "ok" ]
+      hAuto := AGCFG_AutoOllama( hSet, lCliModel .OR. !Empty( hb_GetEnv( "DEEPSEEK_MODEL" ) ) )
+      IF hAuto[ "applied" ]
+         // Reload so subsequent AGCFG_Resolve({=>}) sees the new backend
+         hSet := AGSETTINGS_Load()
+         IF !lCliModel .AND. Empty( hb_GetEnv( "DEEPSEEK_MODEL" ) )
+            cModel := hSet[ "model" ]
+         ENDIF
+         hCfg := AGCFG_Resolve( { "base_url" => hSet[ "base_url" ] } )
+      ENDIF
+   ENDIF
+   // Pin normalized base_url on the client so every request uses it even
+   // when settings.json still has a stale localhost entry.
+   IF hCfg[ "ok" ]
+      hSet[ "base_url" ] := hCfg[ "base_url" ]
+   ENDIF
+   oClient := AG_Client( { "model" => cModel, ;
+                           "base_url" => hSet[ "base_url" ], ;
+                           "api_key"  => iif( hCfg[ "ok" ], hCfg[ "api_key" ], "" ), ;
+                           "timeout"  => AGREPL_ApiTimeout( hSet ) } )
    oReg    := AGTOOLS_Registry( { ;
       "github"       => AGCFG_ResolveKey( "GITHUB_TOKEN", "github_token", hSet ), ;
       "co_author"    => hb_HGetDef( hSet, "co_author", "" ), ;
@@ -148,6 +184,7 @@ FUNCTION Main( cModel )
 FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
    LOCAL aMsgs, cLine, hAction, aTurn, hRes, cMsg, cSuggest, lCooked, hLoaded, hTurn, oPrompt
    LOCAL cBanner, nHeaderRows, i
+   s_cSessionModel := hb_CStr( cModel )
    aMsgs    := { { "role" => "system", "content" => AGUI_SystemPrompt() } }
    cSuggest := ""
    cBanner  := AGUI_Banner( cModel, hb_cwd(), hb_GetEnv( "USERNAME" ) )
@@ -185,25 +222,26 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
       AGPROMPT_Activate( oPrompt, nHeaderRows + 1 )
       s_oBoxPrompt := oPrompt
    ENDIF
-   // Surface boot notes AFTER the banner so the banner is not pushed off
-   // the top row. Lives in the scrollable content area.
-   IF ! Empty( s_cBootNote )
-      AGREPL_Out( AGUI_Color( s_cBootNote, AGUI_Pal( "accent" ) ) + Chr(10) )
-      // Banner already showed the old model if paint raced; re-state model.
-      AGREPL_Out( AGUI_Color( "[model -> " + cModel + "]", ;
-                              AGUI_Pal( "accent" ) ) + Chr(10) )
-      s_cBootNote := ""
-   ELSEIF Empty( AGCFG_Resolve( {=>} )[ "api_key" ] )
+   // Surface backend status AFTER the banner so the banner is not
+   // pushed off the top row and the dynamic-box content-row counter
+   // remains correct. Lives in the scrollable content area.
+   hLoaded := AGCFG_Resolve( {=>} )
+   IF !hLoaded[ "ok" ]
       AGREPL_Out( AGUI_Color( "[no API key configured -- type /provider to " + ;
                               "set up a backend (deepseek/glm/moonshot/openai/" + ;
-                              "ollama), or export DEEPSEEK_API_KEY before " + ;
-                              "starting]", ;
+                              "ollama), start a local Ollama server, or export " + ;
+                              "DEEPSEEK_API_KEY before starting]", ;
                               "33" ) + Chr(10) )
+   ELSEIF AGCFG_IsOllamaUrl( hLoaded[ "base_url" ] )
+      AGREPL_Out( AGUI_Color( "[ollama " + hLoaded[ "base_url" ] + ;
+                              " / " + cModel + "]", "90" ) + Chr(10) )
    ENDIF
    DO WHILE .T.
       lCooked := .F.
       IF oPrompt != NIL
-         IF AGTODO_HasOpen()
+         // Grok2: keep the task panel visible even when every item is done
+         // (green checks on slate bars), not only while open work remains.
+         IF AGTODO_HasAny()
             AGREPL_Out( AGUI_TodoBlock( AGTODO_Get() ) )
          ENDIF
          // seed the box editor with the model's "Suggested next:" so it shows
@@ -233,13 +271,15 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
       IF lCooked
          AGREPL_Out( AGUI_FrameBottom() + Chr(10) )
       ENDIF
-      // echo the submitted prompt in white above the box, so the transcript
-      // shows what the user just asked. Cooked path skipped: the line is
-      // already visible in the terminal as the user typed it.
-      IF !lCooked .AND. !Empty( AllTrim( hb_CStr( cLine ) ) )
+      hAction := AGUI_ParseCommand( cLine )
+      // Grok-style agent turns defer the user line until after "Waiting for
+      // response" (see AGREPL_RunTurn). Slash commands and other non-message
+      // actions still echo immediately as a user card.
+      IF !lCooked .AND. !Empty( AllTrim( hb_CStr( cLine ) ) ) .AND. ;
+         hAction[ "type" ] != "message" .AND. hAction[ "type" ] != "init" .AND. ;
+         hAction[ "type" ] != "empty"
          AGREPL_Out( Chr(10) + AGREPL_UserCard( cLine ) )
       ENDIF
-      hAction := AGUI_ParseCommand( cLine )
       DO CASE
       CASE hAction[ "type" ] == "empty"
          // nothing
@@ -384,10 +424,11 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
             ENDIF
          ENDIF
       CASE hAction[ "type" ] == "message" .OR. hAction[ "type" ] == "init"
-         IF Empty( AGCFG_Resolve( {=>} )[ "api_key" ] )
+         IF !AGCFG_Resolve( {=>} )[ "ok" ]
             AGREPL_Out( AGUI_Color( "[no API key configured -- type " + ;
-               "/provider for the list of backends, or set a key via " + ;
-               "/provider key <secret>]", "33" ) + Chr(10) )
+               "/provider for the list of backends, set a key via " + ;
+               "/provider key <secret>, or start a local Ollama server]", ;
+               "33" ) + Chr(10) )
             LOOP
          ENDIF
          cMsg := iif( hAction[ "type" ] == "init", ;
@@ -439,7 +480,8 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
                                 nMaxIter, oPrompt )
          ENDIF
          // a /btw interrupt carries the next message; an Esc interrupt just
-         // returns to idle. Then drain any messages queued during the turn.
+         // returns to idle. Then drain any messages queued during the turn
+         // (typed while the model was still answering -- shown as [pending]).
          DO WHILE oPrompt != NIL
             IF AGPROMPT_Interrupted( oPrompt )
                cMsg := iif( oPrompt[ "interrupt" ][ "kind" ] == "btw", ;
@@ -454,9 +496,10 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
             IF Empty( cMsg )
                EXIT
             ENDIF
-            AGREPL_Out( AGREPL_UserCard( cMsg ) )
-            AGREPL_Out( AGUI_Color( "[handling: " + ;
-                        AGUI_Summarize( cMsg, 60 ) + "]", "90" ) + Chr(10) )
+            // User line is shown by RunTurn (wait → > msg + time → reply)
+            IF oPrompt != NIL
+               AGPROMPT_Redraw( oPrompt )
+            ENDIF
             AGREPL_PushRewind( aMsgs, cMsg )
             AGREPL_ApplyAutoSkills( cMsg, aMsgs, oPrompt )
             aTurn := AClone( aMsgs )
@@ -484,15 +527,30 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
 // accumulates usage, and returns { result, render }.
 STATIC FUNCTION AGREPL_RunTurn( oClient, oReg, cModel, bGate, nMaxIter, aMessages, oPrompt )
    LOCAL hRes, oRender, hOpts, nTurnStartMs, nTurnMs
-   LOCAL aWithGoal, nUser
+   LOCAL aWithGoal, nUser, cUserText := ""
    oRender := AGREPL_RenderNew()
+   // Last user message drives the OpenCode "> prompt" + timestamp line.
+   nUser := AGREPL_LastUserMsg( aMessages )
+   IF nUser > 0
+      cUserText := hb_CStr( hb_HGetDef( aMessages[ nUser ], "content", "" ) )
+   ENDIF
+   oRender[ "userText" ]  := cUserText
+   oRender[ "userShown" ] := .F.
+   oRender[ "waitShown" ] := .F.
    hOpts := { "model" => cModel, ;
               "tools" => AGTOOLS_Schemas( oReg ), ;
               "tool_executor" => bGate, ;
               "max_iterations" => nMaxIter }
    IF oPrompt != NIL
-      hOpts[ "interrupt_check" ] := {|| AGPROMPT_Interrupted( oPrompt ) }
+      // Busy: lines the user submits while we wait for the model go into
+      // the FIFO as [pending], then run after this turn finishes.
+      AGPROMPT_SetBusy( oPrompt, .T. )
+      hOpts[ "interrupt_check" ] := {|| AGREPL_BusyPoll( oPrompt ) }
    ENDIF
+   // Heartbeat while HTTP waits (file-polled curl). Tick Working timer +
+   // drain keys so Esc works and mid-turn lines become [pending].
+   hOpts[ "on_idle" ] := {|| AGREPL_WaitTick( oRender ), ;
+                             iif( oPrompt != NIL, AGPROMPT_Poll( oPrompt ), NIL ) }
    // Help small/local models stay on task: when the conversation has
    // tool calls (multi-turn), inject the original user request as a
    // goal reminder right after the system prompt.
@@ -505,35 +563,90 @@ STATIC FUNCTION AGREPL_RunTurn( oClient, oReg, cModel, bGate, nMaxIter, aMessage
          hb_CStr( aMessages[ nUser ][ "content" ] ) + ;
          ". Work on this until it is DONE. Do NOT ask what to do next." }, .T. )
    ENDIF
-   AGTOOL_DispatchResetCount()   // reset per-turn dispatch_agent counter
+   AGTOOL_DispatchResetCount()
    nTurnStartMs := hb_MilliSeconds()
-   hRes := AG_AgentRun( oClient, aWithGoal, hOpts, ;
-      {| hEv | AGREPL_RenderEv( hEv, oRender ), ;
-               iif( oPrompt != NIL, AGPROMPT_Poll( oPrompt ), NIL ) } )
-   // any narration left in the buffer was the final answer (no tool call
-   // followed) -- print it now with the assistant bullet
-   oRender[ "pendingText" ] += AGMD_Flush( oRender[ "md" ] )
-   AGREPL_FlushPending( oRender )
-   // tip line below the response so the user sees it immediately
-   IF oRender[ "inText" ]
-      AGREPL_Out( Chr(10) + AGUI_TipLine( AGUI_TipAt( ++s_nTipIdx ) ) )
+   oRender[ "spinnerStartMs" ] := nTurnStartMs
+   // ALWAYS show "> user" first so interactive never looks frozen blank.
+   AGREPL_CommitUserPrompt( oRender )
+   AGREPL_WaitShow( oRender )
+   s_oActiveRender := oRender
+   hRes := NIL
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      hRes := AG_AgentRun( oClient, aWithGoal, hOpts, ;
+         {| hEv | AGREPL_SafeRender( hEv, oRender, oPrompt ) } )
+   RECOVER
+      // Keep any partial reply already painted; do not rethrow (would
+      // become "Fatal: Argument error" at Main and kill the session).
+      IF ValType( hRes ) != "H"
+         hRes := { "success" => .F., "error_type" => "internal", ;
+                   "message" => "turn error", "messages" => aMessages, ;
+                   "stop_reason" => "error", "usage" => {=>} }
+      ENDIF
+   END SEQUENCE
+   // Always clear busy after the turn (success or failure).
+   IF oPrompt != NIL
+      AGPROMPT_SetBusy( oPrompt, .F. )
+   ENDIF
+   // Clear sticky Working/Thinking status if still on screen
+   AGREPL_WaitClear( oRender )
+   s_oActiveRender := NIL
+   AGREPL_CommitUserPrompt( oRender )
+   // Finish any live reasoning block still open
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      IF hb_HGetDef( oRender, "reasoningChars", 0 ) > 0 .AND. ;
+         !hb_HGetDef( oRender, "thinkDonePrinted", .F. )
+         AGREPL_FinishReasoning( oRender )
+      ENDIF
+      oRender[ "pendingText" ] += AGMD_Flush( oRender[ "md" ] )
+      AGREPL_FlushPending( oRender, .T. )
+   RECOVER
+   END SEQUENCE
+   IF hb_HGetDef( oRender, "inText", .F. )
+      s_nTipIdx++
+      AGREPL_Out( Chr(10) + AGUI_TipLine( AGUI_TipAt( s_nTipIdx ) ) )
    ENDIF
    nTurnMs := hb_MilliSeconds() - nTurnStartMs
-   s_nSessionTurnMs += nTurnMs
-   IF hRes[ "success" ]
-      AGREPL_ShowTokenBar( hRes[ "usage" ], nTurnMs )
-      AGREPL_AccumUsage( hRes[ "usage" ] )
-      AGREPL_MaybeWarnCompact( hRes[ "usage" ], cModel )
-      AGREPL_MaybeWarnNoToolCall( hRes, cModel )
-   ELSE
-      AGREPL_Out( Chr(10) )
+   IF nTurnMs < 0
+      nTurnMs := 0
    ENDIF
-   AGHOOKS_Run( "turn_complete", { ;
-      "status"      => AGREPL_TurnStatus( hRes ), ;
-      "model"       => hb_CStr( cModel ), ;
-      "tokens"      => AGREPL_TurnTokens( hRes ), ;
-      "duration_ms" => nTurnMs } )
-   RETURN { "result" => hRes, "render" => oRender }
+   s_nSessionTurnMs += nTurnMs
+   AGREPL_ShowWorkedFor( nTurnMs )
+   // If anything useful was painted, force success so the main loop does
+   // not print a red "!! error" under a perfectly good reply.
+   IF hb_HGetDef( oRender, "inText", .F. ) .OR. ;
+      hb_HGetDef( oRender, "thinkDonePrinted", .F. )
+      IF ValType( hRes ) != "H"
+         hRes := { "success" => .T., "messages" => aMessages, ;
+                   "usage" => {=>}, "stop_reason" => "end_turn", ;
+                   "error_type" => "", "message" => "" }
+      ELSE
+         hRes[ "success" ] := .T.
+         IF Empty( hb_HGetDef( hRes, "stop_reason", "" ) ) .OR. ;
+            hb_HGetDef( hRes, "stop_reason", "" ) == "error"
+            hRes[ "stop_reason" ] := "end_turn"
+         ENDIF
+         hRes[ "error_type" ] := ""
+         hRes[ "message" ] := ""
+      ENDIF
+   ENDIF
+   IF ValType( hRes ) == "H" .AND. hb_HGetDef( hRes, "success", .F. )
+      BEGIN SEQUENCE WITH {| o | Break( o ) }
+         AGREPL_ShowTokenBar( hb_HGetDef( hRes, "usage", {=>} ), nTurnMs )
+         AGREPL_AccumUsage( hb_HGetDef( hRes, "usage", {=>} ) )
+         AGREPL_MaybeWarnCompact( hb_HGetDef( hRes, "usage", {=>} ), cModel )
+         AGREPL_MaybeWarnNoToolCall( hRes, cModel )
+      RECOVER
+      END SEQUENCE
+   ELSEIF ValType( hRes ) == "H" .AND. ;
+          !Empty( hb_CStr( hb_HGetDef( hRes, "message", "" ) ) )
+      AGREPL_Out( Chr(10) + AGUI_Color( "!! error: " + ;
+         hb_CStr( hb_HGetDef( hRes, "error_type", "?" ) ) + ": " + ;
+         hb_CStr( hb_HGetDef( hRes, "message", "" ) ), "31" ) + Chr(10) )
+   ENDIF
+   RETURN { "result" => iif( ValType( hRes ) == "H", hRes, ;
+      { "success" => .F., "messages" => aMessages, "usage" => {=>}, ;
+        "error_type" => "internal", "message" => "no result", ;
+        "stop_reason" => "error" } ), "render" => oRender }
 
 // Maps an agent result hash to the string status the hooks system
 // expects. interrupted > error precedence: an interrupted turn often
@@ -601,8 +714,8 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
       "openai"   => { "base_url" => "https://api.openai.com/v1", ;
                       "model"    => "gpt-5", ;
                       "env"      => "OPENAI_API_KEY" }, ;
-      "ollama"   => { "base_url" => "http://localhost:11434/v1", ;
-                      "model"    => "llama3.1:8b", ;
+      "ollama"   => { "base_url" => AGCFG_OllamaBaseUrl(), ;
+                      "model"    => AGCFG_OllamaDefaultModel(), ;
                       "env"      => "" } }
    DO CASE
    CASE Empty( cMode )
@@ -863,7 +976,7 @@ STATIC FUNCTION AGREPL_MaybeWarnNoToolCall( hRes, cModel )
 // new aMsgs array; on any failure returns the original untouched.
 STATIC FUNCTION AGREPL_HandleCompact( aMsgs, oClient, cModel )
    LOCAL nKeep := 4, nN, i, aOld, aSumMsgs, hRes, cSummary
-   LOCAL aNew, hMsg
+   LOCAL aNew, hMsg, oR
    nN := Len( aMsgs )
    IF nN < 6
       AGREPL_Out( AGUI_Color( "[nothing to compact -- conversation is short]", ;
@@ -913,9 +1026,21 @@ STATIC FUNCTION AGREPL_HandleCompact( aMsgs, oClient, cModel )
       { "role" => "user", ;
         "content" => "Conversation to compact:" + Chr(10) + Chr(10) + ;
                      AGREPL_JoinArray( aOld, Chr(10) + Chr(10) ) } }
+   // Spinner + keyboard heartbeat while the summariser thinks (same
+   // silent-wait problem /plan had with reasoning models).
+   oR := AGREPL_RenderNew()
+   oR[ "userShown" ] := .T.
+   oR[ "spinnerStartMs" ] := hb_MilliSeconds()
+   AGREPL_WaitShow( oR )
+   s_oActiveRender := oR
    hRes := AG_AgentRun( oClient, aSumMsgs, ;
-      { "model" => cModel, "max_iterations" => 1 }, ;
+      { "model" => cModel, "max_iterations" => 1, ;
+        "on_idle" => {|| AGREPL_WaitTick( oR ), ;
+                         iif( s_oBoxPrompt != NIL, ;
+                              AGPROMPT_Poll( s_oBoxPrompt ), NIL ) } }, ;
       {| hEv | HB_SYMBOL_UNUSED( hEv ) } )
+   AGREPL_WaitClear( oR )
+   s_oActiveRender := NIL
    IF !hRes[ "success" ]
       AGREPL_Out( AGUI_Color( "[compact failed: " + ;
                               hb_CStr( hb_HGetDef( hRes, "error_type", "?" ) ) + ;
@@ -1791,15 +1916,16 @@ STATIC FUNCTION AGREPL_HandlePlan( cArg, aMsgs, oPrompt, oClient, cModel )
       AGREPL_PlanCard()   // show the current plan
    OTHERWISE
       // /plan <tarea> (or bare /plan with no stored plan): generate
-      AGREPL_PlanGenerate( oClient, cModel, cTrim, aMsgs )
+      AGREPL_PlanGenerate( oClient, cModel, cTrim, aMsgs, oPrompt )
    ENDCASE
    RETURN ""
 
 // Asks the model (plain completion, no tools) for a 3-6 step plan and stores
 // it in s_aPlanSteps. With no task, plans from the goal or the recent
 // conversation, like the web version.
-STATIC FUNCTION AGREPL_PlanGenerate( oClient, cModel, cTask, aMsgs )
+STATIC FUNCTION AGREPL_PlanGenerate( oClient, cModel, cTask, aMsgs, oPrompt )
    LOCAL aPMsgs, hRes, cContent, nStart, nEnd, xJson, hStep, cUser, i, hMsg
+   LOCAL oR, oErr
    cUser := cTask
    IF Empty( cUser )
       IF !Empty( s_cGoal )
@@ -1833,7 +1959,26 @@ STATIC FUNCTION AGREPL_PlanGenerate( oClient, cModel, cTask, aMsgs )
                  'First step active, the rest pending. No prose. ' + ;
                  'Answer in the language of the request.' }, ;
                { "role" => "user", "content" => cUser } }
-   hRes := AG_ChatCompletion( oClient, aPMsgs, { "model" => cModel }, NIL )
+   // Spinner + keyboard heartbeat while the planner model thinks —
+   // reasoning models sit silent 10-60s and /plan looked frozen. The
+   // SEQUENCE keeps a runtime error in the HTTP/render path from
+   // killing the whole session (it used to exit with Fatal).
+   oR := AGREPL_RenderNew()
+   oR[ "userShown" ] := .T.
+   oR[ "spinnerStartMs" ] := hb_MilliSeconds()
+   AGREPL_WaitShow( oR )
+   s_oActiveRender := oR
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      hRes := AG_ChatCompletion( oClient, aPMsgs, { "model" => cModel, ;
+         "on_idle" => {|| AGREPL_WaitTick( oR ), ;
+                          iif( oPrompt != NIL, AGPROMPT_Poll( oPrompt ), NIL ) } }, NIL )
+   RECOVER USING oErr
+      HB_SYMBOL_UNUSED( oErr )
+      hRes := { "success" => .F., "message" => "internal error", ;
+                "error_type" => "internal", "content" => "" }
+   END SEQUENCE
+   AGREPL_WaitClear( oR )
+   s_oActiveRender := NIL
    IF !hRes[ "success" ]
       AGREPL_Out( AGUI_Color( "!! error: no se pudo generar el plan: " + ;
                   hb_CStr( hRes[ "message" ] ), "31" ) + Chr(10) )
@@ -2023,6 +2168,15 @@ STATIC FUNCTION AGREPL_ApplyAutoSkills( cMsg, aMsgs, oPrompt )
       AGPROMPT_Redraw( oPrompt )
    ENDIF
    RETURN NIL
+
+// Mid-turn keyboard poll used as interrupt_check: drain any typed keys
+// into the prompt box / queue, then report whether Esc//btw interrupted.
+STATIC FUNCTION AGREPL_BusyPoll( oPrompt )
+   IF oPrompt != NIL
+      AGPROMPT_Poll( oPrompt )
+      RETURN AGPROMPT_Interrupted( oPrompt )
+   ENDIF
+   RETURN .F.
 
 // Idles on the persistent box until the user submits a line (Enter on a
 // non-empty buffer, or a /btw line). Returns the submitted text, or loops
@@ -2265,42 +2419,59 @@ STATIC FUNCTION AGREPL_SanitiseName( cName )
 // reasoning-character counter, and last-seen usage hash.
 // Prints the buffered narration text (pendingText) with the assistant
 // bullet prefix, then clears it. No-op when nothing is pending.
-STATIC FUNCTION AGREPL_FlushPending( oRender )
-   LOCAL aLines, i, nW
+// Grok6 assistant text: plain lines + clock on the first line (right).
+// lTrimTail (final flush only): drops ALL trailing blank lines so the
+// "Worked for" footer sits one row under the reply. Mid-stream flushes
+// keep single blanks — they are paragraph separators.
+STATIC FUNCTION AGREPL_FlushPending( oRender, lTrimTail )
+   LOCAL aLines, i, nW, cRow, cClock
    IF Empty( oRender[ "pendingText" ] )
       RETURN NIL
    ENDIF
+   // Streaming calls FlushPending once per completed line, so "i == 1"
+   // alone stamped the clock on EVERY line of a multi-line reply. Only
+   // the first printed line of a reply block (inText transition) gets it.
    IF !oRender[ "inText" ]
-      // clear the working spinner before showing the response
       IF oRender[ "spinner" ]
          AGREPL_SpinnerClear()
          oRender[ "spinner" ] := .F.
       ENDIF
-      IF AGUI_ColorOn()
-         // GUI-style reply bubble: the card itself marks the response
-         AGREPL_Out( Chr(10) )
-      ELSE
-         AGREPL_Out( Chr(10) + ;
-            AGUI_Color( Chr(226)+Chr(143)+Chr(186), AGUI_Pal( "accent" ) ) + "  " )
-      ENDIF
+      AGREPL_Out( Chr(10) )
       oRender[ "inText" ] := .T.
+      oRender[ "blockClockDone" ] := .F.
+      oRender[ "blankRun" ] := 0
    ENDIF
-   IF AGUI_ColorOn()
-      // paint the reply as a card, one tinted row per (complete) line.
-      // AGMD_Feed only emits whole lines, so no partial line is repainted.
-      nW := Min( AGREPL_Cols() - 2, 100 )
-      aLines := hb_ATokens( StrTran( oRender[ "pendingText" ], Chr(13), "" ), ;
-                            Chr(10) )
-      // a trailing LF yields a final empty token: drop it (not a blank row)
-      IF Len( aLines ) > 0 .AND. Empty( ATail( aLines ) )
+   aLines := hb_ATokens( StrTran( oRender[ "pendingText" ], Chr(13), "" ), ;
+                         Chr(10) )
+   IF Len( aLines ) > 0 .AND. Empty( ATail( aLines ) )
+      hb_ADel( aLines, Len( aLines ), .T. )
+   ENDIF
+   IF lTrimTail == .T.
+      DO WHILE Len( aLines ) > 0 .AND. Empty( ATail( aLines ) )
          hb_ADel( aLines, Len( aLines ), .T. )
-      ENDIF
-      FOR i := 1 TO Len( aLines )
-         AGREPL_Out( AGUI_CardLine( aLines[ i ], "card", nW ) + Chr(10) )
-      NEXT
-   ELSE
-      AGREPL_Out( oRender[ "pendingText" ] )
+      ENDDO
    ENDIF
+   nW := Max( 40, AGREPL_Cols() - 2 )
+   cClock := AGREPL_Clock12()
+   FOR i := 1 TO Len( aLines )
+      // Blank lines are DEFERRED: printed only when real content follows,
+      // so a reply never ends in stray empty rows before "Worked for".
+      IF Empty( aLines[ i ] )
+         oRender[ "blankRun" ] := hb_HGetDef( oRender, "blankRun", 0 ) + 1
+         LOOP
+      ENDIF
+      DO WHILE hb_HGetDef( oRender, "blankRun", 0 ) > 0
+         AGREPL_Out( Chr(10) )
+         oRender[ "blankRun" ] := oRender[ "blankRun" ] - 1
+      ENDDO
+      IF !hb_HGetDef( oRender, "blockClockDone", .T. )
+         cRow := AGREPL_BarRow( aLines[ i ], cClock, nW )
+         AGREPL_Out( AGUI_Color( cRow, "97" ) + Chr(10) )
+         oRender[ "blockClockDone" ] := .T.
+      ELSE
+         AGREPL_Out( AGUI_Color( aLines[ i ], "97" ) + Chr(10) )
+      ENDIF
+   NEXT
    oRender[ "pendingText" ] := ""
    RETURN NIL
 
@@ -2365,12 +2536,28 @@ STATIC FUNCTION AGREPL_RenderNew()
             "spinner" => .F., "spinnerFrame" => 1, ;
             "reasoningChars" => 0, "reasoningBuf" => "", ;
             "reasoningLines" => 0, ;
+            "reasoningLive" => .F., ;
+            "reasoningSoft" => 0, ;
             "thinkHeaderDone" => .F., ;
-            "thinkCornerUsed" => .F., ;  // .T. after first ⎿ line printed
+            "thinkCornerUsed" => .F., ;
+            "thinkDonePrinted" => .F., ;
             "thinkLastUpdate" => 0, ;
             "lastUsage" => {=>}, ;
             "lastFrameTime" => 0, "spinnerStartMs" => 0, ;
-            "pendingText" => "" }   // narration buffered for the next tool block
+            "userText" => "", "userShown" => .F., "waitShown" => .F., ;
+            "waitPhase" => "wait", "waitRow" => 0, "toolCount" => 0, ;
+            "pendingText" => "" }
+
+// Safe wrapper so a paint bug never aborts the whole turn with Fatal.
+STATIC FUNCTION AGREPL_SafeRender( hEv, oRender, oPrompt )
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      AGREPL_RenderEv( hEv, oRender )
+      IF oPrompt != NIL
+         AGPROMPT_Poll( oPrompt )
+      ENDIF
+   RECOVER
+   END SEQUENCE
+   RETURN NIL
 
 // Renders one agent event into the terminal, using the render state oRender.
 STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
@@ -2387,55 +2574,86 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
       oRender[ "reasoningChars" ] := 0
       oRender[ "reasoningBuf" ]   := ""
       oRender[ "reasoningLines" ] := 0
+      oRender[ "reasoningLive" ]  := .F.
+      oRender[ "reasoningSoft" ]  := 0
       oRender[ "thinkHeaderDone" ] := .F.
       oRender[ "thinkCornerUsed" ] := .F.
+      oRender[ "thinkDonePrinted" ] := .F.
       oRender[ "thinkLastUpdate" ] := 0
-      oRender[ "spinnerStartMs" ] := hb_MilliSeconds()
-      // start the working indicator immediately so activity is visible
-      // even before the first reasoning token arrives
-      IF !oRender[ "spinner" ]
-         oRender[ "spinner" ] := .T.
-         oRender[ "spinnerFrame" ] := 0
-         // trailing newline so the next AGREPL_Out (ThinkShow, etc.)
-         // starts on the line below, not on the same line
-         AGREPL_Out( Chr(10) + AGUI_Color( "●", "92" ) + " Working" + ;
-            AGUI_Color( Chr( 226 ) + Chr( 128 ) + Chr( 166 ), AGUI_Pal( "dim" ) ) + ;
-            Chr(10) )
+      IF oRender[ "spinnerStartMs" ] == 0
+         oRender[ "spinnerStartMs" ] := hb_MilliSeconds()
       ENDIF
-      AGREPL_ThinkShow( oRender )
+      // OpenCode: commit user line, then amber spinner + Thinking.
+      // Keep waitShown=.T. until the first reasoning token (or text)
+      // arrives; then the live reasoning block takes over.
+      AGREPL_CommitUserPrompt( oRender )
+      oRender[ "spinner" ] := .T.
+      IF AGUI_ColorOn()
+         // The status row has a single owner: when one is already on
+         // screen (the "Working" line from WaitShow), switch its phase
+         // and repaint IN PLACE through AGREPL_Out — the ESC[1G ESC[K
+         // spinner prefix reuses the same physical row and keeps the
+         // content-row/anchor bookkeeping intact. Printing a second
+         // status line here left the old row ticking above the new one
+         // (stale-row artifact); raw absolute writes desynced the box
+         // wipe and made the streamed reply invisible.
+         IF hb_HGetDef( oRender, "waitShown", .F. )
+            oRender[ "waitPhase" ] := "think"
+            AGREPL_Out( AGUI_VT( "1G" ) + AGUI_VT( "K" ) + ;
+                        AGREPL_WaitLine( oRender, "think" ) )
+         ELSE
+            AGREPL_WaitShow( oRender, "think" )
+         ENDIF
+      ELSE
+         AGREPL_Out( Chr(10) + AGUI_Color( s_aSpinnerFrames[ 1 ] + " Thinking", ;
+                     AGUI_Pal( "amber" ) ) + Chr(10) )
+         oRender[ "waitShown" ] := .F.
+      ENDIF
+      oRender[ "thinkHeaderDone" ] := .T.
 
    CASE cType == "reasoning_delta"
-      // accumulate reasoning text, print wrapped lines with ⎿ prefix
-      // as they become complete, update the summary header in-place
-      oRender[ "reasoningBuf" ]   += hb_CStr( hEv[ "text" ] )
-      oRender[ "reasoningChars" ] += Len( hb_CStr( hEv[ "text" ] ) )
+      cThinking := hb_CStr( hEv[ "text" ] )
+      oRender[ "reasoningBuf" ]   += cThinking
+      oRender[ "reasoningChars" ] += Len( cThinking )
+      // First reasoning token: drop the spinner status line and open the
+      // live reasoning block (user asked to SEE the chain of thought).
+      IF !hb_HGetDef( oRender, "reasoningLive", .F. )
+         AGREPL_WaitClear( oRender )
+         // Amber header matching OpenCode "Thinking". No leading LF: the
+         // anchor sits at col 1 of the row WaitClear just blanked, so the
+         // header reuses that row instead of leaving it empty.
+         AGREPL_Out( AGUI_Color( s_aSpinnerFrames[ 1 ] + " Thinking", ;
+                     AGUI_Pal( "amber" ) ) + Chr(10) )
+         oRender[ "reasoningLive" ] := .T.
+      ENDIF
+      // Stream complete lines (dim/pink card) + soft-wrap long partials so
+      // token-by-token models (qwen/ollama) still show text immediately.
       AGREPL_FlushReasoningLines( oRender )
-      AGREPL_ThinkShow( oRender )
+      AGREPL_StreamReasoningPartial( oRender )
 
    CASE cType == "text_delta"
-      // flush any unfinished reasoning on the first text_delta,
-      // then let the spinner keep running while text accumulates.
-      // The spinner clears only when output is ready to display
-      // (tool_call, tool_result, or final flush at turn end).
-      IF oRender[ "reasoningBuf" ] != ""
-         AGREPL_FlushReasoningTail( oRender )
+      // End thinking status line once visible text starts
+      AGREPL_WaitClear( oRender )
+      // Finish reasoning block: leftover partial + "Thought for Xs"
+      IF oRender[ "reasoningChars" ] > 0 .AND. ;
+         !hb_HGetDef( oRender, "thinkDonePrinted", .F. )
+         AGREPL_FinishReasoning( oRender )
       ENDIF
+      // STREAM live: AGMD_Feed returns complete lines — print them now.
       oRender[ "pendingText" ] += ;
          AGMD_Feed( oRender[ "md" ], hb_CStr( hEv[ "text" ] ) )
+      IF !Empty( oRender[ "pendingText" ] )
+         AGREPL_FlushPending( oRender )
+      ENDIF
 
    CASE cType == "usage"
-      // store the usage hash for display after the turn
       oRender[ "lastUsage" ] := hEv[ "usage" ]
 
    CASE cType == "tool_call"
-      // clear the working spinner before the tool block
-      IF oRender[ "spinner" ]
-         AGREPL_SpinnerClear()
-         oRender[ "spinner" ] := .F.
-      ENDIF
-      // flush reasoning (only if buffer still has content)
-      IF oRender[ "reasoningBuf" ] != ""
-         AGREPL_FlushReasoningTail( oRender )
+      AGREPL_WaitClear( oRender )
+      IF oRender[ "reasoningChars" ] > 0 .AND. ;
+         !hb_HGetDef( oRender, "thinkDonePrinted", .F. )
+         AGREPL_FinishReasoning( oRender )
       ENDIF
       IF hb_HHasKey( hEv, "id" )
          oRender[ "tools" ][ hb_CStr( hEv[ "id" ] ) ] := hb_CStr( hEv[ "name" ] )
@@ -2444,31 +2662,30 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
          Lower( hb_CStr( hEv[ "name" ] ) ) == "propose_agents"
          AGMD_Flush( oRender[ "md" ] )
       ELSE
-         // bullet line: ● Running <name>… (white, active) on the faint
-         // actions-panel tint (web "acciones" panel parity)
-         AGREPL_Out( Chr(10) + AGREPL_ToolCard( AGUI_Color( Chr(226)+Chr(151)+Chr(143), "97" ) + ;
-            " Running " + hb_CStr( hEv[ "name" ] ) + ;
-            AGUI_Color( Chr( 226 ) + Chr( 128 ) + Chr( 166 ), AGUI_Pal( "dim" ) ) ) )
-         // tool content below (command + explanation, no separator)
-         AGREPL_Out( AGREPL_ToolCard( AGUI_ToolContentBlock( hEv[ "arguments" ], ;
-            oRender[ "pendingText" ] + AGMD_Flush( oRender[ "md" ] ), ;
-            AGREPL_Cols() ) ) )
+         // Grok6: active green bar + diamond "♦ Read …"
+         AGREPL_Out( Chr(10) + AGUI_GrokActActive( ;
+            AGREPL_ToolVerb( hEv[ "name" ], hEv[ "arguments" ] ) ) + Chr(10) )
+         // Shell/write show command body; read stays one-liners
+         IF Lower( hb_CStr( hEv[ "name" ] ) ) == "shell" .OR. ;
+            Lower( hb_CStr( hEv[ "name" ] ) ) == "write"
+            AGREPL_Out( AGUI_ToolContentBlock( hEv[ "arguments" ], ;
+               AGMD_Flush( oRender[ "md" ] ), AGREPL_Cols() ) )
+         ELSE
+            AGMD_Flush( oRender[ "md" ] )
+         ENDIF
       ENDIF
       oRender[ "pendingText" ] := ""
       oRender[ "inText" ] := .F.
+      oRender[ "toolCount" ] := hb_HGetDef( oRender, "toolCount", 0 ) + 1
 
    CASE cType == "tool_result"
       AGREPL_FlushPending( oRender )
       oRender[ "inText" ] := .F.
       cId := hb_CStr( hb_HGetDef( hEv, "id", "" ) )
-      // completed line: ✓ <name> <summary> (green check, web parity)
-      AGREPL_Out( AGREPL_ToolCard( AGUI_Color( Chr(226)+Chr(156)+Chr(147), "92" ) + " " + ;
-         hb_HGetDef( oRender[ "tools" ], cId, "" ) + " " + ;
-         AGUI_Color( AGUI_Summarize( hb_CStr( hEv[ "content" ] ), 60 ), ;
-                     AGUI_Pal( "dim" ) ) ) )
-      AGREPL_Out( AGREPL_ToolCard( AGUI_ResultSummary( ;
+      // Grok6: "♦ Read 1 file" or full coloured diff for edit/write
+      AGREPL_Out( AGUI_ResultSummary( ;
          hb_HGetDef( oRender[ "tools" ], cId, "" ), ;
-         hb_CStr( hEv[ "content" ] ) ) ) )
+         hb_CStr( hEv[ "content" ] ) ) )
 
    OTHERWISE
       AGREPL_FlushPending( oRender )
@@ -2491,21 +2708,291 @@ STATIC FUNCTION AGREPL_FirstUserMsg( aMsgs )
    NEXT
    RETURN 0
 
+// Last user message index (for Grok-style prompt echo of this turn).
+STATIC FUNCTION AGREPL_LastUserMsg( aMsgs )
+   LOCAL i
+   FOR i := Len( aMsgs ) TO 1 STEP -1
+      IF ValType( aMsgs[ i ] ) == "H" .AND. ;
+         hb_HGetDef( aMsgs[ i ], "role", "" ) == "user"
+         RETURN i
+      ENDIF
+   NEXT
+   RETURN 0
+
+// OpenCode status line (opencode1.jpg): amber "Thinking" / "Working" + elapsed.
+STATIC FUNCTION AGREPL_WaitLine( oRender, cPhase )
+   LOCAL nMs, nSec, cSec, cLeft, cRight, nCols, nPad, cSpin, nFrame
+   nMs := hb_MilliSeconds() - hb_HGetDef( oRender, "spinnerStartMs", hb_MilliSeconds() )
+   IF nMs < 0
+      nMs := 0
+   ENDIF
+   nSec := nMs / 1000.0
+   cSec := LTrim( Str( nSec, 10, 1 ) ) + "s"
+   nFrame := hb_HGetDef( oRender, "spinnerFrame", 1 )
+   IF nFrame < 1 .OR. nFrame > Len( s_aSpinnerFrames )
+      nFrame := 1
+   ENDIF
+   cSpin := s_aSpinnerFrames[ nFrame ]
+   // Always show elapsed so long Ollama reasoning does not look frozen.
+   IF cPhase == "think"
+      cLeft := cSpin + " Thinking"
+      RETURN AGUI_Color( cLeft, AGUI_Pal( "amber" ) ) + ;
+             AGUI_Color( "  " + cSec, AGUI_Pal( "dim" ) )
+   ENDIF
+   cLeft  := cSpin + " Working"
+   cRight := "esc interrupt"
+   nCols  := AGREPL_Cols()
+   nPad   := nCols - 1 - Len( cLeft ) - Len( cRight ) - Len( cSec ) - 2
+   IF nPad < 2
+      nPad := 2
+   ENDIF
+   RETURN AGUI_Color( cLeft, AGUI_Pal( "amber" ) ) + Space( nPad ) + ;
+          AGUI_Color( cSec + "  " + cRight, AGUI_Pal( "dim" ) )
+
+// Phase 1 — waiting indicator. Leading LF parks it on its own row; no
+// trailing LF so WaitTick can overwrite in place with elapsed time.
+// cPhase: "wait" (default) or "think".
+STATIC FUNCTION AGREPL_WaitShow( oRender, cPhase )
+   LOCAL nRow
+   IF oRender == NIL
+      RETURN NIL
+   ENDIF
+   IF ValType( cPhase ) != "C" .OR. Empty( cPhase )
+      cPhase := "wait"
+   ENDIF
+   IF oRender[ "spinnerStartMs" ] == 0
+      oRender[ "spinnerStartMs" ] := hb_MilliSeconds()
+   ENDIF
+   oRender[ "spinnerFrame" ] := 1
+   oRender[ "waitShown" ] := .T.
+   oRender[ "waitPhase" ] := cPhase
+   // New row + status line (no trailing LF → stays on this row).
+   // The user line above prints WITHOUT a trailing LF, so this leading
+   // LF lands the status directly under it — no blank row between.
+   AGREPL_Out( Chr(10) + AGREPL_WaitLine( oRender, cPhase ) )
+   // Record physical row for absolute spinner updates. After Out(),
+   // content_row points at (or just past) the wait line.
+   IF s_oBoxPrompt != NIL
+      nRow := hb_HGetDef( s_oBoxPrompt, "content_row", 0 )
+      // Wait line itself is content_row - 0 when no trailing LF left
+      // cursor on the written row; clamp to >= 1.
+      IF nRow < 1
+         nRow := 1
+      ENDIF
+      oRender[ "waitRow" ] := nRow
+   ELSE
+      oRender[ "waitRow" ] := 0
+   ENDIF
+   RETURN NIL
+
+// Suspends the status row so out-of-band content (a mid-turn [pending]
+// line) can print BELOW it without leaving a stale ticking row behind.
+// Returns .T. when a status row was on screen (caller must Resume after).
+FUNCTION AGREPL_StatusSuspend()
+   IF s_oActiveRender != NIL .AND. ;
+      hb_HGetDef( s_oActiveRender, "waitShown", .F. )
+      AGREPL_WaitClear( s_oActiveRender )
+      RETURN .T.
+   ENDIF
+   RETURN .F.
+
+// Re-shows the status row (same phase, same running timer) as the new
+// last content row after an out-of-band print.
+FUNCTION AGREPL_StatusResume()
+   IF s_oActiveRender != NIL
+      AGREPL_WaitShow( s_oActiveRender, ;
+         hb_HGetDef( s_oActiveRender, "waitPhase", "wait" ) )
+   ENDIF
+   RETURN NIL
+
+// Erases the status row (Working/Thinking) and drops waitShown. Goes
+// through AGREPL_Out with the ESC[1G ESC[K spinner prefix: the output
+// anchor sits on the status row (the last row Out wrote — StatusSuspend
+// keeps that invariant for mid-turn prints), so the clear lands on the
+// right row AND the content-row/anchor bookkeeping the travelling box
+// relies on stays in sync. Raw absolute writes here desynced the box
+// wipe and erased freshly streamed content.
+STATIC FUNCTION AGREPL_WaitClear( oRender )
+   IF oRender == NIL .OR. !hb_HGetDef( oRender, "waitShown", .F. )
+      RETURN NIL
+   ENDIF
+   IF AGUI_ColorOn()
+      AGREPL_Out( AGUI_VT( "1G" ) + AGUI_VT( "K" ) )
+   ELSE
+      AGREPL_Out( Chr(10) )
+   ENDIF
+   oRender[ "waitShown" ] := .F.
+   RETURN NIL
+
+// Advance spinner + elapsed while still waiting/thinking.
+// Called ~12x/s from the HTTP on_idle heartbeat.
+STATIC FUNCTION AGREPL_WaitTick( oRender )
+   LOCAL nFrame, cPhase, cLine, nRow, cPaint
+   IF oRender == NIL .OR. !hb_HGetDef( oRender, "waitShown", .F. )
+      RETURN NIL
+   ENDIF
+   nFrame := oRender[ "spinnerFrame" ] + 1
+   IF nFrame > Len( s_aSpinnerFrames )
+      nFrame := 1
+   ENDIF
+   oRender[ "spinnerFrame" ] := nFrame
+   cPhase := hb_HGetDef( oRender, "waitPhase", "wait" )
+   cLine  := AGREPL_WaitLine( oRender, cPhase )
+   // Prefer absolute row (set in WaitShow) so box Redraw / ESC[u] desync
+   // cannot freeze the spinner on "0.0s".
+   nRow := hb_HGetDef( oRender, "waitRow", 0 )
+   IF nRow >= 1 .AND. AGUI_ColorOn()
+      cPaint := Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+                Chr( 27 ) + "[2K" + cLine
+      IF s_oBoxPrompt != NIL
+         cPaint += AGREPL_BoxCursorSeq()
+      ENDIF
+      FWrite( hb_GetStdOut(), cPaint )
+   ELSE
+      // Fallback: CR overwrite on the current line
+      FWrite( hb_GetStdOut(), Chr( 13 ) + Chr( 27 ) + "[K" + cLine )
+      IF s_oBoxPrompt != NIL
+         FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
+      ENDIF
+   ENDIF
+   RETURN NIL
+
+// Phase 2 — clear waiting, emit "> message" with HH:MM:SS on the right.
+STATIC FUNCTION AGREPL_CommitUserPrompt( oRender )
+   LOCAL cText
+   IF oRender == NIL .OR. hb_HGetDef( oRender, "userShown", .F. )
+      RETURN NIL
+   ENDIF
+   IF hb_HGetDef( oRender, "waitShown", .F. )
+      // Erase the waiting line (absolute row; see AGREPL_WaitClear).
+      AGREPL_WaitClear( oRender )
+   ELSE
+      AGREPL_Out( Chr(10) )
+   ENDIF
+   cText := hb_HGetDef( oRender, "userText", "" )
+   AGREPL_Out( AGREPL_UserPromptLine( cText ) )
+   oRender[ "userShown" ] := .T.
+   RETURN NIL
+
+// OpenCode user line: simple "> text" (no heavy bar); optional dim clock.
+STATIC FUNCTION AGREPL_UserPromptLine( cText )
+   LOCAL cLeft, cRight, nCols, nW, cRow
+   cText  := AllTrim( StrTran( StrTran( hb_CStr( cText ), Chr(13), "" ), ;
+                               Chr(10), " " ) )
+   IF Empty( cText )
+      cText := "(empty)"
+   ENDIF
+   cRight := AGREPL_Clock12()
+   nCols  := AGREPL_Cols()
+   nW     := Max( 40, nCols - 2 )
+   cLeft  := "> " + cText
+   cRow   := AGREPL_BarRow( cLeft, cRight, nW )
+   // No trailing LF: WaitShow's leading LF supplies the row break, so
+   // the status line sits directly under the user line (no blank row).
+   RETURN AGUI_Color( cRow, AGUI_Pal( "dim" ) )
+
+// "6:31 AM" / "12:05 PM" for the right side of the user bar.
+STATIC FUNCTION AGREPL_Clock12()
+   LOCAL cT := Time()   // HH:MM:SS
+   LOCAL nH, nM, cAmpm, cH
+   nH := Val( Left( cT, 2 ) )
+   nM := Val( SubStr( cT, 4, 2 ) )
+   cAmpm := iif( nH >= 12, "PM", "AM" )
+   IF nH == 0
+      nH := 12
+   ELSEIF nH > 12
+      nH := nH - 12
+   ENDIF
+   cH := LTrim( Str( nH ) )
+   RETURN cH + ":" + Right( "0" + LTrim( Str( nM ) ), 2 ) + " " + cAmpm
+
+// Left text + right text padded to nW visible columns (no ANSI in inputs).
+STATIC FUNCTION AGREPL_BarRow( cLeft, cRight, nW )
+   LOCAL nPad, nVis
+   cLeft  := hb_CStr( cLeft )
+   cRight := hb_CStr( cRight )
+   nVis   := Len( cLeft ) + Len( cRight )
+   nPad   := nW - nVis
+   IF nPad < 2
+      // Truncate left so the clock still fits
+      IF Len( cLeft ) > nW - Len( cRight ) - 2 .AND. nW > Len( cRight ) + 5
+         cLeft := Left( cLeft, nW - Len( cRight ) - 5 ) + "..."
+      ENDIF
+      nPad := Max( 2, nW - Len( cLeft ) - Len( cRight ) )
+   ENDIF
+   RETURN cLeft + Space( nPad ) + cRight
+
+// "1.2s" / "2m5s" duration formatter (Grok activity lines).
+STATIC FUNCTION AGREPL_FmtDur( nTurnMs )
+   LOCAL nSec, nMin, cDur
+   IF ValType( nTurnMs ) != "N" .OR. nTurnMs < 0
+      nTurnMs := 0
+   ENDIF
+   IF nTurnMs < 100
+      RETURN "0.1s"
+   ENDIF
+   IF nTurnMs < 60000
+      RETURN LTrim( Str( nTurnMs / 1000.0, 10, 1 ) ) + "s"
+   ENDIF
+   nSec := Int( ( nTurnMs + 500 ) / 1000 )
+   nMin := Int( nSec / 60 )
+   nSec := nSec % 60
+   RETURN LTrim( Str( nMin ) ) + "m" + LTrim( Str( nSec ) ) + "s"
+
+// Grok6 tool verb for the active diamond line.
+STATIC FUNCTION AGREPL_ToolVerb( cName, cArgsJson )
+   LOCAL cLow := Lower( hb_CStr( cName ) ), hArgs, cCmd
+   DO CASE
+   CASE cLow == "read"  ; RETURN "Read"
+   CASE cLow == "write" ; RETURN "Write"
+   CASE cLow == "edit"  ; RETURN "Edit"
+   CASE cLow == "grep"  ; RETURN "Search"
+   CASE cLow == "glob"  ; RETURN "List files"
+   CASE cLow == "shell"
+      hArgs := hb_jsonDecode( hb_CStr( cArgsJson ) )
+      IF ValType( hArgs ) == "H"
+         cCmd := hb_HGetDef( hArgs, "command", hb_HGetDef( hArgs, "cmd", "" ) )
+         IF !Empty( cCmd )
+            RETURN "Run " + AGUI_Summarize( cCmd, 48 )
+         ENDIF
+      ENDIF
+      RETURN "Run shell"
+   CASE cLow == "todo_write" .OR. cLow == "todo"
+      RETURN "Update tasks"
+   OTHERWISE
+      RETURN Upper( Left( cName, 1 ) ) + Lower( SubStr( cName, 2 ) )
+   ENDCASE
+   RETURN cName
+
+// OpenCode end-of-turn: model chip + short duration.
+STATIC FUNCTION AGREPL_ShowWorkedFor( nTurnMs )
+   LOCAL cDur, cChip
+   IF nTurnMs >= 1000
+      cDur := LTrim( Str( Int( ( nTurnMs + 500 ) / 1000 ) ) ) + "s"
+   ELSE
+      cDur := AGREPL_FmtDur( nTurnMs )
+   ENDIF
+   // Grok-style closing line. The model chip is NOT repeated here: the
+   // input box right below always shows "□ Build · model", and printing
+   // it again in the transcript read as a duplicated/stuck row.
+   AGREPL_Out( Chr(10) + AGUI_Color( "Worked for " + cDur, AGUI_Pal( "dim" ) ) + ;
+               Chr(10) )
+   RETURN NIL
+
 // ── Thinking display helpers ─────────────────────────────────────────
 
-// Draws the thinking summary line once per turn:
-//   ● Thinking for Ns, <first reasoning words>…
-// Printed with a trailing newline so reasoning lines land below it.
-// Subsequent calls are no-ops — the header stays as first printed.
+// Grok-style thought line (diamond bullet): "♦ Thought for 0.1s"
+// Printed once when reasoning starts; updated duration in ThinkDone.
 STATIC FUNCTION AGREPL_ThinkShow( oRender )
-   LOCAL cMsg
+   LOCAL cMsg, cDia
    IF oRender[ "thinkHeaderDone" ]
       RETURN NIL
    ENDIF
    oRender[ "thinkHeaderDone" ] := .T.
-   cMsg := AGUI_Color( Chr(226)+Chr(151)+Chr(143), "97" ) + " Thinking" + ;
-           AGUI_Color( Chr( 226 ) + Chr( 128 ) + Chr( 166 ), ;
-                        AGUI_Pal( "dim" ) )   // … (ellipsis)
+   // U+25C6 BLACK DIAMOND
+   cDia := Chr( 226 ) + Chr( 151 ) + Chr( 134 )
+   cMsg := AGUI_Color( cDia, AGUI_Pal( "dim" ) ) + " " + ;
+           AGUI_Color( "Thought for 0.1s", AGUI_Pal( "dim" ) )
    AGREPL_Out( cMsg + Chr(10) )
    RETURN NIL
 
@@ -2532,24 +3019,27 @@ STATIC FUNCTION AGREPL_FlushReasoningTail( oRender )
    oRender[ "reasoningLines" ] := 0
    RETURN NIL
 
-// Reprints the thinking summary line with a green bullet (completed).
+// Final thought duration (Grok: "♦ Thought for 8.1s").
 STATIC FUNCTION AGREPL_ThinkDone( oRender )
    LOCAL nNow := hb_MilliSeconds()
-   LOCAL nElapsed, cTime, cMsg
+   LOCAL nMs, nSec, cDur, cDia, cMsg
    IF oRender[ "reasoningChars" ] == 0
-      RETURN NIL   // never had any reasoning — nothing to mark as done
-   ENDIF
-   IF oRender[ "thinkHeaderDone" ] .AND. oRender[ "reasoningBuf" ] == ""
       RETURN NIL
    ENDIF
-   nElapsed := Int( ( nNow - oRender[ "spinnerStartMs" ] ) / 1000 )
-   cTime := iif( nElapsed == 0, "", ;
-             " for " + iif( nElapsed < 60, LTrim( Str( nElapsed ) ) + "s", ;
-             LTrim( Str( Int( nElapsed / 60 ) ) ) + "m " + ;
-             LTrim( Str( nElapsed % 60 ) ) + "s" ) )
-   cMsg := AGUI_Color( "●", "92" ) + " Thinking" + cTime
-   cMsg += AGUI_Color( Chr( 226 ) + Chr( 128 ) + Chr( 166 ), ;
-                        AGUI_Pal( "dim" ) )   // … (ellipsis)
+   nMs := nNow - oRender[ "spinnerStartMs" ]
+   IF nMs < 100
+      nMs := 100
+   ENDIF
+   nSec := nMs / 1000.0
+   IF nSec < 60
+      cDur := LTrim( Str( nSec, 10, 1 ) ) + "s"
+   ELSE
+      cDur := LTrim( Str( Int( nSec / 60 ) ) ) + "m" + ;
+              LTrim( Str( Int( nSec ) % 60 ) ) + "s"
+   ENDIF
+   cDia := Chr( 226 ) + Chr( 151 ) + Chr( 134 )   // ◆
+   cMsg := AGUI_Color( cDia, AGUI_Pal( "dim" ) ) + " " + ;
+           AGUI_Color( "Thought for " + cDur, AGUI_Pal( "dim" ) )
    AGREPL_Out( cMsg + Chr(10) )
    RETURN NIL
 
@@ -2582,21 +3072,89 @@ STATIC FUNCTION AGREPL_FlushReasoningLines( oRender )
    DO WHILE ( nPos := hb_At( Chr(10), cBuf, nStart ) ) > 0
       nTotal++ ; nStart := nPos + 1
    ENDDO
-   IF nTotal <= nPrinted .AND. Empty( AGREPL_ThinkPending( oRender ) )
+   IF nTotal <= nPrinted
       RETURN NIL
    ENDIF
-   // Print each new complete segment, word-wrapped
+   // Print each new complete segment, word-wrapped. The first new line may
+   // already have been partially soft-streamed (token models without \n);
+   // only print the remainder to avoid duplicated reasoning text.
    nStart := 1 ; nLine := 0
    DO WHILE ( nPos := hb_At( Chr(10), cBuf, nStart ) ) > 0
       nLine++
       IF nLine > nPrinted
          cLine := SubStr( cBuf, nStart, nPos - nStart )
          cLine := StrTran( cLine, Chr(13), "" )
-         AGREPL_ThinkPrintWrapped( cLine, nWrap, oRender )
+         IF nLine == nPrinted + 1 .AND. ;
+            hb_HGetDef( oRender, "reasoningSoft", 0 ) > 0
+            IF hb_HGetDef( oRender, "reasoningSoft", 0 ) < Len( cLine )
+               cLine := SubStr( cLine, ;
+                  hb_HGetDef( oRender, "reasoningSoft", 0 ) + 1 )
+               AGREPL_ThinkPrintWrapped( AllTrim( cLine ), nWrap, oRender )
+            ENDIF
+            oRender[ "reasoningSoft" ] := 0
+         ELSE
+            AGREPL_ThinkPrintWrapped( cLine, nWrap, oRender )
+         ENDIF
       ENDIF
       nStart := nPos + 1
    ENDDO
    oRender[ "reasoningLines" ] := nTotal
+   oRender[ "reasoningSoft" ] := 0
+   RETURN NIL
+
+// Live-stream the unprinted tail when the model sends tokens without
+// newlines (typical for Ollama/qwen reasoning). Prints in wrap-sized
+// chunks so the user sees the chain of thought immediately.
+STATIC FUNCTION AGREPL_StreamReasoningPartial( oRender )
+   LOCAL cTail, nSoft, nWrap, cChunk, nSpace, nTake
+   cTail := AGREPL_ThinkPending( oRender )
+   nSoft := hb_HGetDef( oRender, "reasoningSoft", 0 )
+   nWrap := Min( AGREPL_Cols(), 102 ) - 8
+   IF nWrap < 20
+      nWrap := 20
+   ENDIF
+   // Only soft-print once the unprinted tail reaches a full wrap width.
+   DO WHILE Len( cTail ) - nSoft >= nWrap
+      cChunk := SubStr( cTail, nSoft + 1, nWrap )
+      nSpace := hb_RAt( " ", cChunk )
+      IF nSpace >= 12
+         nTake := nSpace - 1
+         cChunk := Left( cChunk, nTake )
+         nSoft  := nSoft + nTake + 1   // skip the space
+      ELSE
+         nTake := nWrap
+         nSoft := nSoft + nTake
+      ENDIF
+      AGREPL_ThinkPrintWrapped( cChunk, nWrap, oRender )
+   ENDDO
+   oRender[ "reasoningSoft" ] := nSoft
+   RETURN NIL
+
+// End of reasoning: print leftover partial + "Thought for Xs" summary.
+STATIC FUNCTION AGREPL_FinishReasoning( oRender )
+   LOCAL cTail, nSoft, cRest, nWrap
+   IF hb_HGetDef( oRender, "thinkDonePrinted", .F. )
+      RETURN NIL
+   ENDIF
+   // Any complete lines not yet flushed
+   AGREPL_FlushReasoningLines( oRender )
+   // Remainder of the last partial line (after soft-streamed chunks)
+   cTail := AGREPL_ThinkPending( oRender )
+   nSoft := hb_HGetDef( oRender, "reasoningSoft", 0 )
+   IF Len( cTail ) > nSoft
+      cRest := AllTrim( SubStr( cTail, nSoft + 1 ) )
+      IF !Empty( cRest )
+         nWrap := Min( AGREPL_Cols(), 102 ) - 8
+         AGREPL_ThinkPrintWrapped( cRest, nWrap, oRender )
+      ENDIF
+   ENDIF
+   oRender[ "reasoningSoft" ] := 0
+   AGREPL_Out( AGUI_GrokAct( "Thought for " + ;
+      AGREPL_FmtDur( hb_MilliSeconds() - oRender[ "spinnerStartMs" ] ) ) + ;
+      Chr(10) )
+   oRender[ "thinkDonePrinted" ] := .T.
+   oRender[ "reasoningBuf" ] := ""
+   oRender[ "reasoningLines" ] := 0
    RETURN NIL
 
 // Prints a single reasoning line, word-wrapped to nWrap chars per visual
@@ -3132,21 +3690,11 @@ STATIC FUNCTION AGREPL_ToolCard( cText )
    ENDIF
    RETURN AGUI_Card( cText, "card_tool", Min( AGREPL_Cols() - 2, 100 ) ) + Chr(10)
 
-// The user's prompt echoed as a blue bubble (web addUser parity): white
-// text on a blue card. Plain "> text" line when colour is off. Ends in LF.
+// Slash-command echo: same Grok gray bar as agent user prompts (with clock).
+// Keeps its own trailing LF — only the agent-turn path (WaitShow below)
+// supplies the break itself.
 STATIC FUNCTION AGREPL_UserCard( cText )
-   LOCAL aLines, i, cOut := "", nW
-   cText := hb_CStr( cText )
-   IF !AGUI_ColorOn()
-      RETURN AGUI_Color( "> " + cText, AGUI_Pal( "user" ) ) + Chr(10)
-   ENDIF
-   nW := Min( AGREPL_Cols() - 2, 100 )
-   aLines := hb_ATokens( StrTran( cText, Chr(13), "" ), Chr(10) )
-   FOR i := 1 TO Len( aLines )
-      cOut += AGUI_CardLine( AGUI_Color( aLines[ i ], "97" ), "card_user", nW ) + ;
-              Chr(10)
-   NEXT
-   RETURN cOut
+   RETURN AGREPL_UserPromptLine( cText ) + Chr(10)
 
 // One reasoning line, GUI glass-box style: pink text on a faint purple card.
 // Falls back to the plain pink line when colour is off.

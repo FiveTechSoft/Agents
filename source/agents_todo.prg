@@ -101,3 +101,19 @@ FUNCTION AGTODO_HasOpen()
       ENDIF
    NEXT
    RETURN .F.
+
+// True when any todo exists (including an all-completed list). Used to
+// keep Grok-style completed task panels visible after a plan finishes.
+FUNCTION AGTODO_HasAny()
+   RETURN Len( s_aTodos ) > 0
+
+// Counts completed / total for compact "3/5" badges.
+FUNCTION AGTODO_Progress()
+   LOCAL nDone := 0, nAll := 0, hItem
+   FOR EACH hItem IN s_aTodos
+      nAll++
+      IF hItem[ "status" ] == "completed"
+         nDone++
+      ENDIF
+   NEXT
+   RETURN { "done" => nDone, "total" => nAll }

@@ -2,9 +2,9 @@
 // This file holds the pure logic; the console I/O (Poll, Redraw, Activate,
 // Teardown) is added on top of it.
 
-// The input box occupies the bottom FOUR rows: top frame, input line,
-// bottom frame, and a skills status line that lists active skills.
-#define AGPROMPT_BOX_ROWS  4
+// OpenCode layout (opencode1.jpg): model chip, input line, footer.
+// Three rows at the bottom of the terminal.
+#define AGPROMPT_BOX_ROWS  3
 
 // Wall-clock of the previously processed key, used by paste detection.
 STATIC s_nLastKeyMs := 0
@@ -39,6 +39,7 @@ FUNCTION AGPROMPT_New( hSize, nTopRow )
    nTopRow := iif( ValType( nTopRow ) == "N" .AND. nTopRow >= 1, nTopRow, 1 )
    RETURN { "editor"      => AGIN_New( "" ), ;
             "queue"       => {}, ;
+            "busy"        => .F., ;
             "interrupt"   => NIL, ;
             "scroll_top"  => nTopRow, ;
             "content_row" => nTopRow, ;
@@ -118,6 +119,47 @@ FUNCTION AGPROMPT_Dequeue( oPrompt )
    cFirst := oPrompt[ "queue" ][ 1 ]
    hb_ADel( oPrompt[ "queue" ], 1, .T. )
    RETURN cFirst
+
+// Number of messages waiting in the mid-turn FIFO.
+FUNCTION AGPROMPT_QueueLen( oPrompt )
+   IF oPrompt == NIL .OR. ValType( oPrompt[ "queue" ] ) != "A"
+      RETURN 0
+   ENDIF
+   RETURN Len( oPrompt[ "queue" ] )
+
+// Mark the prompt as busy (agent turn in flight). While busy, submitted
+// lines are queued and shown as pending instead of starting a new turn.
+FUNCTION AGPROMPT_SetBusy( oPrompt, lBusy )
+   IF oPrompt != NIL
+      oPrompt[ "busy" ] := ( lBusy == .T. )
+   ENDIF
+   RETURN oPrompt
+
+FUNCTION AGPROMPT_IsBusy( oPrompt )
+   RETURN oPrompt != NIL .AND. hb_HGetDef( oPrompt, "busy", .F. ) == .T.
+
+// Surfaces a mid-turn queued message so the user sees it is pending
+// (will run after the current reply finishes). Uses AGREPL_Out so the
+// line lands in the scroll region above the input box.
+FUNCTION AGPROMPT_NotifyPending( oPrompt, cText )
+   LOCAL nQ, cSum, lStatus
+   IF oPrompt == NIL
+      RETURN NIL
+   ENDIF
+   nQ   := AGPROMPT_QueueLen( oPrompt )
+   cSum := AGUI_Summarize( hb_CStr( cText ), 70 )
+   // Park the ticking status row first, print, then re-show it below:
+   // printing UNDER the status row moves the output anchor away from it
+   // and the spinner keeps ticking on a stale row forever.
+   lStatus := AGREPL_StatusSuspend()
+   AGREPL_Out( AGUI_Color( "[pending" + ;
+      iif( nQ > 1, " #" + LTrim( Str( nQ ) ), "" ) + ;
+      "] " + cSum, "33" ) + Chr(10) )
+   AGPROMPT_Redraw( oPrompt )
+   IF lStatus
+      AGREPL_StatusResume()
+   ENDIF
+   RETURN NIL
 
 // Returns .T. when an interruption (Esc or /btw) is pending.
 FUNCTION AGPROMPT_Interrupted( oPrompt )
@@ -216,7 +258,7 @@ FUNCTION AGPROMPT_Teardown( oPrompt )
 // ESC[s slot, owned by AGREPL_Out) is deliberately not touched here.
 FUNCTION AGPROMPT_Redraw( oPrompt )
    LOCAL hReg, hW, hSz, aBadges, nTopRow, nContentRow, nOldBoxTop, i, cWipe
-   LOCAL nWriteStart, nWriteEnd, nWipeEnd, lTrailingLF
+   LOCAL nWriteStart, nWriteEnd, nWipeEnd, lTrailingLF, hProg
    hSz := AGCON_Size()
    nTopRow     := hb_HGetDef( oPrompt, "scroll_top",  1 )
    nContentRow := hb_HGetDef( oPrompt, "content_row", nTopRow )
@@ -267,6 +309,19 @@ FUNCTION AGPROMPT_Redraw( oPrompt )
    IF AGREPL_HasGoal()
       hb_AIns( aBadges, 1, "goal", .T. )
    ENDIF
+   // Mid-turn queue depth so the user sees "pending" while the agent
+   // finishes the current reply before the next message is handled.
+   IF AGPROMPT_QueueLen( oPrompt ) > 0
+      hb_AIns( aBadges, 1, ;
+         "pending x" + LTrim( Str( AGPROMPT_QueueLen( oPrompt ) ) ), .T. )
+   ENDIF
+   // Grok2-style task progress badge "3/5" when a todo list is active
+   IF AGTODO_HasAny()
+      hProg := AGTODO_Progress()
+      hb_AIns( aBadges, 1, ;
+         LTrim( Str( hProg[ "done" ] ) ) + "/" + ;
+         LTrim( Str( hProg[ "total" ] ) ), .T. )
+   ENDIF
    // wipe the four rows above the box's new position so the previous
    // frame does not bleed when the box moves down a row; only needed
    // while the box is still travelling (not yet pinned).
@@ -282,19 +337,19 @@ FUNCTION AGPROMPT_Redraw( oPrompt )
    // old top frame survives at the row just above the new one, and the
    // next Redraw repeats. Absolute jumps never advance past the last
    // visible row, so no scroll fires.
+   // OpenCode layout (opencode1.jpg): model chip, input, footer.
+   // Harbour rejects comments inside a continued expression.
    AGPROMPT_Raw( ;
       Chr(27) + "[" + LTrim( Str( hReg[ "scroll_top" ] ) ) + ";" + ;
                      LTrim( Str( hReg[ "scroll_bottom" ] ) ) + "r" + ;
       Chr(27) + "[" + LTrim( Str( hReg[ "box_top" ] ) ) + ";1H" + ;
-      Chr(27) + "[2K" + AGUI_FrameTop() + ;
+      Chr(27) + "[2K" + AGUI_ModelChip( AGREPL_SessionModel() ) + ;
       Chr(27) + "[" + LTrim( Str( hReg[ "box_top" ] + 1 ) ) + ";1H" + ;
       Chr(27) + "[2K" + ;
       iif( AGIN_HasSuggestion( oPrompt[ "editor" ] ), ;
           AGUI_InputBoxSuggestion( hW[ "text" ] ), ;
           AGUI_InputBoxLine( hW[ "text" ] ) ) + ;
       Chr(27) + "[" + LTrim( Str( hReg[ "box_top" ] + 2 ) ) + ";1H" + ;
-      Chr(27) + "[2K" + AGUI_FrameBottom() + ;
-      Chr(27) + "[" + LTrim( Str( hReg[ "box_top" ] + 3 ) ) + ";1H" + ;
       Chr(27) + "[2K" + AGUI_SkillsStatusLine( aBadges, hReg[ "cols" ] ) + ;
       Chr(27) + "[" + LTrim( Str( hReg[ "box_top" ] + 1 ) ) + ";" + ;
               LTrim( Str( 3 + hW[ "col" ] ) ) + "H" )
@@ -390,6 +445,12 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             AGPROMPT_Enqueue( oPrompt, hC[ "text" ] )
             cAction := "queued"
             AGIN_HistoryAdd( hC[ "text" ] )
+            // Mid-turn: keep the message in the FIFO and show it as
+            // pending. Idle path (AGREPL_PromptIdle) dequeues immediately
+            // and never needs the pending line.
+            IF AGPROMPT_IsBusy( oPrompt )
+               AGPROMPT_NotifyPending( oPrompt, hC[ "text" ] )
+            ENDIF
          ENDCASE
          AGIN_HistoryReset()
          IF hb_HHasKey( oPrompt, "paste" )

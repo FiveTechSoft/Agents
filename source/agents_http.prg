@@ -68,6 +68,10 @@ FUNCTION AG_ChatCompletion( oClient, aMessages, hParams, bOnEvent )
                                   "Authorization: Bearer " + hCfg[ "api_key" ] } ), ;
               "body" => cBody, ;
               "timeout" => oClient[ "timeout" ] }
+   // Optional idle heartbeat (spinner + keyboard) while waiting on Ollama.
+   IF hb_HHasKey( hParams, "on_idle" ) .AND. ValType( hParams[ "on_idle" ] ) == "B"
+      hReq[ "on_idle" ] := hParams[ "on_idle" ]
+   ENDIF
 
    // 3. stream: feed every chunk to a fresh parser; assemble into hState
    hState  := { "content" => "", "tools" => {}, "finish" => NIL, ;

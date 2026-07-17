@@ -264,46 +264,44 @@ STATIC FUNCTION AGUI_ToolLabel( cName, cArgsJson )
    ENDIF
    RETURN cProper + "(" + cArg + ")"
 
-// Builds a Claude Code-style result block: the first line prefixed with the
-// corner glyph, continuation lines aligned under it, capped at 8 lines.
+// Grok-style diff / result block: full-width green/red bars with line
+// numbers (no corner glyph clutter). Matches grok3/grok5 screenshots.
 STATIC FUNCTION AGUI_ResultBlock( cText )
-   LOCAL aLines, cOut := "", i, nShow, cLine, cMark, nMax := 50, nWidth
+   LOCAL aLines, cOut := "", i, nShow, cLine, cMark, nMax := 80, nWidth
    aLines := hb_ATokens( StrTran( cText, Chr(13), "" ), Chr(10) )
    DO WHILE Len( aLines ) > 1 .AND. Empty( ATail( aLines ) )
       hb_ADel( aLines, Len( aLines ), .T. )
    ENDDO
    nShow := Min( Len( aLines ), nMax )
-   // Compute the widest added/removed line so every coloured bar gets
-   // padded to the same length; bars of mismatched widths look ragged
-   // when stacked. Floor at 110 to keep the default look on small diffs.
-   nWidth := 110
+   nWidth := Max( 60, AGREPL_Cols() - 2 )
    FOR i := 1 TO nShow
       cLine := aLines[ i ]
       cMark := AGUI_DiffMark( cLine )
       IF cMark == "+" .OR. cMark == "-"
-         nWidth := Max( nWidth, hb_UTF8Len( cLine ) )
+         nWidth := Max( nWidth, hb_UTF8Len( cLine ) + 2 )
       ENDIF
    NEXT
    FOR i := 1 TO nShow
       cLine := aLines[ i ]
-      // colour diff lines: added on a green background, removed on dark red.
-      // The line is space-padded first so the background fills the width
-      // instead of stopping at the end of the text.
       cMark := AGUI_DiffMark( cLine )
       DO CASE
       CASE cMark == "+"
-         cLine := AGUI_Color( AGUI_DiffPad( cLine, nWidth ), "97;42" )
+         // full-row green bar (Grok added lines)
+         cOut += AGUI_Color( AGUI_DiffPad( cLine, nWidth ), "97;48;2;22;70;40" )
       CASE cMark == "-"
-         cLine := AGUI_Color( AGUI_DiffPad( cLine, nWidth ), "97;48;5;52" )
+         // full-row red bar (Grok removed lines)
+         cOut += AGUI_Color( AGUI_DiffPad( cLine, nWidth ), "97;48;2;90;30;30" )
+      OTHERWISE
+         // context / header lines stay dim, no heavy indent
+         cOut += AGUI_Color( cLine, AGUI_Pal( "dim" ) )
       ENDCASE
-      cOut += iif( i == 1, "  " + Chr(226)+Chr(142)+Chr(191) + "  ", "     " ) + cLine
-      IF i < nShow
+      IF i < nShow .OR. Len( aLines ) > nMax
          cOut += Chr(10)
       ENDIF
    NEXT
    IF Len( aLines ) > nMax
-      cOut += Chr(10) + "     ... (" + ;
-              LTrim( Str( Len( aLines ) - nMax ) ) + " more lines)"
+      cOut += AGUI_Color( "... (" + LTrim( Str( Len( aLines ) - nMax ) ) + ;
+              " more lines)", AGUI_Pal( "dim" ) )
    ENDIF
    RETURN cOut
 
@@ -338,14 +336,17 @@ STATIC FUNCTION AGUI_HasDiff( cText )
 // Renders the block printed under a tool call. Diff-formatted content keeps
 // the coloured diff block; otherwise a compact tool-aware one-line summary.
 // Result ends in LF.
+// Grok5-style one-line tool summary after a tool finishes, or a full
+// coloured diff block when the content is a line-diff.
 FUNCTION AGUI_ResultSummary( cToolName, cContent )
    LOCAL cClean, aLines, nLines, cFirst, cSum
    cToolName := Lower( hb_CStr( cToolName ) )
    cContent  := hb_CStr( cContent )
    cClean    := StrTran( cContent, Chr(13), "" )
 
+   // Diffs paint as full green/red rows (no extra indent wrapper)
    IF AGUI_HasDiff( cClean )
-      RETURN AGUI_Color( AGUI_ResultBlock( cContent ), AGUI_Pal( "dim" ) ) + Chr(10)
+      RETURN AGUI_ResultBlock( cContent ) + Chr(10)
    ENDIF
 
    IF Left( cClean, 6 ) == "Error:"
@@ -359,24 +360,43 @@ FUNCTION AGUI_ResultSummary( cToolName, cContent )
       cFirst := Left( iif( nLines > 0, aLines[ 1 ], "" ), 120 )
       DO CASE
       CASE cToolName == "read"
-         cSum := "Read " + LTrim( Str( nLines ) ) + " lines"
-      CASE cToolName == "write" .OR. cToolName == "edit"
-         cSum := cFirst
+         // Grok5/6: "Read 1 file"
+         cSum := "Read 1 file"
+      CASE cToolName == "write"
+         cSum := "Wrote file"
+      CASE cToolName == "edit"
+         cSum := iif( Left( cFirst, 5 ) == "Added", cFirst, "Edited file" )
       CASE cToolName == "glob"
          cSum := iif( Left( cFirst, 11 ) == "No matches ", cFirst, ;
                       "Listed " + LTrim( Str( nLines ) ) + " files" )
       CASE cToolName == "grep"
          cSum := iif( Left( cFirst, 11 ) == "No matches ", cFirst, ;
-                      "Found " + LTrim( Str( nLines ) ) + " matches" )
+                      "Searched 1 pattern" + iif( nLines > 0, ;
+                      " (" + LTrim( Str( nLines ) ) + " hits)", "" ) )
       CASE cToolName == "shell"
-         cSum := iif( nLines > 1, ;
-                      cFirst + " (" + LTrim( Str( nLines ) ) + " lines)", cFirst )
+         cSum := "Run " + AGUI_Summarize( cFirst, 50 )
+      CASE cToolName == "todo_write" .OR. cToolName == "todo"
+         cSum := "Updated tasks"
       OTHERWISE
-         cSum := LTrim( Str( nLines ) ) + " lines"
+         cSum := Upper( Left( cToolName, 1 ) ) + Lower( SubStr( cToolName, 2 ) )
       ENDCASE
    ENDIF
 
-   RETURN AGUI_Color( "     " + cSum, AGUI_Pal( "dim" ) ) + Chr(10)
+   // Diamond activity line (Grok5/6): "♦ Read 1 file"
+   RETURN AGUI_GrokAct( cSum ) + Chr(10)
+
+// "♦ <label>" activity line used throughout the Grok transcript.
+FUNCTION AGUI_GrokAct( cLabel )
+   LOCAL cDia := Chr( 226 ) + Chr( 151 ) + Chr( 134 )   // ◆
+   RETURN AGUI_Color( cDia, AGUI_Pal( "dim" ) ) + " " + ;
+          AGUI_Color( hb_CStr( cLabel ), AGUI_Pal( "dim" ) )
+
+// Active (running) activity line with a green focus bar on the left.
+FUNCTION AGUI_GrokActActive( cLabel )
+   LOCAL cDia := Chr( 226 ) + Chr( 151 ) + Chr( 134 )
+   RETURN AGUI_Color( "|", "92" ) + " " + ;
+          AGUI_Color( cDia, "92" ) + " " + ;
+          AGUI_Color( hb_CStr( cLabel ), "97" )
 
 // Detects a diff line ("<6-wide number> <+|-|space> <text>"); returns the
 // marker "+" or "-", or "" when the line is not a diff line.
@@ -424,6 +444,7 @@ FUNCTION AGUI_ColorOn()
 FUNCTION AGUI_Pal( cName )
    DO CASE
    CASE cName == "accent"     ; RETURN "38;2;217;119;87"   // Claude Code coral
+   CASE cName == "amber"      ; RETURN "38;2;218;165;32"  // OpenCode amber/gold
    CASE cName == "dim"        ; RETURN "90"         // grey borders / secondary
    CASE cName == "bold"       ; RETURN "1"
    CASE cName == "error"      ; RETURN "31"
@@ -446,6 +467,8 @@ FUNCTION AGUI_Pal( cName )
    CASE cName == "card_cost"  ; RETURN "48;2;26;72;56"    // cost metrics card (emerald)
    CASE cName == "card_warn"  ; RETURN "48;2;92;72;28"    // confirmation card (amber)
    CASE cName == "card_user"  ; RETURN "48;2;37;99;235"   // user bubble (blue-600)
+   CASE cName == "card_grok_user" ; RETURN "48;2;55;55;58" // Grok gray user bar
+   CASE cName == "card_grok_task" ; RETURN "48;2;48;48;52" // Grok task row (slightly lighter)
    CASE cName == "card_goal"  ; RETURN "48;2;62;56;124"   // goal card (indigo)
    CASE cName == "card_ctx"   ; RETURN "48;2;92;52;30"    // context-critical (orange)
    CASE cName == "card_tool"  ; RETURN "48;2;38;47;60"    // tool actions panel (faint)
@@ -674,7 +697,7 @@ STATIC FUNCTION AGUI_PadCell( cText, nWidth, cAlign )
 // version in releasenotes.md and the Releases section of README.md, then
 // tag the commit v<x.y.z>. All four must stay in sync.
 FUNCTION AGUI_Version()
-   RETURN "2.2.0"
+   RETURN "2.4.6"
 
 // The pool of short usage tips shown on the banner and at the idle prompt.
 FUNCTION AGUI_Tips()
@@ -828,18 +851,17 @@ FUNCTION AGUI_QuestionBlock( oSel )
                        " ctrl+e to explain", AGUI_Pal( "dim" ) ) + Chr(10)
    RETURN cOut
 
-// Renders a todo list to a printable block: a "Todos:" header, then one line
-// per item -- a status glyph and the item text. completed = "√" (dim),
-// in_progress = "■" (accent), pending = "□". Each line ends in LF. Pure.
+// OpenCode-style todo checklist (opencode1.jpg):
+//   [•] active task in amber
+//   [x] completed (dim)
+//   [ ] pending (dim)
+// No heavy bars — clean monospaced list like OpenCode's left panel.
 FUNCTION AGUI_TodoBlock( aTodos )
-   LOCAL cOut := AGUI_Color( "Todos:", AGUI_Pal( "bold" ) ) + Chr(10)
-   LOCAL hItem, cGlyph, cLabel, lBlocked
-   LOCAL cDone := Chr(226) + Chr(136) + Chr(154)   // U+221A √
-   LOCAL cProg := Chr(226) + Chr(150) + Chr(160)   // U+25A0 ■
-   LOCAL cPend := Chr(226) + Chr(150) + Chr(161)   // U+25A1 □
-   LOCAL cLink := Chr(226) + Chr(134) + Chr(179)   // U+21B3 ↳
+   LOCAL cOut := "", hItem, cBox, cLabel, lBlocked
+   IF ValType( aTodos ) != "A" .OR. Len( aTodos ) == 0
+      RETURN ""
+   ENDIF
    FOR EACH hItem IN aTodos
-      // present-continuous label takes over while an item is in_progress
       cLabel := hItem[ "text" ]
       IF hItem[ "status" ] == "in_progress" .AND. ;
          hb_HHasKey( hItem, "active_form" ) .AND. ;
@@ -848,25 +870,65 @@ FUNCTION AGUI_TodoBlock( aTodos )
       ENDIF
       lBlocked := AGTODO_IsBlocked( hItem, aTodos ) .AND. ;
                   hItem[ "status" ] != "completed"
+      IF lBlocked
+         cLabel := cLabel + " (blocked)"
+      ENDIF
       DO CASE
       CASE hItem[ "status" ] == "completed"
-         cGlyph := AGUI_Color( cDone, AGUI_Pal( "dim" ) )
+         cBox := AGUI_Color( "[x]", AGUI_Pal( "dim" ) )
+         cOut += cBox + " " + AGUI_Color( cLabel, AGUI_Pal( "dim" ) ) + Chr(10)
       CASE hItem[ "status" ] == "in_progress"
-         cGlyph := AGUI_Color( cProg, AGUI_Pal( "accent" ) )
+         // OpenCode amber bullet [•]
+         cBox := AGUI_Color( "[" + Chr( 226 ) + Chr( 128 ) + Chr( 162 ) + "]", ;
+                             AGUI_Pal( "amber" ) )
+         cOut += cBox + " " + AGUI_Color( cLabel, AGUI_Pal( "amber" ) ) + Chr(10)
       OTHERWISE
-         cGlyph := iif( lBlocked, AGUI_Color( cLink, AGUI_Pal( "dim" ) ), ;
-                                   cPend )
+         cBox := AGUI_Color( "[ ]", AGUI_Pal( "dim" ) )
+         cOut += cBox + " " + AGUI_Color( cLabel, AGUI_Pal( "dim" ) ) + Chr(10)
       ENDCASE
-      IF lBlocked
-         // indent blocked items and dim them so the dependency is visible
-         cOut += "    " + cGlyph + " " + ;
-                 AGUI_Color( cLabel + " (blocked)", AGUI_Pal( "dim" ) ) + ;
-                 Chr(10)
-      ELSE
-         cOut += "  " + cGlyph + " " + cLabel + Chr(10)
-      ENDIF
    NEXT
    RETURN cOut
+
+// OpenCode model chip (opencode1.jpg): "□ Build · qwen3.6:latest"
+FUNCTION AGUI_ModelChip( cModel )
+   LOCAL cM := hb_CStr( cModel )
+   LOCAL cSq
+   IF Empty( cM )
+      cM := "model"
+   ENDIF
+   // U+25A1 WHITE SQUARE
+   cSq := Chr( 226 ) + Chr( 150 ) + Chr( 161 )
+   RETURN AGUI_Color( cSq + " Build " + Chr( 194 ) + Chr( 183 ) + " " + cM, ;
+                      AGUI_Pal( "dim" ) )
+
+// OpenCode footer under the prompt (opencode1.jpg):
+//   ······ esc interrupt          48.9K          /help commands
+FUNCTION AGUI_OpenCodeFooter( nTokens, nCols )
+   LOCAL cLeft, cMid, cRight, nPad, cTok, cDots
+   IF ValType( nCols ) != "N" .OR. nCols < 40
+      nCols := 80
+   ENDIF
+   IF ValType( nTokens ) != "N" .OR. nTokens < 0
+      nTokens := 0
+   ENDIF
+   IF nTokens >= 1000
+      cTok := LTrim( Str( nTokens / 1000.0, 10, 1 ) ) + "K"
+   ELSE
+      cTok := LTrim( Str( nTokens ) )
+   ENDIF
+   // U+00B7 middle dots prefix (OpenCode animated leader)
+   cDots  := Replicate( Chr( 194 ) + Chr( 183 ), 6 )
+   cLeft  := cDots + " esc interrupt"
+   cMid   := cTok
+   cRight := "/help commands"
+   // Len(cDots) is 12 bytes for 6 UTF-8 chars; visual width is 6.
+   // Approximate pad with visual widths so the line fits the terminal.
+   nPad   := nCols - 1 - 6 - Len( " esc interrupt" ) - Len( cMid ) - Len( cRight )
+   IF nPad < 4
+      nPad := 4
+   ENDIF
+   RETURN AGUI_Color( cLeft + Space( Int( nPad / 2 ) ) + cMid + ;
+          Space( nPad - Int( nPad / 2 ) ) + cRight, AGUI_Pal( "dim" ) )
 
 // Builds the two-panel startup banner inside one rounded box, 99 columns wide
 // (matching the input frame). Left panel: a "Welcome back" line, the six-row
@@ -1016,22 +1078,24 @@ FUNCTION AGUI_ProposeBlock( oSel )
                        " Esc cancel", AGUI_Pal( "dim" ) ) + Chr(10)
    RETURN cOut
 
-// The status line painted just below the input box. Lists the active skills
-// as bracketed tags ("[name1] [name2]"). nCols is the terminal width, used to
-// pad the line so it overwrites any leftover text from a previous redraw.
-// Blank (just spaces) when no skill is active, so the row is visually hidden.
+// Status line under the input box. OpenCode-style footer when idle
+// (esc · tokens · /help); badges (skills/plan/pending) when present.
 FUNCTION AGUI_SkillsStatusLine( aActive, nCols )
-   LOCAL cLine := "", cName
+   LOCAL cLine := "", cName, nTok := 0
    IF ValType( aActive ) == "A" .AND. Len( aActive ) > 0
       FOR EACH cName IN aActive
          cLine += "[" + hb_CStr( cName ) + "] "
       NEXT
       cLine := RTrim( cLine )
+      cLine := PadR( cLine, Max( 1, nCols - 1 ) )
+      RETURN AGUI_Color( cLine, AGUI_Pal( "accent" ) )
    ENDIF
-   // pad to nCols-1: filling the very last column triggers auto-wrap and
-   // scrolls the screen up one row, which would corrupt the layout
-   cLine := PadR( cLine, Max( 1, nCols - 1 ) )
-   RETURN AGUI_Color( cLine, AGUI_Pal( "accent" ) )
+   // OpenCode footer: ······ esc interrupt    12.3K    /help commands
+   // NO PadR here: the footer is already padded to nCols-1 VISUAL cells,
+   // and PadR counts bytes — ANSI codes + UTF-8 dots made it truncate the
+   // coloured string ("/help commands" showed as "/he").
+   nTok := AGREPL_SessionTokens()
+   RETURN AGUI_OpenCodeFooter( nTok, nCols )
 
 // Renders the multi-line block used for every tool call: a cyan-violet rule
 // the full terminal width, the tool's display label ("Bash command", "Edit",
@@ -1118,16 +1182,23 @@ FUNCTION AGUI_ToolContent( cArgsJson )
    NEXT
    RETURN hb_jsonEncode( xArgs )
 
+// OpenCode blue left accent (opencode1.jpg input panel).
+STATIC FUNCTION AGUI_BlueBar()
+   // U+258C LEFT HALF BLOCK in OpenCode blue
+   RETURN AGUI_Color( Chr( 226 ) + Chr( 150 ) + Chr( 140 ), "38;2;80;140;255" )
+
 // One framed input-box prompt line with the text rendered in the suggestion
-// (light-green) colour.
+// (light-green) colour. Blue left accent matches OpenCode.
 FUNCTION AGUI_InputBoxSuggestion( cText )
-   RETURN AGUI_Color( "> ", "1;36" ) + ;
+   RETURN AGUI_BlueBar() + " " + ;
           AGUI_Color( AGUI_PadCell( hb_CStr( cText ), AGUI_InputInnerWidth(), "L" ), ;
                      AGUI_Pal( "suggestion" ) )
 
-// One input-box prompt line: the "> " prompt and cText, no side borders.
+// OpenCode-style input line: blue left bar + text (no heavy top/bottom rules).
+// Empty = blank (cursor ready). Model chip lives on the row above the box,
+// not as a fake placeholder that made typing look broken.
 FUNCTION AGUI_InputBoxLine( cText )
-   RETURN AGUI_Color( "> ", "1;36" ) + ;
+   RETURN AGUI_BlueBar() + " " + ;
           AGUI_PadCell( hb_CStr( cText ), AGUI_InputInnerWidth(), "L" )
 
 // Prompt shown when the user presses Esc to pause tool execution.
