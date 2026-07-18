@@ -84,10 +84,28 @@ STATIC FUNCTION _MapRaw( nRaw )
    CASE nStd == K_HOME   ; RETURN -5
    CASE nStd == K_END    ; RETURN -6
    CASE nStd == K_DEL    ; RETURN -7
-   CASE nStd == K_CTRL_C ; RETURN -8
+   CASE nStd == K_CTRL_C .OR. nRaw == 3
+      // K_PGDN is also 3 in Clipper; prefer Ctrl+C when raw is plain 3.
+      // Extended PageDown usually arrives with nStd == K_PGDN and nRaw != 3.
+      IF nStd == K_PGDN .AND. nRaw != 3 .AND. nRaw != K_CTRL_C
+         RETURN -18
+      ENDIF
+      RETURN -8
+   CASE nStd == K_CTRL_E ; RETURN -14   // selector "explain"
    CASE nStd == K_UP
-      RETURN iif( hb_bitAnd( nMod, HB_GTI_KBD_CTRL ) != 0, -14, -9 )
-   CASE nStd == K_DOWN   ; RETURN -10
+      // Ctrl+Up → scroll transcript; plain Up → history
+      RETURN iif( hb_bitAnd( nMod, HB_GTI_KBD_CTRL ) != 0, -17, -9 )
+   CASE nStd == K_DOWN
+      RETURN iif( hb_bitAnd( nMod, HB_GTI_KBD_CTRL ) != 0, -18, -10 )
+   CASE nStd == K_CTRL_UP   ; RETURN -17
+   CASE nStd == K_CTRL_DOWN ; RETURN -18
+   CASE nStd == K_PGUP .OR. nRaw == K_PGUP ; RETURN -17
+   CASE nStd == K_PGDN .OR. nRaw == K_PGDN
+      // Avoid clobbering Ctrl+C (same base code 3 on some GTs).
+      IF nRaw == 3 .OR. nRaw == K_CTRL_C
+         RETURN -8
+      ENDIF
+      RETURN -18
    CASE nStd == K_TAB    ; RETURN -12
    CASE nStd == K_ESC    ; RETURN -13
    // Mouse wheel (gtwin/Windows Terminal). Some GTs leave them on nRaw.
@@ -185,7 +203,9 @@ FUNCTION AGCON_MouseRow()
 /* AGCON_ReadKey() -- blocks for one key (hbIDE: InKey(0, ...)):
  *   >0 codepoint  0 EOF  -1 Enter  -2 BS  -3 Left  -4 Right  -5 Home
  *   -6 End  -7 Del  -8 Ctrl+C  -9 Up  -10 Down  -11 S-Enter  -12 Tab
- *   -13 Esc  -14 Ctrl+E  -15 WheelUp  -16 WheelDown  -99 unmapped */
+ *   -13 Esc  -14 Ctrl+E  -15 WheelUp  -16 WheelDown
+ *   -17 ScrollUp (PgUp / Ctrl+Up)  -18 ScrollDown (PgDn / Ctrl+Down)
+ *   -99 unmapped */
 FUNCTION AGCON_ReadKey()
    LOCAL nKey, nRaw
    _Init()

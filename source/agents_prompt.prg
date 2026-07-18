@@ -347,11 +347,35 @@ FUNCTION AGPROMPT_Redraw( oPrompt )
               LTrim( Str( 3 + hW[ "col" ] ) ) + "H" )
    RETURN oPrompt
 
+// Scroll the transcript region above the prompt box.
+// nDir < 0 = show content above (wheel up / PgUp); > 0 = show below.
+// nLines: how many rows to move (default 3; Page keys use a larger step).
+FUNCTION AGPROMPT_ScrollTranscript( oPrompt, nDir, nLines )
+   LOCAL n, cSeq
+   IF ValType( nLines ) != "N" .OR. nLines < 1
+      nLines := 3
+   ENDIF
+   n := nLines
+   // Wheel up / PgUp → CSI n T (scroll down region = reveal upper lines)
+   // Wheel down / PgDn → CSI n S
+   IF nDir < 0
+      cSeq := Chr(27) + "[" + LTrim( Str( n ) ) + "T"
+   ELSE
+      cSeq := Chr(27) + "[" + LTrim( Str( n ) ) + "S"
+   ENDIF
+   AGPROMPT_Raw( cSeq )
+   IF oPrompt != NIL .AND. hb_HHasKey( oPrompt, "region" ) .AND. ;
+      ValType( oPrompt[ "region" ] ) == "H" .AND. ;
+      hb_HGetDef( oPrompt[ "region" ], "active", .F. ) == .T.
+      FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
+   ENDIF
+   RETURN NIL
+
 // Mouse wheel: over the sticky box → rotate prompt history; over the
 // transcript area (rows above box_top) → scroll that region up/down.
 // nKey: -15 wheel forward/up, -16 wheel backward/down.
 FUNCTION AGPROMPT_HandleWheel( oPrompt, nKey )
-   LOCAL nRow, nBox, oEd, cHist, n, cSeq
+   LOCAL nRow, nBox, oEd, cHist
    IF oPrompt == NIL
       RETURN NIL
    ENDIF
@@ -378,22 +402,27 @@ FUNCTION AGPROMPT_HandleWheel( oPrompt, nKey )
       ENDIF
       RETURN NIL
    ENDIF
-   // Transcript area: scroll the DEC scroll region (content above the box).
-   // Wheel up (-15) → scroll down (show lines above): CSI n T
-   // Wheel down (-16) → scroll up (show lines below): CSI n S
-   n := 3
-   IF nKey == -15
-      cSeq := Chr(27) + "[" + LTrim( Str( n ) ) + "T"
-   ELSE
-      cSeq := Chr(27) + "[" + LTrim( Str( n ) ) + "S"
+   AGPROMPT_ScrollTranscript( oPrompt, iif( nKey == -15, -1, 1 ), 3 )
+   RETURN NIL
+
+// Keyboard scroll of the transcript (always content, never history).
+// nKey: -17 PgUp/Ctrl+Up, -18 PgDn/Ctrl+Down.
+FUNCTION AGPROMPT_HandleScrollKey( oPrompt, nKey )
+   LOCAL nLines := 3, nRows
+   IF oPrompt != NIL .AND. hb_HHasKey( oPrompt, "region" ) .AND. ;
+      ValType( oPrompt[ "region" ] ) == "H"
+      nRows := hb_HGetDef( oPrompt[ "region" ], "rows", 0 )
+      IF nRows >= 12
+         // Page keys move roughly half the content viewport.
+         nLines := Max( 5, Int( ( nRows - 4 ) / 2 ) )
+      ENDIF
    ENDIF
-   AGPROMPT_Raw( cSeq )
-   // Keep the visible cursor on the input line.
-   IF hb_HHasKey( oPrompt, "region" ) .AND. ;
-      ValType( oPrompt[ "region" ] ) == "H" .AND. ;
-      oPrompt[ "region" ][ "active" ] == .T.
-      FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
+   // Ctrl+Up/Down use a smaller step (same as wheel).
+   IF nKey == -17 .OR. nKey == -18
+      // PgUp/PgDn vs Ctrl+arrow: larger step when "page-like".
+      // We use the half-viewport step for both keyboard shortcuts.
    ENDIF
+   AGPROMPT_ScrollTranscript( oPrompt, iif( nKey == -17, -1, 1 ), nLines )
    RETURN NIL
 
 // Non-blocking: drains every pending key into the editor, then redraws the
@@ -529,6 +558,8 @@ FUNCTION AGPROMPT_Poll( oPrompt )
       CASE nKey == -15 .OR. nKey == -16       // Mouse wheel
          // Over the prompt box → history; over the transcript → scroll.
          AGPROMPT_HandleWheel( oPrompt, nKey )
+      CASE nKey == -17 .OR. nKey == -18       // PgUp/PgDn / Ctrl+Up/Down
+         AGPROMPT_HandleScrollKey( oPrompt, nKey )
       CASE nKey == -11 ; AGIN_Insert( oEd, Chr(10) )   // Shift+Enter -> newline
       CASE nKey > 0 ; AGIN_Insert( oEd, AGCON_PrintableText( nKey ) )
       // other keys (Tab, Ctrl+C, unmapped) are ignored mid-prompt

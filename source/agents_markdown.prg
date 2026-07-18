@@ -12,7 +12,7 @@
 // Creates a fresh render state.
 FUNCTION AGMD_New()
    RETURN { "buf" => "", "fence" => .F., "suggestion" => "", ;
-            "table" => {} }
+            "table" => {}, "table_cols" => 0, "table_hold" => "" }
 
 // Appends a chunk; renders every line completed by a newline. Returns the
 // rendered ANSI text for those lines ("" when only a partial line is
@@ -37,35 +37,147 @@ FUNCTION AGMD_Feed( oSt, cChunk )
    ENDDO
    RETURN cOut
 
-// Pre-process a physical line: unsmash tables / headings jammed without LF,
-// then bullet-run split.
+// Pre-process a physical line: unsmash tables / headings / dashed lists
+// jammed without LF, then classic bullet-run split.
 STATIC FUNCTION AGMD_PreSplit( cLine )
    LOCAL c
    c := AGMD_SplitTableRun( cLine )
    c := AGMD_SplitHeadingJam( c )
+   c := AGMD_SplitProseList( c )
    c := AGMD_SplitBulletRun( c )
    RETURN c
 
-// Models often emit whole tables as one line:
-//   | A | B ||---|---|| a | b |
-// Turn "||" row boundaries into real newlines.
+// Models often dump a "directory listing" as one paragraph using "-" as a
+// separator without newlines, e.g.:
+//   Raíz (C:\agents\)- Change log (a.md)- Lectura (b.md)\.agents\ — config
+// Turn those into real "- " bullet lines so the list renderer can paint them.
+STATIC FUNCTION AGMD_SplitProseList( cLine )
+   LOCAL c := cLine, n, cPrev, cNext, nHits := 0, cEm
+   IF Empty( c ) .OR. Len( c ) < 12
+      RETURN cLine
+   ENDIF
+   // Em dash (UTF-8 E2 80 94) used as "folder — description"
+   cEm := Chr(226) + Chr(128) + Chr(148)
+
+   // 1) ")- " or ")-Letter" → new bullet after a closing paren
+   n := 1
+   DO WHILE n <= Len( c ) - 2
+      IF SubStr( c, n, 2 ) == ")-"
+         cNext := SubStr( c, n + 2, 1 )
+         IF cNext == " " .OR. IsAlpha( cNext ) .OR. cNext == "." .OR. ;
+            cNext == "\" .OR. cNext == "/"
+            c := Left( c, n ) + Chr(10) + "- " + ;
+                 iif( cNext == " ", SubStr( c, n + 3 ), SubStr( c, n + 2 ) )
+            nHits++
+            n += 4
+            LOOP
+         ENDIF
+      ENDIF
+      n++
+   ENDDO
+
+   // 2) Mid-line "- " right after ")" / "]" / "." (end of an item)
+   n := 2
+   DO WHILE n <= Len( c ) - 2
+      IF SubStr( c, n, 2 ) == "- "
+         cPrev := SubStr( c, n - 1, 1 )
+         cNext := SubStr( c, n + 2, 1 )
+         IF ( cPrev == ")" .OR. cPrev == "]" .OR. cPrev == "." ) .AND. ;
+            ( IsAlpha( cNext ) .OR. cNext == "*" .OR. cNext == "." .OR. ;
+              cNext == "`" .OR. cNext == "\" )
+            c := Left( c, n - 1 ) + Chr(10) + "- " + SubStr( c, n + 2 )
+            nHits++
+            n += 4
+            LOOP
+         ENDIF
+      ENDIF
+      n++
+   ENDDO
+
+   // 3) ")\.folder\" or ").folder" path sections after a paren
+   n := 1
+   DO WHILE n <= Len( c ) - 3
+      IF SubStr( c, n, 2 ) == ")." .OR. SubStr( c, n, 3 ) == ")\."
+         // ).agents or )\.agents
+         IF SubStr( c, n, 3 ) == ")\."
+            c := Left( c, n ) + Chr(10) + "- " + SubStr( c, n + 3 )
+         ELSE
+            c := Left( c, n ) + Chr(10) + "- " + SubStr( c, n + 2 )
+         ENDIF
+         nHits++
+         n += 4
+         LOOP
+      ENDIF
+      n++
+   ENDDO
+
+   // 4) Folder section "path\ — desc" (em dash or " - ") on long lines
+   IF Len( c ) > 80 .AND. ( cEm $ c .OR. " — " $ c )
+      c := StrTran( c, cEm, Chr(10) + "- " )
+      c := StrTran( c, " — ", Chr(10) + "- " )
+      nHits++
+   ENDIF
+
+   // 5) "carpeta:Raíz" / "por carpeta:Something" — break after : before Capital
+   n := 2
+   DO WHILE n <= Len( c ) - 1
+      IF SubStr( c, n, 1 ) == ":"
+         cNext := SubStr( c, n + 1, 1 )
+         IF cNext >= "A" .AND. cNext <= "Z"
+            c := Left( c, n ) + Chr(10) + "- " + SubStr( c, n + 1 )
+            nHits++
+            n += 4
+            LOOP
+         ENDIF
+      ENDIF
+      n++
+   ENDDO
+
+   IF nHits == 0
+      RETURN cLine
+   ENDIF
+   RETURN c
+
+// Models often emit whole tables as one line (or wrap mid-row):
+//   archivos:| A | B ||:---:||17/07 |x | — |
+//   .agents | Dir ||
+// Peel prose before the first pipe, then turn every "||" into a row break.
 STATIC FUNCTION AGMD_SplitTableRun( cLine )
-   LOCAL cTrim := AllTrim( cLine )
+   LOCAL cTrim := AllTrim( cLine ), nPipe, cPre, cRest, nPipes, i
    IF Empty( cTrim )
       RETURN cLine
    ENDIF
-   // Only rewrite when it looks like a pipe table (starts with |, has ---).
-   IF !( Left( cTrim, 1 ) == "|" .AND. "---" $ cTrim .AND. "||" $ cTrim )
-      // Also split multi-row tables without separator if many || appear.
-      IF !( Left( cTrim, 1 ) == "|" .AND. "||" $ cTrim )
-         RETURN cLine
-      ENDIF
-      // Require at least two || to avoid splitting cells with empty middle.
-      IF Len( hb_ATokens( cTrim, "||" ) ) < 3
-         RETURN cLine
+   // "texto:| col |" → "texto:\n| col |"
+   nPipe := At( "|", cTrim )
+   IF nPipe > 1
+      cPre  := AllTrim( Left( cTrim, nPipe - 1 ) )
+      cRest := SubStr( cTrim, nPipe )
+      // Only peel when the rest looks tabular (several pipes).
+      nPipes := 0
+      FOR i := 1 TO Len( cRest )
+         IF SubStr( cRest, i, 1 ) == "|"
+            nPipes++
+         ENDIF
+      NEXT
+      IF nPipes >= 2 .AND. !Empty( cPre )
+         RETURN cPre + Chr(10) + AGMD_SplitTableRun( cRest )
       ENDIF
    ENDIF
-   RETURN StrTran( cTrim, "||", "|" + Chr(10) + "|" )
+   // Count pipes; need a real table-ish line.
+   nPipes := 0
+   FOR i := 1 TO Len( cTrim )
+      IF SubStr( cTrim, i, 1 ) == "|"
+         nPipes++
+      ENDIF
+   NEXT
+   IF nPipes < 2
+      RETURN cLine
+   ENDIF
+   // Row boundaries models use: "||" (end of row + start of next).
+   IF "||" $ cTrim
+      RETURN StrTran( cTrim, "||", "|" + Chr(10) + "|" )
+   ENDIF
+   RETURN cLine
 
 // "text---### Heading" or "text:### Heading" → break before heading / rule.
 STATIC FUNCTION AGMD_SplitHeadingJam( cLine )
@@ -95,13 +207,31 @@ STATIC FUNCTION AGMD_SplitHeadingJam( cLine )
    ENDDO
    RETURN cOut + c
 
-// When a line starts with a bullet marker AND contains 3+ further inline
-// marker occurrences (with or without a leading space), the model
-// concatenated a list into one line without newlines. Split it so each
-// item becomes its own virtual line, preserving the marker on every
-// line. Returns the original cLine when no split is needed.
+// Split jammed bullet lists the model emits without newlines, e.g.:
+//   `C:\agents\`:- **.agents** (carpeta)- **.claude**- **README.md**
+// or a normal "- a- b- c" run that starts with "- ".
 STATIC FUNCTION AGMD_SplitBulletRun( cLine )
-   LOCAL cMark := "", aParts, i, cResult, nStart
+   LOCAL cMark := "", aParts, i, cResult, nStart, c, n, nHits := 0
+   // Mid-line "- **" items (very common with file listings).
+   n := 1
+   DO WHILE ( n := hb_At( "- **", cLine, n ) ) > 0
+      nHits++
+      n += 4
+   ENDDO
+   IF nHits >= 2
+      c := cLine
+      n := 2
+      DO WHILE n <= Len( c ) - 3
+         IF SubStr( c, n, 4 ) == "- **"
+            c := Left( c, n - 1 ) + Chr(10) + SubStr( c, n )
+            n += 5
+         ELSE
+            n++
+         ENDIF
+      ENDDO
+      RETURN c
+   ENDIF
+   // Classic jammed "- item- item" only when the line itself is a list.
    IF Left( cLine, 2 ) == "- "
       cMark := "- "
    ELSEIF Left( cLine, 2 ) == "* "
@@ -112,9 +242,6 @@ STATIC FUNCTION AGMD_SplitBulletRun( cLine )
    IF Empty( cMark )
       RETURN cLine
    ENDIF
-   // hb_ATokens("- a- b- c", "- ") returns { "", "a", "b", "c" }; require
-   // 4+ tokens (so at least 3 inline items) to avoid splitting a regular
-   // single bullet that happens to contain "- " inside its text
    aParts := hb_ATokens( cLine, cMark )
    IF Len( aParts ) < 4
       RETURN cLine
@@ -153,7 +280,7 @@ FUNCTION AGMD_Suggestion( oSt )
 
 // Renders one line (no trailing newline supplied); the result ends in LF.
 STATIC FUNCTION AGMD_RenderLine( oSt, cLine )
-   LOCAL cTrim, cRest, nH, cList, nSuggest, aCells, cTab
+   LOCAL cTrim, cRest, nH, cList, nSuggest, aCells, cTab, nNeed, cHold
    cLine := StrTran( cLine, Chr(13), "" )
    cTrim := AllTrim( cLine )
 
@@ -181,17 +308,66 @@ STATIC FUNCTION AGMD_RenderLine( oSt, cLine )
       RETURN "  " + AGUI_Color( cLine, "90" ) + Chr(10)
    ENDIF
 
-   // blank line
+   // blank line — only flush table if we are not waiting on a held fragment
    IF Empty( cTrim )
+      IF !Empty( hb_HGetDef( oSt, "table_hold", "" ) )
+         RETURN ""
+      ENDIF
       RETURN AGMD_TableFlush( oSt ) + Chr(10)
    ENDIF
 
-   // pipe table row (including separator |---|)
+   // Reassemble mid-row wraps: models break "| 17/07 | — |" then
+   // ".agents | Directorio |" on the next physical line.
+   cHold := hb_HGetDef( oSt, "table_hold", "" )
+   IF !Empty( cHold )
+      cTrim := AllTrim( cHold + " " + cTrim )
+      oSt[ "table_hold" ] := ""
+   ELSEIF Len( oSt[ "table" ] ) > 0 .AND. Left( cTrim, 1 ) != "|" .AND. ;
+          "|" $ cTrim .AND. AGMD_HeadingLevel( cTrim ) == 0
+      // Continuation of a wrapped table row (no leading pipe).
+      cTrim := "| " + cTrim
+   ENDIF
+
+   // pipe table row (including separator |:---:| / |---|)
    aCells := AGMD_ParseTableRow( cTrim )
    IF aCells != NIL
+      // Separator row: remember column count from it if needed, skip body.
+      IF Len( aCells ) == 1 .AND. aCells[ 1 ] == "___SEP___"
+         AAdd( oSt[ "table" ], aCells )
+         RETURN ""
+      ENDIF
+      nNeed := hb_HGetDef( oSt, "table_cols", 0 )
+      IF nNeed == 0
+         // First real row sets the expected width (usually the header).
+         oSt[ "table_cols" ] := Len( aCells )
+         AAdd( oSt[ "table" ], aCells )
+         RETURN ""
+      ENDIF
+      IF Len( aCells ) < nNeed
+         // Incomplete row — wait for the next physical line fragment.
+         oSt[ "table_hold" ] := cTrim
+         RETURN ""
+      ENDIF
+      // Too many cells: keep first nNeed (model noise).
+      IF Len( aCells ) > nNeed
+         DO WHILE Len( aCells ) > nNeed
+            hb_ADel( aCells, Len( aCells ), .T. )
+         ENDDO
+      ENDIF
       AAdd( oSt[ "table" ], aCells )
       RETURN ""
    ENDIF
+
+   // Not a table row. If we held an incomplete fragment that never completed,
+   // emit it as plain text after flushing any finished rows.
+   IF !Empty( hb_HGetDef( oSt, "table_hold", "" ) )
+      cHold := oSt[ "table_hold" ]
+      oSt[ "table_hold" ] := ""
+      cTab := AGMD_TableFlush( oSt )
+      RETURN cTab + AGMD_Inline( cHold ) + Chr(10) + ;
+             AGMD_RenderLine( oSt, cLine )
+   ENDIF
+
    // Leaving table mode: flush buffered rows first.
    cTab := AGMD_TableFlush( oSt )
 
@@ -246,20 +422,24 @@ STATIC FUNCTION AGMD_HeadingLevel( cTrim )
    RETURN 0
 
 // Parses a GFM table row into an array of cell strings, or NIL if not a row.
-// Separator rows become { "---", "---", ... } markers.
+// Accepts leading "|", optional trailing "|", alignment separators ":---:".
 STATIC FUNCTION AGMD_ParseTableRow( cTrim )
-   LOCAL aRaw, aCells := {}, c, i, lSep := .T., cCell
-   IF Left( cTrim, 1 ) != "|" .AND. Right( cTrim, 1 ) != "|"
-      // also allow rows that only start with |
-      IF Left( cTrim, 1 ) != "|"
-         RETURN NIL
-      ENDIF
+   LOCAL aRaw, aCells := {}, c, i, lSep := .T., cCell, nPipes := 0
+   cTrim := AllTrim( cTrim )
+   IF Empty( cTrim )
+      RETURN NIL
    ENDIF
+   // Must start with | OR be a pure separator line starting with |:
    IF Left( cTrim, 1 ) != "|"
       RETURN NIL
    ENDIF
-   // Must have at least two pipes.
-   IF hb_At( "|", SubStr( cTrim, 2 ) ) == 0
+   FOR i := 1 TO Len( cTrim )
+      IF SubStr( cTrim, i, 1 ) == "|"
+         nPipes++
+      ENDIF
+   NEXT
+   // Need at least two pipes to form one cell ("| a |" or "| a | b").
+   IF nPipes < 2
       RETURN NIL
    ENDIF
    aRaw := hb_ATokens( cTrim, "|" )
@@ -275,7 +455,6 @@ STATIC FUNCTION AGMD_ParseTableRow( cTrim )
       ENDIF
       cCell := AllTrim( c )
       AAdd( aCells, cCell )
-      // separator cell: only dashes, colons, spaces
       IF !AGMD_IsSepCell( cCell )
          lSep := .F.
       ENDIF
@@ -283,7 +462,6 @@ STATIC FUNCTION AGMD_ParseTableRow( cTrim )
    IF Len( aCells ) == 0
       RETURN NIL
    ENDIF
-   // Pure separator row → mark specially so flush can skip it as body.
    IF lSep
       RETURN { "___SEP___" }
    ENDIF
@@ -305,8 +483,15 @@ STATIC FUNCTION AGMD_IsSepCell( c )
 // Format and emit the buffered table; clear the buffer. "" if empty.
 STATIC FUNCTION AGMD_TableFlush( oSt )
    LOCAL aTab, aRows := {}, aWidths := {}, aRow, i, j, nCols := 0
-   LOCAL cOut := "", cLine, cCell, nW, nMaxW, nPad, cSep
+   LOCAL cOut := "", cLine, cCell, nW, nMaxW, nPad, cSep, cHold
+   // Emit incomplete hold as plain text if still open.
+   cHold := hb_HGetDef( oSt, "table_hold", "" )
+   oSt[ "table_hold" ] := ""
+   oSt[ "table_cols" ] := 0
    IF !hb_HHasKey( oSt, "table" ) .OR. Len( oSt[ "table" ] ) == 0
+      IF !Empty( cHold )
+         RETURN AGMD_Inline( cHold ) + Chr(10)
+      ENDIF
       RETURN ""
    ENDIF
    aTab := oSt[ "table" ]
@@ -322,6 +507,9 @@ STATIC FUNCTION AGMD_TableFlush( oSt )
       ENDIF
    NEXT
    IF Len( aRows ) == 0 .OR. nCols == 0
+      IF !Empty( cHold )
+         RETURN AGMD_Inline( cHold ) + Chr(10)
+      ENDIF
       RETURN ""
    ENDIF
    // Pad short rows; measure column widths (UTF-8 visual via AGUI_VisLen).
@@ -447,8 +635,10 @@ STATIC FUNCTION AGMD_ListRender( cTrim )
 
 // Applies inline formatting: **bold**, `code`, *italic*. Order matters:
 // ** before * so a bold pair is not split by the italic pass.
+// Bold uses intense orange so **word** stands out in the terminal.
 STATIC FUNCTION AGMD_Inline( cText )
-   cText := AGMD_Span( cText, "**", "1" )
+   // 1;38;2;255;120;0 = bold + truecolor vivid orange
+   cText := AGMD_Span( cText, "**", "1;38;2;255;120;0" )
    cText := AGMD_Span( cText, "`", "96" )
    cText := AGMD_Span( cText, "*", "3" )
    RETURN cText

@@ -2351,6 +2351,10 @@ STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
          // Wheel over box → history; over transcript → scroll region.
          AGPROMPT_HandleWheel( oPrompt, nKey )
          LOOP
+      CASE nKey == -17 .OR. nKey == -18
+         // PgUp/PgDn or Ctrl+Up/Down → always scroll transcript.
+         AGPROMPT_HandleScrollKey( oPrompt, nKey )
+         LOOP
       CASE nKey == -11
          AGIN_Insert( oEd, Chr(10) )
       CASE nKey > 0
