@@ -134,15 +134,14 @@ STATIC FUNCTION AG_IsOllamaUrl( cUrl )
    RETURN "11434" $ cLow .OR. "ollama" $ cLow
 
 STATIC FUNCTION AG_BuildBody( cModel, aMessages, hParams, cBaseUrl )
-   LOCAL hBody, lOllama := AG_IsOllamaUrl( cBaseUrl )
+   LOCAL hBody
+   HB_SYMBOL_UNUSED( cBaseUrl )
    hBody := { "model" => cModel, "messages" => aMessages, ;
-              "stream" => .T. }
-   // Ollama 0.20.x does not support OpenAI's stream_options.include_usage
-   // and stalls when it is set. Cloud backends understand it and emit a
-   // final usage chunk we rely on for /cost.
-   IF !lOllama
-      hBody[ "stream_options" ] := { "include_usage" => .T. }
-   ENDIF
+              "stream" => .T., ;
+              "stream_options" => { "include_usage" => .T. } }
+   // Always request a final usage chunk (OpenAI + current Ollama OpenAI
+   // compat). Older Ollama builds ignored unknown fields; modern ones emit
+   // usage: { prompt_tokens, completion_tokens, total_tokens } for the footer.
    IF hb_HHasKey( hParams, "temperature" )
       hBody[ "temperature" ] := hParams[ "temperature" ]
    ENDIF

@@ -6,6 +6,10 @@ STATIC s_lSkipLF := .F.
 
 // Accumulated usage across the entire session (prompt_tokens, completion_tokens, ...).
 STATIC s_hSessionUsage := {=>}
+// Last completed turn (for the abbreviated footer usage chip).
+STATIC s_nLastTurnIn := 0
+STATIC s_nLastTurnOut := 0
+STATIC s_nLastTurnMs := 0
 // Cumulative wall-clock milliseconds spent inside agent turns (sum of every
 // RunTurn). Surfaces beside the token bar so the user can track how much of
 // the session has been spent waiting on the model.
@@ -106,9 +110,51 @@ FUNCTION AGREPL_SessionTokens()
    IF ValType( nC ) != "N" ; nC := 0 ; ENDIF
    RETURN nP + nC
 
+// Abbreviated last-turn usage for the input-box footer (where the bare
+// total used to sit): "in:3498 out:49 Σ3547 2.9s". Empty when no data yet.
+FUNCTION AGREPL_StatusUsageLabel()
+   LOCAL nIn := s_nLastTurnIn, nOut := s_nLastTurnOut, nTot, cDur
+   IF nIn <= 0 .AND. nOut <= 0
+      // Fall back to session totals if a turn never stamped last-turn fields.
+      nIn  := hb_HGetDef( s_hSessionUsage, "prompt_tokens", 0 )
+      nOut := hb_HGetDef( s_hSessionUsage, "completion_tokens", 0 )
+      IF ValType( nIn ) != "N"  ; nIn  := 0 ; ENDIF
+      IF ValType( nOut ) != "N" ; nOut := 0 ; ENDIF
+   ENDIF
+   IF nIn <= 0 .AND. nOut <= 0
+      RETURN "in:0 out:0"
+   ENDIF
+   nTot := nIn + nOut
+   cDur := ""
+   IF s_nLastTurnMs > 0
+      cDur := " " + LTrim( Str( s_nLastTurnMs / 1000.0, 10, 1 ) ) + "s"
+   ENDIF
+   RETURN "in:" + AGREPL_FmtTok( nIn ) + " out:" + AGREPL_FmtTok( nOut ) + ;
+          " Σ" + AGREPL_FmtTok( nTot ) + cDur
+
+// Compact token count: 3498 or 3.5K / 1.2M.
+STATIC FUNCTION AGREPL_FmtTok( n )
+   IF ValType( n ) != "N" .OR. n < 0
+      n := 0
+   ENDIF
+   IF n >= 1000000
+      RETURN LTrim( Str( n / 1000000.0, 10, 1 ) ) + "M"
+   ENDIF
+   IF n >= 10000
+      RETURN LTrim( Str( Int( ( n + 500 ) / 1000 ) ) ) + "K"
+   ENDIF
+   IF n >= 1000
+      RETURN LTrim( Str( n / 1000.0, 10, 1 ) ) + "K"
+   ENDIF
+   RETURN LTrim( Str( Int( n ) ) )
+
 // Public: model id for UI chips.
 FUNCTION AGREPL_SessionModel()
    RETURN s_cSessionModel
+
+// 1-based tip rotation index for the input-box footer (not transcript).
+FUNCTION AGREPL_TipIndex()
+   RETURN s_nTipIdx
 
 // Program entry point. Optional cModel CLI argument overrides the settings model.
 FUNCTION Main( cModel )
@@ -293,6 +339,9 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
          aMsgs := { { "role" => "system", "content" => AGUI_SystemPrompt() } }
          s_hSessionUsage := {=>}
          s_nSessionTurnMs := 0
+         s_nLastTurnIn := 0
+         s_nLastTurnOut := 0
+         s_nLastTurnMs := 0
          s_cGoal := ""
          s_aPlanSteps := {}
          s_lGoalLooping := .F.
@@ -610,9 +659,10 @@ STATIC FUNCTION AGREPL_RunTurn( oClient, oReg, cModel, bGate, nMaxIter, aMessage
       AGREPL_FlushPending( oRender, .T. )
    RECOVER
    END SEQUENCE
+   // Rotate the footer tip once per reply (shown under the input box,
+   // not printed into the transcript).
    IF hb_HGetDef( oRender, "inText", .F. )
       s_nTipIdx++
-      AGREPL_Out( Chr(10) + AGUI_TipLine( AGUI_TipAt( s_nTipIdx ) ) )
    ENDIF
    nTurnMs := hb_MilliSeconds() - nTurnStartMs
    IF nTurnMs < 0
@@ -640,6 +690,7 @@ STATIC FUNCTION AGREPL_RunTurn( oClient, oReg, cModel, bGate, nMaxIter, aMessage
    ENDIF
    IF ValType( hRes ) == "H" .AND. hb_HGetDef( hRes, "success", .F. )
       BEGIN SEQUENCE WITH {| o | Break( o ) }
+         // Stamp footer usage BEFORE redraw so the status line updates.
          AGREPL_ShowTokenBar( hb_HGetDef( hRes, "usage", {=>} ), nTurnMs )
          AGREPL_AccumUsage( hb_HGetDef( hRes, "usage", {=>} ) )
          AGREPL_MaybeWarnCompact( hb_HGetDef( hRes, "usage", {=>} ), cModel )
@@ -651,6 +702,10 @@ STATIC FUNCTION AGREPL_RunTurn( oClient, oReg, cModel, bGate, nMaxIter, aMessage
       AGREPL_Out( Chr(10) + AGUI_Color( "!! error: " + ;
          hb_CStr( hb_HGetDef( hRes, "error_type", "?" ) ) + ": " + ;
          hb_CStr( hb_HGetDef( hRes, "message", "" ) ), "31" ) + Chr(10) )
+   ENDIF
+   // Refresh footer: rotated tip + abbreviated in/out/Σ/time chip.
+   IF oPrompt != NIL
+      AGPROMPT_Redraw( oPrompt )
    ENDIF
    RETURN { "result" => iif( ValType( hRes ) == "H", hRes, ;
       { "success" => .F., "messages" => aMessages, "usage" => {=>}, ;
@@ -2779,15 +2834,19 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
       cThinking := hb_CStr( hEv[ "text" ] )
       oRender[ "reasoningBuf" ]   += cThinking
       oRender[ "reasoningChars" ] += Len( cThinking )
-      // First reasoning token: drop the spinner status line and open the
-      // live reasoning block (user asked to SEE the chain of thought).
+      // First reasoning token: replace the ticking status row with a fixed
+      // "Thinking" header, then stream the ⎿ body under it.
+      // WaitClear re-parks ESC[s] at col 1 so the header is not indented.
       IF !hb_HGetDef( oRender, "reasoningLive", .F. )
-         AGREPL_WaitClear( oRender )
-         // Amber header matching OpenCode "Thinking". No leading LF: the
-         // anchor sits at col 1 of the row WaitClear just blanked, so the
-         // header reuses that row instead of leaving it empty.
-         AGREPL_Out( AGUI_Color( s_aSpinnerFrames[ 1 ] + " Thinking", ;
-                     AGUI_Pal( "amber" ) ) + Chr(10) )
+         IF hb_HGetDef( oRender, "waitShown", .F. )
+            // Same physical row as the status spinner.
+            AGREPL_WaitClear( oRender )
+            AGREPL_Out( AGUI_Color( s_aSpinnerFrames[ 1 ] + " Thinking", ;
+                        AGUI_Pal( "amber" ) ) + Chr(10) )
+         ELSE
+            AGREPL_Out( Chr(10) + AGUI_Color( s_aSpinnerFrames[ 1 ] + " Thinking", ;
+                        AGUI_Pal( "amber" ) ) + Chr(10) )
+         ENDIF
          oRender[ "reasoningLive" ] := .T.
       ENDIF
       // Stream complete lines (dim/pink card) + soft-wrap long partials so
@@ -2905,13 +2964,17 @@ STATIC FUNCTION AGREPL_WaitLine( oRender, cPhase )
    RETURN AGUI_Color( cSpin + " Thinking", AGUI_Pal( "amber" ) ) + ;
           AGUI_Color( "  " + cSec, AGUI_Pal( "dim" ) )
 
-// Phase 1 — waiting indicator on ONE physical row. Leading LF only the
-// first time; later WaitShow/WaitTick/phase changes REPAINT that same
-// row (absolute CUP). A second WaitShow used to emit another LF and left
-// "Thinking 0.0s" + "Thinking 4.9s" stacked.
-// cPhase: "wait" (default) or "think".
+// Phase 1 — waiting indicator on ONE physical row.
+//
+// All updates go through the scroll-region output anchor (ESC[u] in
+// AGREPL_Out), never absolute CUP. Absolute row numbers go stale when
+// the box moves / the region scrolls, which left "Thinking 0.0s" on the
+// old row and a second "Thinking 6.5s" on another.
+//
+// First show: one LF + status (no trailing LF so the anchor stays on the
+// status row). Later ticks/phase changes: ESC[1G ESC[K + line only.
+// cPhase: "think" (default) — kept for StatusResume compatibility.
 STATIC FUNCTION AGREPL_WaitShow( oRender, cPhase )
-   LOCAL nRow
    IF oRender == NIL
       RETURN NIL
    ENDIF
@@ -2922,60 +2985,29 @@ STATIC FUNCTION AGREPL_WaitShow( oRender, cPhase )
       oRender[ "spinnerStartMs" ] := hb_MilliSeconds()
    ENDIF
    oRender[ "waitPhase" ] := cPhase
-   // Already on screen: only switch phase / repaint — never a new LF.
+   // Already on screen: repaint same row only — never another LF.
    IF hb_HGetDef( oRender, "waitShown", .F. )
       AGREPL_WaitPaint( oRender )
       RETURN NIL
    ENDIF
    oRender[ "spinnerFrame" ] := 1
    oRender[ "waitShown" ] := .T.
-   // New row + status (no trailing LF → cursor stays on this row).
-   // User line above has no trailing LF, so this LF sits right under it.
+   // New row under the user prompt; no trailing LF → anchor ends here.
    AGREPL_Out( Chr(10) + AGREPL_WaitLine( oRender, cPhase ) )
-   // Physical row for absolute ticks. Out advanced content_row by the
-   // leading LF; the text sits on that row (no trailing LF).
-   IF s_oBoxPrompt != NIL
-      nRow := hb_HGetDef( s_oBoxPrompt, "content_row", 0 )
-      IF nRow < 1
-         nRow := 1
-      ENDIF
-      oRender[ "waitRow" ] := nRow
-   ELSE
-      oRender[ "waitRow" ] := 0
-   ENDIF
    RETURN NIL
 
-// Paint the status line in place (absolute row or CR). Never advances
-// content_row and never emits LF — safe for WaitTick / phase switches.
+// Repaint status on the output-anchor row WITHOUT moving ESC[s].
+// OverwriteAtAnchor does ESC[u] 1G K text + box cursor — never ESC[s],
+// so the next tick still lands on the same status line. (AGREPL_Out would
+// re-save the anchor and, after box Redraw, sometimes open a 2nd line.)
 STATIC FUNCTION AGREPL_WaitPaint( oRender )
-   LOCAL cLine, nRow, cPaint, cPhase
-   IF oRender == NIL
+   LOCAL cLine, cPhase
+   IF oRender == NIL .OR. !hb_HGetDef( oRender, "waitShown", .F. )
       RETURN NIL
    ENDIF
-   cPhase := hb_HGetDef( oRender, "waitPhase", "wait" )
+   cPhase := hb_HGetDef( oRender, "waitPhase", "think" )
    cLine  := AGREPL_WaitLine( oRender, cPhase )
-   nRow   := hb_HGetDef( oRender, "waitRow", 0 )
-   // Prefer absolute row so ESC[u] / box Redraw cannot open a 2nd status line.
-   IF nRow >= 1 .AND. AGUI_ColorOn()
-      cPaint := Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
-                Chr( 27 ) + "[2K" + cLine
-      IF s_oBoxPrompt != NIL
-         cPaint += AGREPL_BoxCursorSeq()
-      ENDIF
-      FWrite( hb_GetStdOut(), cPaint )
-      // Keep the scroll-region output anchor on this row so a later
-      // WaitClear / AGREPL_Out(ESC[1G..) still hits the same line.
-      FWrite( hb_GetStdOut(), Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
-              Chr( 27 ) + "[s" )
-      IF s_oBoxPrompt != NIL
-         FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
-      ENDIF
-   ELSE
-      FWrite( hb_GetStdOut(), Chr( 13 ) + Chr( 27 ) + "[K" + cLine )
-      IF s_oBoxPrompt != NIL
-         FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
-      ENDIF
-   ENDIF
+   AGREPL_OverwriteAtAnchor( cLine )
    RETURN NIL
 
 // Suspends the status row so out-of-band content (a mid-turn [pending]
@@ -2993,42 +3025,27 @@ FUNCTION AGREPL_StatusSuspend()
 // last content row after an out-of-band print.
 FUNCTION AGREPL_StatusResume()
    IF s_oActiveRender != NIL
-      // Force a fresh row under the new content (waitShown was cleared).
       s_oActiveRender[ "waitShown" ] := .F.
-      s_oActiveRender[ "waitRow" ] := 0
       AGREPL_WaitShow( s_oActiveRender, ;
-         hb_HGetDef( s_oActiveRender, "waitPhase", "wait" ) )
+         hb_HGetDef( s_oActiveRender, "waitPhase", "think" ) )
    ENDIF
    RETURN NIL
 
-// Erases the status row (Working/Thinking) and drops waitShown.
+// Erases the status row and drops waitShown.
+// Must re-save ESC[s] at column 1 of that row: OverwriteAtAnchor wipes
+// without [s], so the saved cursor stayed at the old end-of-line column
+// and the next AGREPL_Out wrote "Thinking" mid-line (indented junk).
 STATIC FUNCTION AGREPL_WaitClear( oRender )
-   LOCAL nRow, cPaint
    IF oRender == NIL .OR. !hb_HGetDef( oRender, "waitShown", .F. )
       RETURN NIL
    ENDIF
-   nRow := hb_HGetDef( oRender, "waitRow", 0 )
-   IF nRow >= 1 .AND. AGUI_ColorOn()
-      cPaint := Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
-                Chr( 27 ) + "[2K"
-      IF s_oBoxPrompt != NIL
-         cPaint += AGREPL_BoxCursorSeq()
-      ENDIF
-      FWrite( hb_GetStdOut(), cPaint )
-      // Park output anchor on the cleared row so the next Out reuses it
-      // (reasoning header) instead of opening a blank line under a ghost.
-      FWrite( hb_GetStdOut(), Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
-              Chr( 27 ) + "[s" )
-      IF s_oBoxPrompt != NIL
-         FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
-      ENDIF
-   ELSEIF AGUI_ColorOn()
+   IF AGUI_ColorOn()
+      // ESC[1G ESC[K via Out: [u] wipe [s] parks anchor at col 1.
       AGREPL_Out( AGUI_VT( "1G" ) + AGUI_VT( "K" ) )
    ELSE
       AGREPL_Out( Chr(10) )
    ENDIF
    oRender[ "waitShown" ] := .F.
-   oRender[ "waitRow" ] := 0
    RETURN NIL
 
 // Advance spinner + elapsed while still waiting/thinking.
@@ -3943,37 +3960,25 @@ STATIC FUNCTION AGREPL_SpinnerClear()
    AGREPL_Out( AGUI_VT( "1G" ) + AGUI_VT( "K" ) )
    RETURN NIL
 
-// After a turn completes, optionally prints a compact token-usage bar when
-// usage data was collected from the stream. nTurnMs is the wall-clock time
-// the turn just spent inside AG_AgentRun; appended to the bar along with the
-// session-cumulative time so the user can track latency without /cost.
+// Records last-turn usage for the footer chip. The long transcript bar is
+// no longer printed — abbreviated stats live on the status line instead.
 STATIC FUNCTION AGREPL_ShowTokenBar( hUsage, nTurnMs )
-   LOCAL nPrompt, nComp, nTotal, cBar
-   IF ValType( hUsage ) != "H" .OR. Len( hb_HKeys( hUsage ) ) == 0
+   LOCAL nPrompt, nComp
+   IF ValType( hUsage ) != "H"
       RETURN NIL
    ENDIF
    nPrompt := hb_HGetDef( hUsage, "prompt_tokens", 0 )
    nComp   := hb_HGetDef( hUsage, "completion_tokens", 0 )
-   nTotal  := nPrompt + nComp
-   IF nTotal == 0
+   IF ValType( nPrompt ) != "N" ; nPrompt := 0 ; ENDIF
+   IF ValType( nComp ) != "N"   ; nComp   := 0 ; ENDIF
+   IF nPrompt <= 0 .AND. nComp <= 0
       RETURN NIL
    ENDIF
-   IF ValType( nTurnMs ) != "N"
-      nTurnMs := 0
+   s_nLastTurnIn  := nPrompt
+   s_nLastTurnOut := nComp
+   IF ValType( nTurnMs ) == "N" .AND. nTurnMs > 0
+      s_nLastTurnMs := nTurnMs
    ENDIF
-   cBar := AGUI_Color( "  ", "90" ) + ;
-           AGUI_Color( Chr(226)+Chr(150)+Chr(146) + " ", "90" ) + ;   // ┒
-           AGUI_Color( "tokens in: ", "90" ) + ;
-           AGUI_Color( LTrim( Str( nPrompt ) ), "1;36" ) + ;
-           AGUI_Color( "  out: ", "90" ) + ;
-           AGUI_Color( LTrim( Str( nComp ) ), "1;36" ) + ;
-           AGUI_Color( "  total: ", "90" ) + ;
-           AGUI_Color( LTrim( Str( nTotal ) ), "1" ) + ;
-           AGUI_Color( "  turn: ", "90" ) + ;
-           AGUI_Color( LTrim( Str( nTurnMs / 1000.0, 10, 1 ) ) + "s", "1;36" ) + ;
-           AGUI_Color( "  session: ", "90" ) + ;
-           AGUI_Color( LTrim( Str( s_nSessionTurnMs / 1000.0, 10, 1 ) ) + "s", "1" )
-   AGREPL_Out( AGUI_VT( "1G" ) + AGUI_VT( "K" ) + cBar + Chr(10) )
    RETURN NIL
 
 // Asks whether to continue a capped turn with 25 more iterations.

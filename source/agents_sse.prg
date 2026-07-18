@@ -13,7 +13,7 @@ FUNCTION AGSSE_Feed( oP, cChunk, bEmit )
    RETURN NIL
 
 STATIC FUNCTION AGSSE_Line( cLine, bEmit )
-   LOCAL cData, xJson, hChoice, hDelta
+   LOCAL cData, xJson, hChoice, hDelta, hUsage
    IF Empty( cLine ) .OR. !( Left( cLine, 5 ) == "data:" )
       RETURN NIL   // comments, blank keep-alive lines, event: lines -> ignored
    ENDIF
@@ -59,10 +59,55 @@ STATIC FUNCTION AGSSE_Line( cLine, bEmit )
                         "finish_reason" => hChoice[ "finish_reason" ] } )
       ENDIF
    ENDIF
-   IF hb_HHasKey( xJson, "usage" ) .AND. ValType( xJson[ "usage" ] ) == "H"
-      Eval( bEmit, { "type" => "usage", "usage" => xJson[ "usage" ] } )
+   // OpenAI usage object and/or Ollama native eval counts (top-level or
+   // nested). Final include_usage chunk often has choices: [].
+   hUsage := AGSSE_NormalizeUsage( xJson )
+   IF hUsage != NIL
+      Eval( bEmit, { "type" => "usage", "usage" => hUsage } )
    ENDIF
    RETURN NIL
+
+// Build a normalized { prompt_tokens, completion_tokens, total_tokens }
+// hash from an SSE JSON object. Accepts OpenAI "usage" and Ollama's
+// prompt_eval_count / eval_count (root or inside usage). NIL if none.
+// Public so agents_api.prg can reuse it.
+FUNCTION AGSSE_NormalizeUsage( xJson )
+   LOCAL hU := NIL, nIn := 0, nOut := 0, nTot := 0, lAny := .F.
+   IF ValType( xJson ) != "H"
+      RETURN NIL
+   ENDIF
+   IF hb_HHasKey( xJson, "usage" ) .AND. ValType( xJson[ "usage" ] ) == "H"
+      hU := xJson[ "usage" ]
+      IF ValType( hb_HGetDef( hU, "prompt_tokens", NIL ) ) == "N"
+         nIn := hU[ "prompt_tokens" ] ; lAny := .T.
+      ELSEIF ValType( hb_HGetDef( hU, "prompt_eval_count", NIL ) ) == "N"
+         nIn := hU[ "prompt_eval_count" ] ; lAny := .T.
+      ENDIF
+      IF ValType( hb_HGetDef( hU, "completion_tokens", NIL ) ) == "N"
+         nOut := hU[ "completion_tokens" ] ; lAny := .T.
+      ELSEIF ValType( hb_HGetDef( hU, "eval_count", NIL ) ) == "N"
+         nOut := hU[ "eval_count" ] ; lAny := .T.
+      ENDIF
+      IF ValType( hb_HGetDef( hU, "total_tokens", NIL ) ) == "N"
+         nTot := hU[ "total_tokens" ] ; lAny := .T.
+      ENDIF
+   ENDIF
+   // Native Ollama final chunk fields at the root (e.g. /api/chat done).
+   IF ValType( hb_HGetDef( xJson, "prompt_eval_count", NIL ) ) == "N"
+      nIn := xJson[ "prompt_eval_count" ] ; lAny := .T.
+   ENDIF
+   IF ValType( hb_HGetDef( xJson, "eval_count", NIL ) ) == "N"
+      nOut := xJson[ "eval_count" ] ; lAny := .T.
+   ENDIF
+   IF !lAny
+      RETURN NIL
+   ENDIF
+   IF nTot <= 0
+      nTot := nIn + nOut
+   ENDIF
+   RETURN { "prompt_tokens" => nIn, ;
+            "completion_tokens" => nOut, ;
+            "total_tokens" => nTot }
 
 STATIC FUNCTION AGSSE_ToolCalls( aCalls, bEmit )
    LOCAL hCall, hFn, hEv

@@ -697,7 +697,7 @@ STATIC FUNCTION AGUI_PadCell( cText, nWidth, cAlign )
 // version in releasenotes.md and the Releases section of README.md, then
 // tag the commit v<x.y.z>. All four must stay in sync.
 FUNCTION AGUI_Version()
-   RETURN "2.4.9"
+   RETURN "2.5.0"
 
 // The pool of short usage tips shown on the banner and at the idle prompt.
 FUNCTION AGUI_Tips()
@@ -902,29 +902,39 @@ FUNCTION AGUI_ModelChip( cModel )
                       AGUI_Pal( "dim" ) )
 
 // Footer under the prompt:
-//   > Esc interrupt          48.9K          /help commands
+//   > Esc interrupt   <tip centered>   in:3.5K out:49 Σ3.5K 2.9s  /help
+// Usage chip replaces the old bare total ("0" / "12.3K").
 FUNCTION AGUI_OpenCodeFooter( nTokens, nCols )
-   LOCAL cLeft, cMid, cRight, nPad, cTok
+   LOCAL cLeft, cMid, cRight, cUsage, nGap, nPadL, nPadR, nMaxMid
+   HB_SYMBOL_UNUSED( nTokens )
    IF ValType( nCols ) != "N" .OR. nCols < 40
       nCols := 80
    ENDIF
-   IF ValType( nTokens ) != "N" .OR. nTokens < 0
-      nTokens := 0
-   ENDIF
-   IF nTokens >= 1000
-      cTok := LTrim( Str( nTokens / 1000.0, 10, 1 ) ) + "K"
-   ELSE
-      cTok := LTrim( Str( nTokens ) )
-   ENDIF
    cLeft  := "> Esc interrupt"
-   cMid   := cTok
-   cRight := "/help commands"
-   nPad   := nCols - 1 - Len( cLeft ) - Len( cMid ) - Len( cRight )
-   IF nPad < 4
-      nPad := 4
+   cUsage := AGREPL_StatusUsageLabel()
+   cRight := cUsage + "  /help"
+   cMid   := AGUI_TipAt( AGREPL_TipIndex() )
+   // Room between left and right for the centered tip.
+   nGap := nCols - 1 - AGUI_VisLen( cLeft ) - AGUI_VisLen( cRight )
+   IF nGap < 6
+      nGap := 6
    ENDIF
-   RETURN AGUI_Color( cLeft + Space( Int( nPad / 2 ) ) + cMid + ;
-          Space( nPad - Int( nPad / 2 ) ) + cRight, AGUI_Pal( "dim" ) )
+   nMaxMid := nGap - 2
+   IF nMaxMid < 8
+      nMaxMid := 8
+   ENDIF
+   IF AGUI_VisLen( cMid ) > nMaxMid
+      cMid := hb_UTF8SubStr( cMid, 1, Max( 1, nMaxMid - 3 ) ) + "..."
+   ENDIF
+   nGap  := nCols - 1 - AGUI_VisLen( cLeft ) - AGUI_VisLen( cMid ) - ;
+            AGUI_VisLen( cRight )
+   IF nGap < 2
+      nGap := 2
+   ENDIF
+   nPadL := Int( nGap / 2 )
+   nPadR := nGap - nPadL
+   RETURN AGUI_Color( cLeft + Space( nPadL ) + cMid + Space( nPadR ) + cRight, ;
+                      AGUI_Pal( "dim" ) )
 
 // Builds the two-panel startup banner inside one rounded box, 99 columns wide
 // (matching the input frame). Left panel: a "Welcome back" line, the six-row
@@ -1086,9 +1096,7 @@ FUNCTION AGUI_SkillsStatusLine( aActive, nCols )
       cLine := PadR( cLine, Max( 1, nCols - 1 ) )
       RETURN AGUI_Color( cLine, AGUI_Pal( "accent" ) )
    ENDIF
-   // Footer: > Esc interrupt    12.3K    /help commands
-   // NO PadR here: the footer is already padded to nCols-1 visual cells,
-   // and PadR counts bytes — ANSI codes used to truncate "/help commands".
+   // Footer: > Esc interrupt  <tip centered>  tokens  /help
    nTok := AGREPL_SessionTokens()
    RETURN AGUI_OpenCodeFooter( nTok, nCols )
 

@@ -2440,12 +2440,10 @@ RETURN hOut
 
 // Builds the request body for the chat completion API
 FUNCTION AGENT_BuildBody( cModel, aMsgs, aTools, cBaseUrl )
-   LOCAL hBody, lOllama := ( "11434" $ Lower( cBaseUrl ) .OR. ;
-                              "ollama" $ Lower( cBaseUrl ) )
-   hBody := { "model" => cModel, "messages" => aMsgs, "stream" => .T. }
-   IF !lOllama
-      hBody[ "stream_options" ] := { "include_usage" => .T. }
-   ENDIF
+   LOCAL hBody
+   HB_SYMBOL_UNUSED( cBaseUrl )
+   hBody := { "model" => cModel, "messages" => aMsgs, "stream" => .T., ;
+              "stream_options" => { "include_usage" => .T. } }
    IF !Empty( aTools )
       hBody[ "tools" ] := aTools
    ENDIF

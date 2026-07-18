@@ -22,7 +22,7 @@ FUNCTION AGENT_SSE_Feed( oP, cChunk, bEmit )
 RETURN NIL
 
 STATIC FUNCTION AGENT_SSE_Line( cLine, bEmit )
-   LOCAL cData, xJson, hChoice, hDelta
+   LOCAL cData, xJson, hChoice, hDelta, hUsage
    IF Empty( cLine ) .OR. !( Left( cLine, 5 ) == "data:" )
       RETURN NIL
    ENDIF
@@ -56,8 +56,10 @@ STATIC FUNCTION AGENT_SSE_Line( cLine, bEmit )
          AGENT_Emit( bEmit, { "type" => "finish", "finish_reason" => hChoice[ "finish_reason" ] } )
       ENDIF
    ENDIF
-   IF hb_HHasKey( xJson, "usage" ) .AND. ValType( xJson[ "usage" ] ) == "H"
-      AGENT_Emit( bEmit, { "type" => "usage", "usage" => xJson[ "usage" ] } )
+   // OpenAI usage and/or Ollama prompt_eval_count/eval_count (normalized).
+   hUsage := AGSSE_NormalizeUsage( xJson )
+   IF hUsage != NIL
+      AGENT_Emit( bEmit, { "type" => "usage", "usage" => hUsage } )
    ENDIF
 RETURN NIL
 

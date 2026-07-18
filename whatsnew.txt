@@ -1,6 +1,18 @@
 Agents ? What's new
 ===================
 
+v2.5.0 (2026-07-18)
+-------------------
+* Token usage with Ollama: request stream_options.include_usage and normalize
+  OpenAI + Ollama eval counts so the footer shows real consumption.
+* Footer status line: "> Esc interrupt" + centered rotating tip + abbreviated
+  usage chip "in:3.5K out:49 Σ3.5K 2.9s" (replaces bare "0" and the long
+  transcript token bar).
+* Tips no longer spam the transcript after every turn — one tip on the footer.
+* Thinking status: single in-place row; fixed header before ⎿ block; no
+  indented ghost Thinking after clear.
+* Misc transcript polish carried from 2.4.9 line (clock, Build chip, spacing).
+
 v2.4.9 (2026-07-18)
 -------------------
 * FIX reply clock: align with user prompt (UTF-8 visual width); clock only
