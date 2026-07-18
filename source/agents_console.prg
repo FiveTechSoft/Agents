@@ -25,8 +25,13 @@ STATIC s_lInit     := .F.
 /* One-time GT setup, same spirit as hbIDE: New() / Activate(). */
 STATIC FUNCTION _Init()
    IF ! s_lInit
-      // Accept keyboard + GT events (resize, mouse if the GT supports it)
+      // Accept keyboard + GT events (resize, mouse wheel / motion)
       Set( _SET_EVENTMASK, hb_bitOr( INKEY_KEYBOARD, HB_INKEY_GTEVENT, INKEY_ALL ) )
+      // Enable mouse so wheel events report a row/col (content vs prompt box).
+      BEGIN SEQUENCE WITH {| o | Break( o ) }
+         hb_gtInfo( HB_GTI_MOUSESTATUS, 1 )
+      RECOVER
+      END SEQUENCE
       s_lInit := .T.
    ENDIF
    RETURN NIL
@@ -85,6 +90,9 @@ STATIC FUNCTION _MapRaw( nRaw )
    CASE nStd == K_DOWN   ; RETURN -10
    CASE nStd == K_TAB    ; RETURN -12
    CASE nStd == K_ESC    ; RETURN -13
+   // Mouse wheel (gtwin/Windows Terminal). Some GTs leave them on nRaw.
+   CASE nStd == K_MWFORWARD  .OR. nRaw == K_MWFORWARD  ; RETURN -15
+   CASE nStd == K_MWBACKWARD .OR. nRaw == K_MWBACKWARD ; RETURN -16
    ENDCASE
    // Printable: hbIDE inserts with hb_keyChar(nKey), never hb_keyVal()
    cKey := hb_keyChar( nRaw )
@@ -161,10 +169,23 @@ STATIC FUNCTION _ReadKeyNB()
    ENDIF
    RETURN _MapRaw( nRaw )
 
+/* Last mouse row (0-based GT row) after a mouse/wheel event. -1 if unknown. */
+FUNCTION AGCON_MouseRow()
+   LOCAL nRow := -1
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      nRow := MRow()
+   RECOVER
+      nRow := -1
+   END SEQUENCE
+   IF ValType( nRow ) != "N"
+      nRow := -1
+   ENDIF
+   RETURN nRow
+
 /* AGCON_ReadKey() -- blocks for one key (hbIDE: InKey(0, ...)):
  *   >0 codepoint  0 EOF  -1 Enter  -2 BS  -3 Left  -4 Right  -5 Home
  *   -6 End  -7 Del  -8 Ctrl+C  -9 Up  -10 Down  -11 S-Enter  -12 Tab
- *   -13 Esc  -14 Ctrl+E  -99 unmapped */
+ *   -13 Esc  -14 Ctrl+E  -15 WheelUp  -16 WheelDown  -99 unmapped */
 FUNCTION AGCON_ReadKey()
    LOCAL nKey, nRaw
    _Init()

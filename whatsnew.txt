@@ -1,6 +1,15 @@
 Agents ? What's new
 ===================
 
+v2.5.1 (2026-07-18)
+-------------------
+* Markdown pipe tables render as aligned columns (also unsmashes || rows).
+* After "Thought for": show Working... while the agent still answers/tools.
+* Permission ask: type y/n/a in the prompt box (visible echo in raw mode).
+* Tighter spacing: one blank under Thought for; one blank between tool rows.
+* Mouse wheel: scroll transcript when over the upper area; history only
+  when the pointer is over the prompt box.
+
 v2.5.0 (2026-07-18)
 -------------------
 * Token usage with Ollama: request stream_options.include_usage and normalize

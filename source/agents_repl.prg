@@ -2347,6 +2347,10 @@ STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
             oEd[ "buf" ] := cHist
             oEd[ "cursor" ] := hb_UTF8Len( cHist )
          ENDIF
+      CASE nKey == -15 .OR. nKey == -16
+         // Wheel over box → history; over transcript → scroll region.
+         AGPROMPT_HandleWheel( oPrompt, nKey )
+         LOOP
       CASE nKey == -11
          AGIN_Insert( oEd, Chr(10) )
       CASE nKey > 0
@@ -2576,13 +2580,18 @@ STATIC FUNCTION AGREPL_FlushPending( oRender, lTrimTail )
          ENDIF
          LOOP
       ENDIF
-      // First real content of the reply: one separator row after Thinking.
+      // First real content of the reply. After "Thought for" + Working...
+      // the status row was cleared in place — reuse it (no extra LF) so we
+      // only keep ONE blank under Thought for, not two.
       IF !oRender[ "inText" ]
          IF oRender[ "spinner" ]
             AGREPL_SpinnerClear()
             oRender[ "spinner" ] := .F.
          ENDIF
-         AGREPL_Out( Chr(10) )
+         IF !hb_HGetDef( oRender, "reuseStatusRow", .F. )
+            AGREPL_Out( Chr(10) )
+         ENDIF
+         oRender[ "reuseStatusRow" ] := .F.
          oRender[ "inText" ] := .T.
          oRender[ "blankRun" ] := 0
       ENDIF
@@ -2777,7 +2786,8 @@ STATIC FUNCTION AGREPL_RenderNew()
             "userText" => "", "userShown" => .F., "waitShown" => .F., ;
             "waitPhase" => "wait", "waitRow" => 0, "toolCount" => 0, ;
             "pendingText" => "", ;
-            "replyHold" => "" }
+            "replyHold" => "", ;
+            "reuseStatusRow" => .F. }
 
 // Safe wrapper so a paint bug never aborts the whole turn with Fatal.
 STATIC FUNCTION AGREPL_SafeRender( hEv, oRender, oPrompt )
@@ -2855,9 +2865,7 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
       AGREPL_StreamReasoningPartial( oRender )
 
    CASE cType == "text_delta"
-      // End thinking status line once visible text starts
-      AGREPL_WaitClear( oRender )
-      // Finish reasoning block: leftover partial + "Thought for Xs"
+      // Close the reasoning block first (prints "Thought for" + Working...).
       IF oRender[ "reasoningChars" ] > 0 .AND. ;
          !hb_HGetDef( oRender, "thinkDonePrinted", .F. )
          AGREPL_FinishReasoning( oRender )
@@ -2866,6 +2874,8 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
       oRender[ "pendingText" ] += ;
          AGMD_Feed( oRender[ "md" ], hb_CStr( hEv[ "text" ] ) )
       IF !Empty( oRender[ "pendingText" ] )
+         // Real reply text: drop Working... and paint the answer.
+         AGREPL_WaitClear( oRender )
          AGREPL_FlushPending( oRender )
       ENDIF
 
@@ -2873,11 +2883,11 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
       oRender[ "lastUsage" ] := hEv[ "usage" ]
 
    CASE cType == "tool_call"
-      AGREPL_WaitClear( oRender )
       IF oRender[ "reasoningChars" ] > 0 .AND. ;
          !hb_HGetDef( oRender, "thinkDonePrinted", .F. )
          AGREPL_FinishReasoning( oRender )
       ENDIF
+      AGREPL_WaitClear( oRender )
       // Release any held last reply line before tool chrome.
       oRender[ "pendingText" ] += AGMD_Flush( oRender[ "md" ] )
       AGREPL_FlushPending( oRender, .T. )
@@ -2888,9 +2898,16 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
          Lower( hb_CStr( hEv[ "name" ] ) ) == "propose_agents"
          // md already flushed above
       ELSE
-         // Grok6: active green bar + diamond "♦ Read …"
-         AGREPL_Out( Chr(10) + AGUI_GrokActActive( ;
-            AGREPL_ToolVerb( hEv[ "name" ], hEv[ "arguments" ] ) ) + Chr(10) )
+         // One blank before the next tool when reusing the cleared Working
+         // row (reuseStatusRow); avoid a second blank from an extra lead LF.
+         IF hb_HGetDef( oRender, "reuseStatusRow", .F. )
+            oRender[ "reuseStatusRow" ] := .F.
+            AGREPL_Out( AGUI_GrokActActive( ;
+               AGREPL_ToolVerb( hEv[ "name" ], hEv[ "arguments" ] ) ) + Chr(10) )
+         ELSE
+            AGREPL_Out( Chr(10) + AGUI_GrokActActive( ;
+               AGREPL_ToolVerb( hEv[ "name" ], hEv[ "arguments" ] ) ) + Chr(10) )
+         ENDIF
          // Shell/write show command body; read stays one-liners
          IF Lower( hb_CStr( hEv[ "name" ] ) ) == "shell" .OR. ;
             Lower( hb_CStr( hEv[ "name" ] ) ) == "write"
@@ -2902,16 +2919,32 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
       oRender[ "replyHold" ] := ""
       oRender[ "inText" ] := .F.
       oRender[ "toolCount" ] := hb_HGetDef( oRender, "toolCount", 0 ) + 1
+      // Tool running — Working on the next row (no extra blank: active
+      // already ended with LF).
+      oRender[ "spinnerStartMs" ] := hb_MilliSeconds()
+      AGREPL_WaitShow( oRender, "work", .T. )
 
    CASE cType == "tool_result"
+      AGREPL_WaitClear( oRender )
       AGREPL_FlushPending( oRender, .T. )
       oRender[ "replyHold" ] := ""
       oRender[ "inText" ] := .F.
       cId := hb_CStr( hb_HGetDef( hEv, "id", "" ) )
       // Grok6: "♦ Read 1 file" or full coloured diff for edit/write
-      AGREPL_Out( AGUI_ResultSummary( ;
-         hb_HGetDef( oRender[ "tools" ], cId, "" ), ;
-         hb_CStr( hEv[ "content" ] ) ) )
+      // Result ends with LF; paint Working on that next row (no lead LF).
+      IF hb_HGetDef( oRender, "reuseStatusRow", .F. )
+         // Cleared Working row from previous step — put summary there.
+         oRender[ "reuseStatusRow" ] := .F.
+         AGREPL_Out( AGUI_ResultSummary( ;
+            hb_HGetDef( oRender[ "tools" ], cId, "" ), ;
+            hb_CStr( hEv[ "content" ] ) ) )
+      ELSE
+         AGREPL_Out( AGUI_ResultSummary( ;
+            hb_HGetDef( oRender[ "tools" ], cId, "" ), ;
+            hb_CStr( hEv[ "content" ] ) ) )
+      ENDIF
+      oRender[ "spinnerStartMs" ] := hb_MilliSeconds()
+      AGREPL_WaitShow( oRender, "work", .T. )
 
    OTHERWISE
       AGREPL_FlushPending( oRender )
@@ -2945,11 +2978,11 @@ STATIC FUNCTION AGREPL_LastUserMsg( aMsgs )
    NEXT
    RETURN 0
 
-// Amber status line: spinner + "Thinking" + elapsed. (No "Working" label —
-// it flashed for a moment before the first model event and looked redundant.)
+// Amber status line: spinner + label + elapsed.
+//   "think" → Thinking (waiting on the model / chain-of-thought)
+//   "work"  → Working... (after Thought for, still generating reply / tools)
 STATIC FUNCTION AGREPL_WaitLine( oRender, cPhase )
-   LOCAL nMs, nSec, cSec, cSpin, nFrame
-   HB_SYMBOL_UNUSED( cPhase )
+   LOCAL nMs, nSec, cSec, cSpin, nFrame, cLabel
    nMs := hb_MilliSeconds() - hb_HGetDef( oRender, "spinnerStartMs", hb_MilliSeconds() )
    IF nMs < 0
       nMs := 0
@@ -2961,20 +2994,24 @@ STATIC FUNCTION AGREPL_WaitLine( oRender, cPhase )
       nFrame := 1
    ENDIF
    cSpin := s_aSpinnerFrames[ nFrame ]
-   RETURN AGUI_Color( cSpin + " Thinking", AGUI_Pal( "amber" ) ) + ;
+   IF cPhase == "work"
+      cLabel := " Working..."
+   ELSE
+      cLabel := " Thinking"
+   ENDIF
+   RETURN AGUI_Color( cSpin + cLabel, AGUI_Pal( "amber" ) ) + ;
           AGUI_Color( "  " + cSec, AGUI_Pal( "dim" ) )
 
 // Phase 1 — waiting indicator on ONE physical row.
 //
 // All updates go through the scroll-region output anchor (ESC[u] in
-// AGREPL_Out), never absolute CUP. Absolute row numbers go stale when
-// the box moves / the region scrolls, which left "Thinking 0.0s" on the
-// old row and a second "Thinking 6.5s" on another.
+// AGREPL_Out), never absolute CUP.
 //
-// First show: one LF + status (no trailing LF so the anchor stays on the
-// status row). Later ticks/phase changes: ESC[1G ESC[K + line only.
-// cPhase: "think" (default) — kept for StatusResume compatibility.
-STATIC FUNCTION AGREPL_WaitShow( oRender, cPhase )
+// First show: LF + status (unless lNoLeadLF — used after a line that already
+// ended with LF, e.g. tool result / Thought for, so we do not stack blanks).
+// Later ticks: ESC[1G ESC[K + line only.
+// cPhase: "think" | "work".
+STATIC FUNCTION AGREPL_WaitShow( oRender, cPhase, lNoLeadLF )
    IF oRender == NIL
       RETURN NIL
    ENDIF
@@ -2992,8 +3029,12 @@ STATIC FUNCTION AGREPL_WaitShow( oRender, cPhase )
    ENDIF
    oRender[ "spinnerFrame" ] := 1
    oRender[ "waitShown" ] := .T.
-   // New row under the user prompt; no trailing LF → anchor ends here.
-   AGREPL_Out( Chr(10) + AGREPL_WaitLine( oRender, cPhase ) )
+   // No trailing LF → anchor ends on the status row.
+   IF lNoLeadLF == .T.
+      AGREPL_Out( AGREPL_WaitLine( oRender, cPhase ) )
+   ELSE
+      AGREPL_Out( Chr(10) + AGREPL_WaitLine( oRender, cPhase ) )
+   ENDIF
    RETURN NIL
 
 // Repaint status on the output-anchor row WITHOUT moving ESC[s].
@@ -3035,6 +3076,8 @@ FUNCTION AGREPL_StatusResume()
 // Must re-save ESC[s] at column 1 of that row: OverwriteAtAnchor wipes
 // without [s], so the saved cursor stayed at the old end-of-line column
 // and the next AGREPL_Out wrote "Thinking" mid-line (indented junk).
+// Sets reuseStatusRow so FlushPending can paint the reply on this same
+// cleared row (avoids a second blank under "Thought for").
 STATIC FUNCTION AGREPL_WaitClear( oRender )
    IF oRender == NIL .OR. !hb_HGetDef( oRender, "waitShown", .F. )
       RETURN NIL
@@ -3046,6 +3089,7 @@ STATIC FUNCTION AGREPL_WaitClear( oRender )
       AGREPL_Out( Chr(10) )
    ENDIF
    oRender[ "waitShown" ] := .F.
+   oRender[ "reuseStatusRow" ] := .T.
    RETURN NIL
 
 // Advance spinner + elapsed while still waiting/thinking.
@@ -3351,6 +3395,8 @@ STATIC FUNCTION AGREPL_StreamReasoningPartial( oRender )
    RETURN NIL
 
 // End of reasoning: print leftover partial + "Thought for Xs" summary.
+// Then show "Working..." while the agent still generates the reply or
+// runs tools (cleared when real content / tool chrome is painted).
 STATIC FUNCTION AGREPL_FinishReasoning( oRender )
    LOCAL cTail, nSoft, cRest, nWrap
    IF hb_HGetDef( oRender, "thinkDonePrinted", .F. )
@@ -3375,6 +3421,11 @@ STATIC FUNCTION AGREPL_FinishReasoning( oRender )
    oRender[ "thinkDonePrinted" ] := .T.
    oRender[ "reasoningBuf" ] := ""
    oRender[ "reasoningLines" ] := 0
+   // Still busy: answer stream / tool calls may follow after a pause.
+   // No lead LF — Thought for already ended with LF (one blank max).
+   oRender[ "spinnerStartMs" ] := hb_MilliSeconds()
+   oRender[ "waitShown" ] := .F.
+   AGREPL_WaitShow( oRender, "work", .T. )
    RETURN NIL
 
 // Prefix for reasoning body lines under the "X Thinking" header.
@@ -4155,6 +4206,8 @@ STATIC FUNCTION AGREPL_InitConsole()
 
 // Permission prompt for a tool in "ask" mode. Returns the typed answer
 // ("y"/"n"/"a"); the gate normalises it. Never throws.
+// With the sticky prompt box active, the answer is typed IN the box so
+// it echoes (raw TTY has no kernel echo — AGREPL_ReadLine is invisible).
 STATIC FUNCTION AGREPL_AskPerm( cName, cArgsJson )
    LOCAL cLine := "n", oErr, nTimeout
    // AGENTS_ASK_TIMEOUT (env, seconds): when > 0, deny if no answer
@@ -4167,20 +4220,27 @@ STATIC FUNCTION AGREPL_AskPerm( cName, cArgsJson )
    ENDIF
    BEGIN SEQUENCE WITH {| o | Break( o ) }
       IF AGUI_ColorOn()
-         // amber confirmation card (web permitCard parity); the answer
-         // prompt itself stays a plain line so input lands after it
+         // amber confirmation card (web permitCard parity)
          AGREPL_Out( Chr(10) + AGUI_Card( ;
             AGUI_Color( "CONFIRMATION REQUIRED", "1;33" ) + Chr(10) + ;
             "The agent wants to run " + AGUI_Color( hb_CStr( cName ), "1" ) + ;
             ": " + AGUI_Summarize( hb_CStr( cArgsJson ), 120 ), ;
             "card_warn", Min( AGREPL_Cols() - 2, 100 ) ) + Chr(10) )
-         AGREPL_Out( AGUI_Color( "Allow? [y/n/a] ", "33" ) )
+         AGREPL_Out( AGUI_Color( "Allow? [y/n/a]  (type in the box below)", "33" ) + ;
+                     Chr(10) )
       ELSE
          AGREPL_Out( Chr(10) + AGUI_Color( "Tool '" + hb_CStr( cName ) + ;
                  "' wants to run: " + AGUI_Summarize( hb_CStr( cArgsJson ), 120 ) + ;
                  Chr(10) + "Allow? [y/n/a] ", "33" ) )
       ENDIF
-      IF nTimeout > 0
+      IF s_oBoxPrompt != NIL
+         // Box is in raw mode mid-turn: must read via the editor so keys
+         // are visible. AGPROMPT_Poll is busy and would queue as [pending].
+         cLine := AGREPL_BoxReadLine( nTimeout )
+         IF cLine == NIL
+            cLine := "n"
+         ENDIF
+      ELSEIF nTimeout > 0
          cLine := AGREPL_ReadLineTimeout( nTimeout )
          IF cLine == NIL
             AGREPL_Out( Chr(10) + AGUI_Color( "[no response in " + ;
@@ -4203,6 +4263,80 @@ STATIC FUNCTION AGREPL_AskPerm( cName, cArgsJson )
       AGPROMPT_Redraw( s_oBoxPrompt )
    ENDIF
    RETURN cLine
+
+// Read one line through the sticky prompt box (visible echo). Used by
+// permission prompts mid-turn when the session is busy and Poll would
+// queue input as [pending] instead of returning it.
+// nTimeoutSec: 0 = wait forever; >0 = auto-deny (NIL) after that many seconds.
+STATIC FUNCTION AGREPL_BoxReadLine( nTimeoutSec )
+   LOCAL nKey, oEd, cBuf, nDeadline := 0, nNow
+   IF s_oBoxPrompt == NIL
+      RETURN AGREPL_ReadLine()
+   ENDIF
+   IF ValType( nTimeoutSec ) == "N" .AND. nTimeoutSec > 0
+      nDeadline := hb_MilliSeconds() + nTimeoutSec * 1000
+   ENDIF
+   s_oBoxPrompt[ "editor" ] := AGIN_New( "" )
+   s_oBoxPrompt[ "interrupt" ] := NIL
+   AGPROMPT_Redraw( s_oBoxPrompt )
+   AGCON_RawMode( .T. )
+   DO WHILE .T.
+      IF nDeadline > 0
+         nNow := hb_MilliSeconds()
+         IF nNow >= nDeadline
+            AGREPL_Out( Chr(10) + AGUI_Color( "[no response in " + ;
+               LTrim( Str( nTimeoutSec ) ) + "s -- denied]", "31" ) + Chr(10) )
+            s_oBoxPrompt[ "editor" ] := AGIN_New( "" )
+            AGPROMPT_Redraw( s_oBoxPrompt )
+            RETURN NIL
+         ENDIF
+         // Non-blocking poll with short sleep so the deadline can fire.
+         IF !AGCON_KeyPending()
+            hb_idleSleep( 0.05 )
+            LOOP
+         ENDIF
+      ENDIF
+      nKey := AGCON_ReadKey()
+      IF nKey == 0
+         RETURN NIL
+      ENDIF
+      // Enter -> submit (empty counts as deny/"n" after gate norm)
+      IF nKey == -1 .OR. nKey == 13 .OR. nKey == 10
+         oEd := s_oBoxPrompt[ "editor" ]
+         cBuf := ""
+         IF ValType( oEd ) == "H"
+            cBuf := AllTrim( StrTran( StrTran( hb_CStr( oEd[ "buf" ] ), ;
+                    Chr(13), "" ), Chr(10), "" ) )
+         ENDIF
+         s_oBoxPrompt[ "editor" ] := AGIN_New( "" )
+         AGPROMPT_Redraw( s_oBoxPrompt )
+         RETURN cBuf
+      ENDIF
+      // Esc -> deny
+      IF nKey == -13
+         s_oBoxPrompt[ "editor" ] := AGIN_New( "" )
+         AGPROMPT_Redraw( s_oBoxPrompt )
+         RETURN "n"
+      ENDIF
+      oEd := s_oBoxPrompt[ "editor" ]
+      IF ValType( oEd ) != "H"
+         oEd := AGIN_New( "" )
+         s_oBoxPrompt[ "editor" ] := oEd
+      ENDIF
+      DO CASE
+      CASE nKey == -2  ; AGIN_Backspace( oEd )
+      CASE nKey == -3  ; AGIN_Left( oEd )
+      CASE nKey == -4  ; AGIN_Right( oEd )
+      CASE nKey == -5  ; AGIN_Home( oEd )
+      CASE nKey == -6  ; AGIN_End( oEd )
+      CASE nKey == -7  ; AGIN_Delete( oEd )
+      CASE nKey > 0
+         AGIN_Insert( oEd, AGCON_PrintableText( nKey ) )
+      ENDCASE
+      s_oBoxPrompt[ "editor" ] := oEd
+      AGPROMPT_Redraw( s_oBoxPrompt )
+   ENDDO
+   RETURN "n"
 
 // Like AGREPL_ReadLine but returns NIL after nSeconds with no input.
 // Polls stdin via AGCON_StdInWait (POSIX select) before each FRead so

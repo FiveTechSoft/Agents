@@ -347,6 +347,55 @@ FUNCTION AGPROMPT_Redraw( oPrompt )
               LTrim( Str( 3 + hW[ "col" ] ) ) + "H" )
    RETURN oPrompt
 
+// Mouse wheel: over the sticky box → rotate prompt history; over the
+// transcript area (rows above box_top) → scroll that region up/down.
+// nKey: -15 wheel forward/up, -16 wheel backward/down.
+FUNCTION AGPROMPT_HandleWheel( oPrompt, nKey )
+   LOCAL nRow, nBox, oEd, cHist, n, cSeq
+   IF oPrompt == NIL
+      RETURN NIL
+   ENDIF
+   nRow := AGCON_MouseRow()
+   nBox := 0
+   IF hb_HHasKey( oPrompt, "region" ) .AND. ValType( oPrompt[ "region" ] ) == "H"
+      nBox := hb_HGetDef( oPrompt[ "region" ], "box_top", 0 )
+   ENDIF
+   // Unknown row or cursor over the input box (and footer): history.
+   IF nRow < 0 .OR. nBox <= 0 .OR. nRow >= nBox - 1
+      oEd := oPrompt[ "editor" ]
+      IF ValType( oEd ) != "H"
+         RETURN NIL
+      ENDIF
+      IF nKey == -15
+         cHist := AGIN_HistoryPrev( oEd[ "buf" ] )
+      ELSE
+         cHist := AGIN_HistoryNext( oEd[ "buf" ] )
+      ENDIF
+      IF cHist != NIL
+         oEd[ "buf" ] := cHist
+         oEd[ "cursor" ] := hb_UTF8Len( cHist )
+         AGPROMPT_Redraw( oPrompt )
+      ENDIF
+      RETURN NIL
+   ENDIF
+   // Transcript area: scroll the DEC scroll region (content above the box).
+   // Wheel up (-15) → scroll down (show lines above): CSI n T
+   // Wheel down (-16) → scroll up (show lines below): CSI n S
+   n := 3
+   IF nKey == -15
+      cSeq := Chr(27) + "[" + LTrim( Str( n ) ) + "T"
+   ELSE
+      cSeq := Chr(27) + "[" + LTrim( Str( n ) ) + "S"
+   ENDIF
+   AGPROMPT_Raw( cSeq )
+   // Keep the visible cursor on the input line.
+   IF hb_HHasKey( oPrompt, "region" ) .AND. ;
+      ValType( oPrompt[ "region" ] ) == "H" .AND. ;
+      oPrompt[ "region" ][ "active" ] == .T.
+      FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
+   ENDIF
+   RETURN NIL
+
 // Non-blocking: drains every pending key into the editor, then redraws the
 // box. On Enter the buffer is classified; on Esc an interrupt is recorded.
 // Returns an action string: "none", "queued", or "interrupt".
@@ -477,6 +526,9 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             oEd[ "buf" ] := cHist
             oEd[ "cursor" ] := hb_UTF8Len( cHist )
          ENDIF
+      CASE nKey == -15 .OR. nKey == -16       // Mouse wheel
+         // Over the prompt box → history; over the transcript → scroll.
+         AGPROMPT_HandleWheel( oPrompt, nKey )
       CASE nKey == -11 ; AGIN_Insert( oEd, Chr(10) )   // Shift+Enter -> newline
       CASE nKey > 0 ; AGIN_Insert( oEd, AGCON_PrintableText( nKey ) )
       // other keys (Tab, Ctrl+C, unmapped) are ignored mid-prompt

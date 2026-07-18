@@ -4,10 +4,15 @@
 // "Suggested next:" marker line. Never throws: unrecognised text is emitted
 // unchanged, and with colour off (AGUI_ColorOn() false) markers are stripped
 // but no ANSI codes are produced.
+//
+// Supported blocks: headings, lists, fenced code, **bold** / *italic* / `code`,
+// and GitHub-style pipe tables (including models that smash rows onto one
+// line with "||" instead of newlines).
 
 // Creates a fresh render state.
 FUNCTION AGMD_New()
-   RETURN { "buf" => "", "fence" => .F., "suggestion" => "" }
+   RETURN { "buf" => "", "fence" => .F., "suggestion" => "", ;
+            "table" => {} }
 
 // Appends a chunk; renders every line completed by a newline. Returns the
 // rendered ANSI text for those lines ("" when only a partial line is
@@ -20,7 +25,7 @@ FUNCTION AGMD_Feed( oSt, cChunk )
    DO WHILE ( nNL := At( Chr(10), oSt[ "buf" ] ) ) > 0
       cLine := Left( oSt[ "buf" ], nNL - 1 )
       oSt[ "buf" ] := SubStr( oSt[ "buf" ], nNL + 1 )
-      cSplit := AGMD_SplitBulletRun( cLine )
+      cSplit := AGMD_PreSplit( cLine )
       IF Chr(10) $ cSplit
          aParts := hb_ATokens( cSplit, Chr(10) )
          FOR EACH cPart IN aParts
@@ -31,6 +36,64 @@ FUNCTION AGMD_Feed( oSt, cChunk )
       ENDIF
    ENDDO
    RETURN cOut
+
+// Pre-process a physical line: unsmash tables / headings jammed without LF,
+// then bullet-run split.
+STATIC FUNCTION AGMD_PreSplit( cLine )
+   LOCAL c
+   c := AGMD_SplitTableRun( cLine )
+   c := AGMD_SplitHeadingJam( c )
+   c := AGMD_SplitBulletRun( c )
+   RETURN c
+
+// Models often emit whole tables as one line:
+//   | A | B ||---|---|| a | b |
+// Turn "||" row boundaries into real newlines.
+STATIC FUNCTION AGMD_SplitTableRun( cLine )
+   LOCAL cTrim := AllTrim( cLine )
+   IF Empty( cTrim )
+      RETURN cLine
+   ENDIF
+   // Only rewrite when it looks like a pipe table (starts with |, has ---).
+   IF !( Left( cTrim, 1 ) == "|" .AND. "---" $ cTrim .AND. "||" $ cTrim )
+      // Also split multi-row tables without separator if many || appear.
+      IF !( Left( cTrim, 1 ) == "|" .AND. "||" $ cTrim )
+         RETURN cLine
+      ENDIF
+      // Require at least two || to avoid splitting cells with empty middle.
+      IF Len( hb_ATokens( cTrim, "||" ) ) < 3
+         RETURN cLine
+      ENDIF
+   ENDIF
+   RETURN StrTran( cTrim, "||", "|" + Chr(10) + "|" )
+
+// "text---### Heading" or "text:### Heading" → break before heading / rule.
+STATIC FUNCTION AGMD_SplitHeadingJam( cLine )
+   LOCAL c := cLine, n, cOut := ""
+   // ---###  or ---## 
+   DO WHILE ( n := hb_At( "---#", c ) ) > 0
+      cOut += Left( c, n - 1 ) + Chr(10) + "---" + Chr(10)
+      c := SubStr( c, n + 3 )   // keep leading #
+   ENDDO
+   c := cOut + c
+   cOut := ""
+   // jammed "### " not at start (after non-space)
+   n := 2
+   DO WHILE n <= Len( c ) - 3
+      IF SubStr( c, n, 4 ) == "### " .OR. SubStr( c, n, 3 ) == "## " .OR. ;
+         SubStr( c, n, 2 ) == "# "
+         // only if previous char is not newline and looks like jam
+         IF SubStr( c, n - 1, 1 ) != Chr(10) .AND. ;
+            SubStr( c, n - 1, 1 ) != " "
+            cOut += Left( c, n - 1 ) + Chr(10)
+            c := SubStr( c, n )
+            n := 2
+            LOOP
+         ENDIF
+      ENDIF
+      n++
+   ENDDO
+   RETURN cOut + c
 
 // When a line starts with a bullet marker AND contains 3+ further inline
 // marker occurrences (with or without a leading space), the model
@@ -64,12 +127,12 @@ STATIC FUNCTION AGMD_SplitBulletRun( cLine )
    RETURN cResult
 
 // Renders any buffered partial line (call at end of stream). Applies the
-// same bullet-run split as AGMD_Feed so a list that arrived without any
+// same pre-splits as AGMD_Feed so a list/table that arrived without any
 // terminating newline still renders one item per line.
 FUNCTION AGMD_Flush( oSt )
    LOCAL cOut := "", cSplit, aParts, cPart
    IF Len( oSt[ "buf" ] ) > 0
-      cSplit := AGMD_SplitBulletRun( oSt[ "buf" ] )
+      cSplit := AGMD_PreSplit( oSt[ "buf" ] )
       oSt[ "buf" ] := ""
       IF Chr(10) $ cSplit
          aParts := hb_ATokens( cSplit, Chr(10) )
@@ -80,6 +143,8 @@ FUNCTION AGMD_Flush( oSt )
          cOut := AGMD_RenderLine( oSt, cSplit )
       ENDIF
    ENDIF
+   // Flush any open pipe table.
+   cOut += AGMD_TableFlush( oSt )
    RETURN cOut
 
 // Returns the captured suggested next prompt, or "".
@@ -88,7 +153,7 @@ FUNCTION AGMD_Suggestion( oSt )
 
 // Renders one line (no trailing newline supplied); the result ends in LF.
 STATIC FUNCTION AGMD_RenderLine( oSt, cLine )
-   LOCAL cTrim, cRest, nH, cList, nSuggest
+   LOCAL cTrim, cRest, nH, cList, nSuggest, aCells, cTab
    cLine := StrTran( cLine, Chr(13), "" )
    cTrim := AllTrim( cLine )
 
@@ -97,18 +162,20 @@ STATIC FUNCTION AGMD_RenderLine( oSt, cLine )
    // (no leading newline), so also check for a mid-line occurrence.
    IF Len( cTrim ) >= 15 .AND. Lower( Left( cTrim, 15 ) ) == "suggested next:"
       oSt[ "suggestion" ] := AllTrim( SubStr( cTrim, 16 ) )
-      RETURN ""
+      RETURN AGMD_TableFlush( oSt )
    ENDIF
    nSuggest := hb_At( "suggested next:", Lower( cTrim ) )
    IF nSuggest > 1
       oSt[ "suggestion" ] := AllTrim( SubStr( cTrim, nSuggest + 15 ) )
-      RETURN AllTrim( Left( cTrim, nSuggest - 1 ) ) + Chr(10)
+      RETURN AGMD_TableFlush( oSt ) + ;
+             AllTrim( Left( cTrim, nSuggest - 1 ) ) + Chr(10)
    ENDIF
 
    // fenced code block toggle (``` optionally followed by a language tag)
    IF Left( cTrim, 3 ) == "```"
+      cTab := AGMD_TableFlush( oSt )
       oSt[ "fence" ] := !oSt[ "fence" ]
-      RETURN ""
+      RETURN cTab
    ENDIF
    IF oSt[ "fence" ]
       RETURN "  " + AGUI_Color( cLine, "90" ) + Chr(10)
@@ -116,24 +183,56 @@ STATIC FUNCTION AGMD_RenderLine( oSt, cLine )
 
    // blank line
    IF Empty( cTrim )
-      RETURN Chr(10)
+      RETURN AGMD_TableFlush( oSt ) + Chr(10)
+   ENDIF
+
+   // pipe table row (including separator |---|)
+   aCells := AGMD_ParseTableRow( cTrim )
+   IF aCells != NIL
+      AAdd( oSt[ "table" ], aCells )
+      RETURN ""
+   ENDIF
+   // Leaving table mode: flush buffered rows first.
+   cTab := AGMD_TableFlush( oSt )
+
+   // horizontal rule
+   IF AGMD_IsRule( cTrim )
+      RETURN cTab + AGUI_Color( Replicate( Chr(226)+Chr(148)+Chr(128), ;
+             Min( 40, AGREPL_Cols() - 4 ) ), "90" ) + Chr(10)
    ENDIF
 
    // heading
    nH := AGMD_HeadingLevel( cTrim )
    IF nH > 0
       cRest := AllTrim( SubStr( cTrim, nH + 1 ) )
-      RETURN AGUI_Color( cRest, "1" ) + Chr(10)
+      RETURN cTab + AGUI_Color( cRest, "1" ) + Chr(10)
    ENDIF
 
    // list item
    cList := AGMD_ListRender( cTrim )
    IF cList != NIL
-      RETURN cList + Chr(10)
+      RETURN cTab + cList + Chr(10)
    ENDIF
 
    // paragraph
-   RETURN AGMD_Inline( cLine ) + Chr(10)
+   RETURN cTab + AGMD_Inline( cLine ) + Chr(10)
+
+// True for --- / *** / ___ rules (3+ of the same char).
+STATIC FUNCTION AGMD_IsRule( cTrim )
+   LOCAL c0, i
+   IF Len( cTrim ) < 3
+      RETURN .F.
+   ENDIF
+   c0 := Left( cTrim, 1 )
+   IF !( c0 == "-" .OR. c0 == "*" .OR. c0 == "_" )
+      RETURN .F.
+   ENDIF
+   FOR i := 1 TO Len( cTrim )
+      IF SubStr( cTrim, i, 1 ) != c0 .AND. SubStr( cTrim, i, 1 ) != " "
+         RETURN .F.
+      ENDIF
+   NEXT
+   RETURN .T.
 
 // Returns the heading level 1..6 for a "# " .. "###### " line, else 0.
 STATIC FUNCTION AGMD_HeadingLevel( cTrim )
@@ -145,6 +244,181 @@ STATIC FUNCTION AGMD_HeadingLevel( cTrim )
       RETURN n
    ENDIF
    RETURN 0
+
+// Parses a GFM table row into an array of cell strings, or NIL if not a row.
+// Separator rows become { "---", "---", ... } markers.
+STATIC FUNCTION AGMD_ParseTableRow( cTrim )
+   LOCAL aRaw, aCells := {}, c, i, lSep := .T., cCell
+   IF Left( cTrim, 1 ) != "|" .AND. Right( cTrim, 1 ) != "|"
+      // also allow rows that only start with |
+      IF Left( cTrim, 1 ) != "|"
+         RETURN NIL
+      ENDIF
+   ENDIF
+   IF Left( cTrim, 1 ) != "|"
+      RETURN NIL
+   ENDIF
+   // Must have at least two pipes.
+   IF hb_At( "|", SubStr( cTrim, 2 ) ) == 0
+      RETURN NIL
+   ENDIF
+   aRaw := hb_ATokens( cTrim, "|" )
+   // hb_ATokens("| a | b |", "|") → { "", " a ", " b ", "" }
+   FOR i := 1 TO Len( aRaw )
+      c := aRaw[ i ]
+      // skip empty edge pieces from leading/trailing |
+      IF i == 1 .AND. Empty( AllTrim( c ) )
+         LOOP
+      ENDIF
+      IF i == Len( aRaw ) .AND. Empty( AllTrim( c ) )
+         LOOP
+      ENDIF
+      cCell := AllTrim( c )
+      AAdd( aCells, cCell )
+      // separator cell: only dashes, colons, spaces
+      IF !AGMD_IsSepCell( cCell )
+         lSep := .F.
+      ENDIF
+   NEXT
+   IF Len( aCells ) == 0
+      RETURN NIL
+   ENDIF
+   // Pure separator row → mark specially so flush can skip it as body.
+   IF lSep
+      RETURN { "___SEP___" }
+   ENDIF
+   RETURN aCells
+
+STATIC FUNCTION AGMD_IsSepCell( c )
+   LOCAL i, ch
+   IF Empty( c )
+      RETURN .T.
+   ENDIF
+   FOR i := 1 TO Len( c )
+      ch := SubStr( c, i, 1 )
+      IF !( ch == "-" .OR. ch == ":" .OR. ch == " " )
+         RETURN .F.
+      ENDIF
+   NEXT
+   RETURN .T.
+
+// Format and emit the buffered table; clear the buffer. "" if empty.
+STATIC FUNCTION AGMD_TableFlush( oSt )
+   LOCAL aTab, aRows := {}, aWidths := {}, aRow, i, j, nCols := 0
+   LOCAL cOut := "", cLine, cCell, nW, nMaxW, nPad, cSep
+   IF !hb_HHasKey( oSt, "table" ) .OR. Len( oSt[ "table" ] ) == 0
+      RETURN ""
+   ENDIF
+   aTab := oSt[ "table" ]
+   oSt[ "table" ] := {}
+   // Drop separator-only rows; keep data rows (first is usually header).
+   FOR i := 1 TO Len( aTab )
+      IF Len( aTab[ i ] ) == 1 .AND. aTab[ i ][ 1 ] == "___SEP___"
+         LOOP
+      ENDIF
+      AAdd( aRows, aTab[ i ] )
+      IF Len( aTab[ i ] ) > nCols
+         nCols := Len( aTab[ i ] )
+      ENDIF
+   NEXT
+   IF Len( aRows ) == 0 .OR. nCols == 0
+      RETURN ""
+   ENDIF
+   // Pad short rows; measure column widths (UTF-8 visual via AGUI_VisLen).
+   FOR i := 1 TO nCols
+      AAdd( aWidths, 1 )
+   NEXT
+   FOR i := 1 TO Len( aRows )
+      DO WHILE Len( aRows[ i ] ) < nCols
+         AAdd( aRows[ i ], "" )
+      ENDDO
+      FOR j := 1 TO nCols
+         nW := AGUI_VisLen( AGMD_StripInline( aRows[ i ][ j ] ) )
+         IF nW > aWidths[ j ]
+            aWidths[ j ] := nW
+         ENDIF
+      NEXT
+   NEXT
+   // Cap total width to terminal (~ cols - 4); shrink widest columns.
+   nMaxW := Max( 40, AGREPL_Cols() - 6 )
+   AGMD_FitWidths( @aWidths, nMaxW )
+   // Header row (bold) + underline + body.
+   cOut += AGMD_TableFormatRow( aRows[ 1 ], aWidths, .T. ) + Chr(10)
+   cSep := "  "
+   FOR j := 1 TO nCols
+      cSep += Replicate( "-", aWidths[ j ] )
+      IF j < nCols
+         cSep += "  "
+      ENDIF
+   NEXT
+   cOut += AGUI_Color( cSep, "90" ) + Chr(10)
+   FOR i := 2 TO Len( aRows )
+      cOut += AGMD_TableFormatRow( aRows[ i ], aWidths, .F. ) + Chr(10)
+   NEXT
+   RETURN cOut + Chr(10)
+
+// Shrink column widths so Sum(w) + gaps fits nMax.
+STATIC FUNCTION AGMD_FitWidths( aWidths, nMax )
+   LOCAL nSum, nGaps, nExtra, j, nWiden
+   nGaps := ( Len( aWidths ) - 1 ) * 2 + 2
+   DO WHILE .T.
+      nSum := 0
+      FOR j := 1 TO Len( aWidths )
+         nSum += aWidths[ j ]
+      NEXT
+      IF nSum + nGaps <= nMax
+         EXIT
+      ENDIF
+      // Shrink the widest column by 1 until it fits or all are tiny.
+      nWiden := 1
+      FOR j := 2 TO Len( aWidths )
+         IF aWidths[ j ] > aWidths[ nWiden ]
+            nWiden := j
+         ENDIF
+      NEXT
+      IF aWidths[ nWiden ] <= 4
+         EXIT
+      ENDIF
+      aWidths[ nWiden ] := aWidths[ nWiden ] - 1
+   ENDDO
+   RETURN NIL
+
+STATIC FUNCTION AGMD_TableFormatRow( aCells, aWidths, lHeader )
+   LOCAL cLine := "  ", j, cCell, nVis, nPad
+   FOR j := 1 TO Len( aWidths )
+      cCell := AGMD_Inline( hb_CStr( aCells[ j ] ) )
+      // Truncate plain text if still too wide (approx via strip).
+      IF AGUI_VisLen( AGMD_StripInline( aCells[ j ] ) ) > aWidths[ j ]
+         cCell := AGUI_Color( ;
+            hb_UTF8SubStr( AGMD_StripInline( aCells[ j ] ), 1, ;
+               Max( 1, aWidths[ j ] - 1 ) ) + "...", ;
+            iif( lHeader, "1", "0" ) )
+      ELSEIF lHeader
+         cCell := AGUI_Color( AGMD_StripInline( aCells[ j ] ), "1" )
+      ENDIF
+      nVis := AGUI_VisLen( AGMD_StripInline( ;
+         iif( lHeader, AGMD_StripInline( aCells[ j ] ), aCells[ j ] ) ) )
+      // Recompute visual of rendered (ANSI ignored by VisLen).
+      nVis := AGUI_VisLen( cCell )
+      IF nVis > aWidths[ j ]
+         nPad := 0
+      ELSE
+         nPad := aWidths[ j ] - nVis
+      ENDIF
+      cLine += cCell + Space( nPad )
+      IF j < Len( aWidths )
+         cLine += "  "
+      ENDIF
+   NEXT
+   RETURN cLine
+
+// Strip ** ` * markers for width measurement (rough).
+STATIC FUNCTION AGMD_StripInline( cText )
+   cText := hb_CStr( cText )
+   cText := StrTran( cText, "**", "" )
+   cText := StrTran( cText, "`", "" )
+   cText := StrTran( cText, "*", "" )
+   RETURN cText
 
 // Renders a bullet ("- ", "* ", "+ ") or numbered ("<digits>. ") list item,
 // or NIL when the line is not a list item.
