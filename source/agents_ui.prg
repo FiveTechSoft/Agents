@@ -697,7 +697,7 @@ STATIC FUNCTION AGUI_PadCell( cText, nWidth, cAlign )
 // version in releasenotes.md and the Releases section of README.md, then
 // tag the commit v<x.y.z>. All four must stay in sync.
 FUNCTION AGUI_Version()
-   RETURN "2.4.8"
+   RETURN "2.4.9"
 
 // The pool of short usage tips shown on the banner and at the idle prompt.
 FUNCTION AGUI_Tips()
@@ -901,10 +901,10 @@ FUNCTION AGUI_ModelChip( cModel )
    RETURN AGUI_Color( cSq + " Build " + Chr( 194 ) + Chr( 183 ) + " " + cM, ;
                       AGUI_Pal( "dim" ) )
 
-// OpenCode footer under the prompt (opencode1.jpg):
-//   ······ esc interrupt          48.9K          /help commands
+// Footer under the prompt:
+//   > Esc interrupt          48.9K          /help commands
 FUNCTION AGUI_OpenCodeFooter( nTokens, nCols )
-   LOCAL cLeft, cMid, cRight, nPad, cTok, cDots
+   LOCAL cLeft, cMid, cRight, nPad, cTok
    IF ValType( nCols ) != "N" .OR. nCols < 40
       nCols := 80
    ENDIF
@@ -916,14 +916,10 @@ FUNCTION AGUI_OpenCodeFooter( nTokens, nCols )
    ELSE
       cTok := LTrim( Str( nTokens ) )
    ENDIF
-   // U+00B7 middle dots prefix (OpenCode animated leader)
-   cDots  := Replicate( Chr( 194 ) + Chr( 183 ), 6 )
-   cLeft  := cDots + " esc interrupt"
+   cLeft  := "> Esc interrupt"
    cMid   := cTok
    cRight := "/help commands"
-   // Len(cDots) is 12 bytes for 6 UTF-8 chars; visual width is 6.
-   // Approximate pad with visual widths so the line fits the terminal.
-   nPad   := nCols - 1 - 6 - Len( " esc interrupt" ) - Len( cMid ) - Len( cRight )
+   nPad   := nCols - 1 - Len( cLeft ) - Len( cMid ) - Len( cRight )
    IF nPad < 4
       nPad := 4
    ENDIF
@@ -1090,10 +1086,9 @@ FUNCTION AGUI_SkillsStatusLine( aActive, nCols )
       cLine := PadR( cLine, Max( 1, nCols - 1 ) )
       RETURN AGUI_Color( cLine, AGUI_Pal( "accent" ) )
    ENDIF
-   // OpenCode footer: ······ esc interrupt    12.3K    /help commands
-   // NO PadR here: the footer is already padded to nCols-1 VISUAL cells,
-   // and PadR counts bytes — ANSI codes + UTF-8 dots made it truncate the
-   // coloured string ("/help commands" showed as "/he").
+   // Footer: > Esc interrupt    12.3K    /help commands
+   // NO PadR here: the footer is already padded to nCols-1 visual cells,
+   // and PadR counts bytes — ANSI codes used to truncate "/help commands".
    nTok := AGREPL_SessionTokens()
    RETURN AGUI_OpenCodeFooter( nTok, nCols )
 

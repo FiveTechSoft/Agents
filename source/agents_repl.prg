@@ -576,7 +576,8 @@ STATIC FUNCTION AGREPL_RunTurn( oClient, oReg, cModel, bGate, nMaxIter, aMessage
    oRender[ "spinnerStartMs" ] := nTurnStartMs
    // ALWAYS show "> user" first so interactive never looks frozen blank.
    AGREPL_CommitUserPrompt( oRender )
-   AGREPL_WaitShow( oRender )
+   // Status line is "Thinking" only — never a brief "Working" flash first.
+   AGREPL_WaitShow( oRender, "think" )
    s_oActiveRender := oRender
    hRes := NIL
    BEGIN SEQUENCE WITH {| o | Break( o ) }
@@ -2433,30 +2434,24 @@ STATIC FUNCTION AGREPL_SanitiseName( cName )
 // Creates a per-turn render state: the markdown renderer, an id->tool-name
 // map (to label tool results), the assistant-bullet run flag, spinner state,
 // reasoning-character counter, and last-seen usage hash.
-// Prints the buffered narration text (pendingText) with the assistant
-// bullet prefix, then clears it. No-op when nothing is pending.
-// Grok6 assistant text: plain lines + clock on the first line (right).
-// lTrimTail (final flush only): drops ALL trailing blank lines so the
-// "Worked for" footer sits one row under the reply. Mid-stream flushes
-// keep single blanks — they are paragraph separators.
+// Prints the buffered narration text (pendingText). No-op when empty.
+//
+// Clock only on the LAST content line of the reply (aligned with the user
+// prompt). Mid-stream flushes HOLD the newest content line in replyHold;
+// the final flush (lTrimTail) releases it with the clock. No cursor-up
+// rewrites (those duplicated the "□ Build · model" row).
+//
+// Blank runs from the model are capped at ONE empty row between paragraphs
+// so "Thought for" → Tip does not grow a stack of blank lines.
 STATIC FUNCTION AGREPL_FlushPending( oRender, lTrimTail )
-   LOCAL aLines, i, nW, cRow, cClock
-   IF Empty( oRender[ "pendingText" ] )
+   LOCAL aLines, aAll, i, nW, cClock, nLast, cHold, cLine, lAny
+   IF Empty( oRender[ "pendingText" ] ) .AND. ;
+      Empty( hb_HGetDef( oRender, "replyHold", "" ) )
+      // Final flush with nothing held and nothing pending: do not invent
+      // a blank "inText" block (that left 3–5 empty rows before Tip).
       RETURN NIL
    ENDIF
-   // Streaming calls FlushPending once per completed line, so "i == 1"
-   // alone stamped the clock on EVERY line of a multi-line reply. Only
-   // the first printed line of a reply block (inText transition) gets it.
-   IF !oRender[ "inText" ]
-      IF oRender[ "spinner" ]
-         AGREPL_SpinnerClear()
-         oRender[ "spinner" ] := .F.
-      ENDIF
-      AGREPL_Out( Chr(10) )
-      oRender[ "inText" ] := .T.
-      oRender[ "blockClockDone" ] := .F.
-      oRender[ "blankRun" ] := 0
-   ENDIF
+
    aLines := hb_ATokens( StrTran( oRender[ "pendingText" ], Chr(13), "" ), ;
                          Chr(10) )
    IF Len( aLines ) > 0 .AND. Empty( ATail( aLines ) )
@@ -2467,76 +2462,148 @@ STATIC FUNCTION AGREPL_FlushPending( oRender, lTrimTail )
          hb_ADel( aLines, Len( aLines ), .T. )
       ENDDO
    ENDIF
+
+   // Merge previously held last line in front of this flush's lines.
+   aAll := {}
+   cHold := hb_HGetDef( oRender, "replyHold", "" )
+   IF !Empty( cHold )
+      AAdd( aAll, cHold )
+      oRender[ "replyHold" ] := ""
+   ENDIF
+   FOR i := 1 TO Len( aLines )
+      AAdd( aAll, aLines[ i ] )
+   NEXT
+   oRender[ "pendingText" ] := ""
+
+   // Drop pure-whitespace "content" so it does not count as a reply line.
+   FOR i := Len( aAll ) TO 1 STEP -1
+      IF Empty( AllTrim( hb_CStr( aAll[ i ] ) ) )
+         aAll[ i ] := ""
+      ENDIF
+   NEXT
+
+   nLast := 0
+   FOR i := 1 TO Len( aAll )
+      IF !Empty( aAll[ i ] )
+         nLast := i
+      ENDIF
+   NEXT
+
+   // Mid-stream: hold the last content line for the final clock stamp.
+   IF lTrimTail != .T. .AND. nLast > 0
+      oRender[ "replyHold" ] := aAll[ nLast ]
+      DO WHILE Len( aAll ) >= nLast
+         hb_ADel( aAll, Len( aAll ), .T. )
+      ENDDO
+      nLast := 0
+      FOR i := 1 TO Len( aAll )
+         IF !Empty( aAll[ i ] )
+            nLast := i
+         ENDIF
+      NEXT
+   ENDIF
+
+   // Nothing to paint this pass (e.g. only held for later, or only blanks).
+   IF nLast == 0
+      RETURN NIL
+   ENDIF
+
    nW := Max( 40, AGREPL_Cols() - 2 )
    cClock := AGREPL_Clock12()
-   FOR i := 1 TO Len( aLines )
-      // Blank lines are DEFERRED: printed only when real content follows,
-      // so a reply never ends in stray empty rows before "Worked for".
-      IF Empty( aLines[ i ] )
-         oRender[ "blankRun" ] := hb_HGetDef( oRender, "blankRun", 0 ) + 1
+   lAny := .F.
+
+   FOR i := 1 TO Len( aAll )
+      cLine := aAll[ i ]
+      IF Empty( cLine )
+         // At most one deferred blank between paragraphs.
+         IF hb_HGetDef( oRender, "blankRun", 0 ) < 1
+            oRender[ "blankRun" ] := 1
+         ENDIF
          LOOP
+      ENDIF
+      // First real content of the reply: one separator row after Thinking.
+      IF !oRender[ "inText" ]
+         IF oRender[ "spinner" ]
+            AGREPL_SpinnerClear()
+            oRender[ "spinner" ] := .F.
+         ENDIF
+         AGREPL_Out( Chr(10) )
+         oRender[ "inText" ] := .T.
+         oRender[ "blankRun" ] := 0
       ENDIF
       DO WHILE hb_HGetDef( oRender, "blankRun", 0 ) > 0
          AGREPL_Out( Chr(10) )
          oRender[ "blankRun" ] := oRender[ "blankRun" ] - 1
       ENDDO
-      IF !hb_HGetDef( oRender, "blockClockDone", .T. )
-         // First line of the reply: clock on the right of the first visual
-         // row; overflow continues on the next lines (never truncated).
-         AGREPL_PrintReplyFirst( aLines[ i ], cClock, nW )
-         oRender[ "blockClockDone" ] := .T.
+      IF lTrimTail == .T. .AND. i == nLast
+         AGREPL_PrintReplyWithClock( cLine, cClock, nW )
       ELSE
-         AGREPL_PrintReplyWrapped( aLines[ i ], nW )
+         AGREPL_PrintReplyWrapped( cLine, nW )
       ENDIF
+      lAny := .T.
    NEXT
-   oRender[ "pendingText" ] := ""
+   HB_SYMBOL_UNUSED( lAny )
    RETURN NIL
 
-// First reply row: left text + clock; overflow continues on next rows
-// at full width (never truncated with "...").
-STATIC FUNCTION AGREPL_PrintReplyFirst( cText, cClock, nW )
-   LOCAL nFirstW, cFirst, cRest, cChunk, nSpace
+// Word-wrap one logical line; clock on the last visual row only.
+// Returns the number of visual rows printed.
+STATIC FUNCTION AGREPL_PrintReplyWithClock( cText, cClock, nW )
+   LOCAL aParts, j, nLast, nFirstW, cLast, cChunk, nByte, nSpace, cRest
    cText  := AllTrim( StrTran( hb_CStr( cText ), Chr(13), "" ) )
    cClock := hb_CStr( cClock )
    IF Empty( cText )
-      RETURN NIL
+      RETURN 0
    ENDIF
-   // Reserve columns on row 1 for "  10:34 AM".
-   nFirstW := Max( 20, nW - Len( cClock ) - 2 )
-   IF Len( cText ) <= nFirstW
-      AGREPL_Out( AGUI_Color( AGREPL_BarRow( cText, cClock, nW, .F. ), ;
+   nFirstW := Max( 20, nW - AGUI_VisLen( cClock ) - 2 )
+   // Wrap body at full width first.
+   aParts := AGREPL_WrapWords( cText, nW )
+   IF Len( aParts ) == 0
+      RETURN 0
+   ENDIF
+   // All but last visual row: full width, no clock.
+   FOR j := 1 TO Len( aParts ) - 1
+      AGREPL_Out( AGUI_Color( aParts[ j ], "97" ) + Chr(10) )
+   NEXT
+   cLast := aParts[ Len( aParts ) ]
+   // Last row: if it fits with the clock, pad; else split once more.
+   IF AGUI_VisLen( cLast ) <= nFirstW
+      AGREPL_Out( AGUI_Color( AGREPL_BarRow( cLast, cClock, nW, .F. ), ;
                               "97" ) + Chr(10) )
-      RETURN NIL
+      RETURN Len( aParts )
    ENDIF
-   cChunk := Left( cText, nFirstW )
+   cChunk := AGREPL_VisLeft( cLast, nFirstW, @nByte )
    nSpace := hb_RAt( " ", cChunk )
    IF nSpace >= Max( 12, Int( nFirstW * 0.35 ) )
-      cFirst := Left( cText, nSpace - 1 )
-      cRest  := LTrim( SubStr( cText, nSpace + 1 ) )
+      AGREPL_Out( AGUI_Color( Left( cLast, nSpace - 1 ), "97" ) + Chr(10) )
+      cRest := LTrim( SubStr( cLast, nSpace + 1 ) )
    ELSE
-      cFirst := Left( cText, nFirstW )
-      cRest  := LTrim( SubStr( cText, nFirstW + 1 ) )
+      AGREPL_Out( AGUI_Color( cChunk, "97" ) + Chr(10) )
+      cRest := LTrim( SubStr( cLast, nByte + 1 ) )
    ENDIF
-   AGREPL_Out( AGUI_Color( AGREPL_BarRow( cFirst, cClock, nW, .F. ), ;
+   IF Empty( cRest )
+      // Degenerate: put clock on empty pad row.
+      AGREPL_Out( AGUI_Color( AGREPL_BarRow( "", cClock, nW, .F. ), ;
+                              "97" ) + Chr(10) )
+      RETURN Len( aParts ) + 1
+   ENDIF
+   AGREPL_Out( AGUI_Color( AGREPL_BarRow( cRest, cClock, nW, .F. ), ;
                            "97" ) + Chr(10) )
-   IF !Empty( cRest )
-      AGREPL_PrintReplyWrapped( cRest, nW )
-   ENDIF
-   RETURN NIL
+   RETURN Len( aParts ) + 1
 
 // Word-wrap one logical line to nW and print each visual row.
+// Returns the number of visual rows printed.
 STATIC FUNCTION AGREPL_PrintReplyWrapped( cText, nW )
    LOCAL aParts, j
    aParts := AGREPL_WrapWords( hb_CStr( cText ), nW )
    FOR j := 1 TO Len( aParts )
       AGREPL_Out( AGUI_Color( aParts[ j ], "97" ) + Chr(10) )
    NEXT
-   RETURN NIL
+   RETURN Len( aParts )
 
-// Split cText into word-wrapped segments of at most nWrap columns.
+// Split cText into word-wrapped segments of at most nWrap *visual* columns.
 // Prefers breaks at spaces; hard-splits only when a single word is longer.
 STATIC FUNCTION AGREPL_WrapWords( cText, nWrap )
-   LOCAL aOut := {}, cChunk, nSpace, nTake
+   LOCAL aOut := {}, cChunk, nSpace, nByte
    cText := AllTrim( StrTran( hb_CStr( cText ), Chr(13), "" ) )
    IF nWrap < 20
       nWrap := 20
@@ -2545,22 +2612,43 @@ STATIC FUNCTION AGREPL_WrapWords( cText, nWrap )
       RETURN aOut
    ENDIF
    DO WHILE Len( cText ) > 0
-      IF Len( cText ) <= nWrap
+      IF AGUI_VisLen( cText ) <= nWrap
          AAdd( aOut, cText )
          EXIT
       ENDIF
-      cChunk := Left( cText, nWrap )
+      cChunk := AGREPL_VisLeft( cText, nWrap, @nByte )
       nSpace := hb_RAt( " ", cChunk )
       IF nSpace >= Max( 12, Int( nWrap * 0.35 ) )
-         nTake := nSpace - 1
-         AAdd( aOut, Left( cText, nTake ) )
-         cText := LTrim( SubStr( cText, nTake + 1 ) )
+         AAdd( aOut, Left( cText, nSpace - 1 ) )
+         cText := LTrim( SubStr( cText, nSpace + 1 ) )
       ELSE
-         AAdd( aOut, Left( cText, nWrap ) )
-         cText := LTrim( SubStr( cText, nWrap + 1 ) )
+         AAdd( aOut, cChunk )
+         cText := LTrim( SubStr( cText, nByte + 1 ) )
       ENDIF
    ENDDO
    RETURN aOut
+
+// First nCols visual columns of cText (UTF-8 safe). Optional @nEnd is the
+// last byte index consumed (1-based end of the prefix).
+STATIC FUNCTION AGREPL_VisLeft( cText, nCols, /*@*/ nEnd )
+   LOCAL i := 1, nVis := 0, nLen, c
+   cText := hb_CStr( cText )
+   nLen  := Len( cText )
+   nEnd  := 0
+   DO WHILE i <= nLen .AND. nVis < nCols
+      c := SubStr( cText, i, 1 )
+      IF hb_BCode( c ) < 0x80 .OR. hb_BCode( c ) >= 0xC0
+         nVis++
+      ENDIF
+      i++
+   ENDDO
+   // If we stopped mid multi-byte sequence, back up to last complete char.
+   DO WHILE i <= nLen .AND. hb_BCode( SubStr( cText, i, 1 ) ) >= 0x80 .AND. ;
+            hb_BCode( SubStr( cText, i, 1 ) ) < 0xC0
+      i++
+   ENDDO
+   nEnd := i - 1
+   RETURN Left( cText, nEnd )
 
 // Counts the visual rows a chunk would consume when written at col 1 of
 // an nCols-wide terminal: every LF adds a row, ANSI CSI sequences are
@@ -2633,7 +2721,8 @@ STATIC FUNCTION AGREPL_RenderNew()
             "lastFrameTime" => 0, "spinnerStartMs" => 0, ;
             "userText" => "", "userShown" => .F., "waitShown" => .F., ;
             "waitPhase" => "wait", "waitRow" => 0, "toolCount" => 0, ;
-            "pendingText" => "" }
+            "pendingText" => "", ;
+            "replyHold" => "" }
 
 // Safe wrapper so a paint bug never aborts the whole turn with Fatal.
 STATIC FUNCTION AGREPL_SafeRender( hEv, oRender, oPrompt )
@@ -2676,21 +2765,9 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
       AGREPL_CommitUserPrompt( oRender )
       oRender[ "spinner" ] := .T.
       IF AGUI_ColorOn()
-         // The status row has a single owner: when one is already on
-         // screen (the "Working" line from WaitShow), switch its phase
-         // and repaint IN PLACE through AGREPL_Out — the ESC[1G ESC[K
-         // spinner prefix reuses the same physical row and keeps the
-         // content-row/anchor bookkeeping intact. Printing a second
-         // status line here left the old row ticking above the new one
-         // (stale-row artifact); raw absolute writes desynced the box
-         // wipe and made the streamed reply invisible.
-         IF hb_HGetDef( oRender, "waitShown", .F. )
-            oRender[ "waitPhase" ] := "think"
-            AGREPL_Out( AGUI_VT( "1G" ) + AGUI_VT( "K" ) + ;
-                        AGREPL_WaitLine( oRender, "think" ) )
-         ELSE
-            AGREPL_WaitShow( oRender, "think" )
-         ENDIF
+         // Same status row as Working: WaitShow repaints in place when
+         // waitShown is already set (no second LF / no stacked lines).
+         AGREPL_WaitShow( oRender, "think" )
       ELSE
          AGREPL_Out( Chr(10) + AGUI_Color( s_aSpinnerFrames[ 1 ] + " Thinking", ;
                      AGUI_Pal( "amber" ) ) + Chr(10) )
@@ -2742,12 +2819,15 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
          !hb_HGetDef( oRender, "thinkDonePrinted", .F. )
          AGREPL_FinishReasoning( oRender )
       ENDIF
+      // Release any held last reply line before tool chrome.
+      oRender[ "pendingText" ] += AGMD_Flush( oRender[ "md" ] )
+      AGREPL_FlushPending( oRender, .T. )
       IF hb_HHasKey( hEv, "id" )
          oRender[ "tools" ][ hb_CStr( hEv[ "id" ] ) ] := hb_CStr( hEv[ "name" ] )
       ENDIF
       IF Lower( hb_CStr( hEv[ "name" ] ) ) == "ask_user" .OR. ;
          Lower( hb_CStr( hEv[ "name" ] ) ) == "propose_agents"
-         AGMD_Flush( oRender[ "md" ] )
+         // md already flushed above
       ELSE
          // Grok6: active green bar + diamond "♦ Read …"
          AGREPL_Out( Chr(10) + AGUI_GrokActActive( ;
@@ -2756,17 +2836,17 @@ STATIC FUNCTION AGREPL_RenderEv( hEv, oRender )
          IF Lower( hb_CStr( hEv[ "name" ] ) ) == "shell" .OR. ;
             Lower( hb_CStr( hEv[ "name" ] ) ) == "write"
             AGREPL_Out( AGUI_ToolContentBlock( hEv[ "arguments" ], ;
-               AGMD_Flush( oRender[ "md" ] ), AGREPL_Cols() ) )
-         ELSE
-            AGMD_Flush( oRender[ "md" ] )
+               "", AGREPL_Cols() ) )
          ENDIF
       ENDIF
       oRender[ "pendingText" ] := ""
+      oRender[ "replyHold" ] := ""
       oRender[ "inText" ] := .F.
       oRender[ "toolCount" ] := hb_HGetDef( oRender, "toolCount", 0 ) + 1
 
    CASE cType == "tool_result"
-      AGREPL_FlushPending( oRender )
+      AGREPL_FlushPending( oRender, .T. )
+      oRender[ "replyHold" ] := ""
       oRender[ "inText" ] := .F.
       cId := hb_CStr( hb_HGetDef( hEv, "id", "" ) )
       // Grok6: "♦ Read 1 file" or full coloured diff for edit/write
@@ -2806,9 +2886,11 @@ STATIC FUNCTION AGREPL_LastUserMsg( aMsgs )
    NEXT
    RETURN 0
 
-// OpenCode status line (opencode1.jpg): amber "Thinking" / "Working" + elapsed.
+// Amber status line: spinner + "Thinking" + elapsed. (No "Working" label —
+// it flashed for a moment before the first model event and looked redundant.)
 STATIC FUNCTION AGREPL_WaitLine( oRender, cPhase )
-   LOCAL nMs, nSec, cSec, cLeft, cRight, nCols, nPad, cSpin, nFrame
+   LOCAL nMs, nSec, cSec, cSpin, nFrame
+   HB_SYMBOL_UNUSED( cPhase )
    nMs := hb_MilliSeconds() - hb_HGetDef( oRender, "spinnerStartMs", hb_MilliSeconds() )
    IF nMs < 0
       nMs := 0
@@ -2820,24 +2902,13 @@ STATIC FUNCTION AGREPL_WaitLine( oRender, cPhase )
       nFrame := 1
    ENDIF
    cSpin := s_aSpinnerFrames[ nFrame ]
-   // Always show elapsed so long Ollama reasoning does not look frozen.
-   IF cPhase == "think"
-      cLeft := cSpin + " Thinking"
-      RETURN AGUI_Color( cLeft, AGUI_Pal( "amber" ) ) + ;
-             AGUI_Color( "  " + cSec, AGUI_Pal( "dim" ) )
-   ENDIF
-   cLeft  := cSpin + " Working"
-   cRight := "esc interrupt"
-   nCols  := AGREPL_Cols()
-   nPad   := nCols - 1 - Len( cLeft ) - Len( cRight ) - Len( cSec ) - 2
-   IF nPad < 2
-      nPad := 2
-   ENDIF
-   RETURN AGUI_Color( cLeft, AGUI_Pal( "amber" ) ) + Space( nPad ) + ;
-          AGUI_Color( cSec + "  " + cRight, AGUI_Pal( "dim" ) )
+   RETURN AGUI_Color( cSpin + " Thinking", AGUI_Pal( "amber" ) ) + ;
+          AGUI_Color( "  " + cSec, AGUI_Pal( "dim" ) )
 
-// Phase 1 — waiting indicator. Leading LF parks it on its own row; no
-// trailing LF so WaitTick can overwrite in place with elapsed time.
+// Phase 1 — waiting indicator on ONE physical row. Leading LF only the
+// first time; later WaitShow/WaitTick/phase changes REPAINT that same
+// row (absolute CUP). A second WaitShow used to emit another LF and left
+// "Thinking 0.0s" + "Thinking 4.9s" stacked.
 // cPhase: "wait" (default) or "think".
 STATIC FUNCTION AGREPL_WaitShow( oRender, cPhase )
    LOCAL nRow
@@ -2845,30 +2916,65 @@ STATIC FUNCTION AGREPL_WaitShow( oRender, cPhase )
       RETURN NIL
    ENDIF
    IF ValType( cPhase ) != "C" .OR. Empty( cPhase )
-      cPhase := "wait"
+      cPhase := "think"
    ENDIF
    IF oRender[ "spinnerStartMs" ] == 0
       oRender[ "spinnerStartMs" ] := hb_MilliSeconds()
    ENDIF
+   oRender[ "waitPhase" ] := cPhase
+   // Already on screen: only switch phase / repaint — never a new LF.
+   IF hb_HGetDef( oRender, "waitShown", .F. )
+      AGREPL_WaitPaint( oRender )
+      RETURN NIL
+   ENDIF
    oRender[ "spinnerFrame" ] := 1
    oRender[ "waitShown" ] := .T.
-   oRender[ "waitPhase" ] := cPhase
-   // New row + status line (no trailing LF → stays on this row).
-   // The user line above prints WITHOUT a trailing LF, so this leading
-   // LF lands the status directly under it — no blank row between.
+   // New row + status (no trailing LF → cursor stays on this row).
+   // User line above has no trailing LF, so this LF sits right under it.
    AGREPL_Out( Chr(10) + AGREPL_WaitLine( oRender, cPhase ) )
-   // Record physical row for absolute spinner updates. After Out(),
-   // content_row points at (or just past) the wait line.
+   // Physical row for absolute ticks. Out advanced content_row by the
+   // leading LF; the text sits on that row (no trailing LF).
    IF s_oBoxPrompt != NIL
       nRow := hb_HGetDef( s_oBoxPrompt, "content_row", 0 )
-      // Wait line itself is content_row - 0 when no trailing LF left
-      // cursor on the written row; clamp to >= 1.
       IF nRow < 1
          nRow := 1
       ENDIF
       oRender[ "waitRow" ] := nRow
    ELSE
       oRender[ "waitRow" ] := 0
+   ENDIF
+   RETURN NIL
+
+// Paint the status line in place (absolute row or CR). Never advances
+// content_row and never emits LF — safe for WaitTick / phase switches.
+STATIC FUNCTION AGREPL_WaitPaint( oRender )
+   LOCAL cLine, nRow, cPaint, cPhase
+   IF oRender == NIL
+      RETURN NIL
+   ENDIF
+   cPhase := hb_HGetDef( oRender, "waitPhase", "wait" )
+   cLine  := AGREPL_WaitLine( oRender, cPhase )
+   nRow   := hb_HGetDef( oRender, "waitRow", 0 )
+   // Prefer absolute row so ESC[u] / box Redraw cannot open a 2nd status line.
+   IF nRow >= 1 .AND. AGUI_ColorOn()
+      cPaint := Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+                Chr( 27 ) + "[2K" + cLine
+      IF s_oBoxPrompt != NIL
+         cPaint += AGREPL_BoxCursorSeq()
+      ENDIF
+      FWrite( hb_GetStdOut(), cPaint )
+      // Keep the scroll-region output anchor on this row so a later
+      // WaitClear / AGREPL_Out(ESC[1G..) still hits the same line.
+      FWrite( hb_GetStdOut(), Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+              Chr( 27 ) + "[s" )
+      IF s_oBoxPrompt != NIL
+         FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
+      ENDIF
+   ELSE
+      FWrite( hb_GetStdOut(), Chr( 13 ) + Chr( 27 ) + "[K" + cLine )
+      IF s_oBoxPrompt != NIL
+         FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
+      ENDIF
    ENDIF
    RETURN NIL
 
@@ -2887,34 +2993,48 @@ FUNCTION AGREPL_StatusSuspend()
 // last content row after an out-of-band print.
 FUNCTION AGREPL_StatusResume()
    IF s_oActiveRender != NIL
+      // Force a fresh row under the new content (waitShown was cleared).
+      s_oActiveRender[ "waitShown" ] := .F.
+      s_oActiveRender[ "waitRow" ] := 0
       AGREPL_WaitShow( s_oActiveRender, ;
          hb_HGetDef( s_oActiveRender, "waitPhase", "wait" ) )
    ENDIF
    RETURN NIL
 
-// Erases the status row (Working/Thinking) and drops waitShown. Goes
-// through AGREPL_Out with the ESC[1G ESC[K spinner prefix: the output
-// anchor sits on the status row (the last row Out wrote — StatusSuspend
-// keeps that invariant for mid-turn prints), so the clear lands on the
-// right row AND the content-row/anchor bookkeeping the travelling box
-// relies on stays in sync. Raw absolute writes here desynced the box
-// wipe and erased freshly streamed content.
+// Erases the status row (Working/Thinking) and drops waitShown.
 STATIC FUNCTION AGREPL_WaitClear( oRender )
+   LOCAL nRow, cPaint
    IF oRender == NIL .OR. !hb_HGetDef( oRender, "waitShown", .F. )
       RETURN NIL
    ENDIF
-   IF AGUI_ColorOn()
+   nRow := hb_HGetDef( oRender, "waitRow", 0 )
+   IF nRow >= 1 .AND. AGUI_ColorOn()
+      cPaint := Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+                Chr( 27 ) + "[2K"
+      IF s_oBoxPrompt != NIL
+         cPaint += AGREPL_BoxCursorSeq()
+      ENDIF
+      FWrite( hb_GetStdOut(), cPaint )
+      // Park output anchor on the cleared row so the next Out reuses it
+      // (reasoning header) instead of opening a blank line under a ghost.
+      FWrite( hb_GetStdOut(), Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+              Chr( 27 ) + "[s" )
+      IF s_oBoxPrompt != NIL
+         FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
+      ENDIF
+   ELSEIF AGUI_ColorOn()
       AGREPL_Out( AGUI_VT( "1G" ) + AGUI_VT( "K" ) )
    ELSE
       AGREPL_Out( Chr(10) )
    ENDIF
    oRender[ "waitShown" ] := .F.
+   oRender[ "waitRow" ] := 0
    RETURN NIL
 
 // Advance spinner + elapsed while still waiting/thinking.
 // Called ~12x/s from the HTTP on_idle heartbeat.
 STATIC FUNCTION AGREPL_WaitTick( oRender )
-   LOCAL nFrame, cPhase, cLine, nRow, cPaint
+   LOCAL nFrame
    IF oRender == NIL .OR. !hb_HGetDef( oRender, "waitShown", .F. )
       RETURN NIL
    ENDIF
@@ -2923,25 +3043,7 @@ STATIC FUNCTION AGREPL_WaitTick( oRender )
       nFrame := 1
    ENDIF
    oRender[ "spinnerFrame" ] := nFrame
-   cPhase := hb_HGetDef( oRender, "waitPhase", "wait" )
-   cLine  := AGREPL_WaitLine( oRender, cPhase )
-   // Prefer absolute row (set in WaitShow) so box Redraw / ESC[u] desync
-   // cannot freeze the spinner on "0.0s".
-   nRow := hb_HGetDef( oRender, "waitRow", 0 )
-   IF nRow >= 1 .AND. AGUI_ColorOn()
-      cPaint := Chr( 27 ) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
-                Chr( 27 ) + "[2K" + cLine
-      IF s_oBoxPrompt != NIL
-         cPaint += AGREPL_BoxCursorSeq()
-      ENDIF
-      FWrite( hb_GetStdOut(), cPaint )
-   ELSE
-      // Fallback: CR overwrite on the current line
-      FWrite( hb_GetStdOut(), Chr( 13 ) + Chr( 27 ) + "[K" + cLine )
-      IF s_oBoxPrompt != NIL
-         FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
-      ENDIF
-   ENDIF
+   AGREPL_WaitPaint( oRender )
    RETURN NIL
 
 // Phase 2 — clear waiting, emit "> message" with HH:MM:SS on the right.
@@ -2993,25 +3095,29 @@ STATIC FUNCTION AGREPL_Clock12()
    cH := LTrim( Str( nH ) )
    RETURN cH + ":" + Right( "0" + LTrim( Str( nM ) ), 2 ) + " " + cAmpm
 
-// Left text + right text padded to nW visible columns (no ANSI in inputs).
+// Left text + right text padded to nW *visible* columns (UTF-8 / ANSI-aware
+// via AGUI_VisLen). Same nW for user prompt and assistant first line so
+// the clock ("10:48 AM") shares one right edge.
 // lAllowTrunc: .T. (default) may shorten the left side with "..." so the
 // clock still fits (user prompt lines). .F. never truncates left — if it
 // does not fit, omit the right side and return full left text.
 STATIC FUNCTION AGREPL_BarRow( cLeft, cRight, nW, lAllowTrunc )
-   LOCAL nPad, nVis
+   LOCAL nPad, nLeft, nRight, nMaxLeft, nDummy
    cLeft  := hb_CStr( cLeft )
    cRight := hb_CStr( cRight )
    IF lAllowTrunc == NIL
       lAllowTrunc := .T.
    ENDIF
-   nVis   := Len( cLeft ) + Len( cRight )
-   nPad   := nW - nVis
+   nLeft  := AGUI_VisLen( cLeft )
+   nRight := AGUI_VisLen( cRight )
+   nPad   := nW - nLeft - nRight
    IF nPad < 2
-      IF lAllowTrunc .AND. ;
-         Len( cLeft ) > nW - Len( cRight ) - 2 .AND. nW > Len( cRight ) + 5
-         // User bar only: keep the clock, clip the left.
-         cLeft := Left( cLeft, nW - Len( cRight ) - 5 ) + "..."
-         nPad := Max( 2, nW - Len( cLeft ) - Len( cRight ) )
+      nMaxLeft := nW - nRight - 2
+      IF lAllowTrunc .AND. nLeft > nMaxLeft .AND. nMaxLeft > 5
+         // User bar only: keep the clock, clip the left by visual cols.
+         cLeft := AGREPL_VisLeft( cLeft, nMaxLeft - 3, @nDummy ) + "..."
+         nLeft := AGUI_VisLen( cLeft )
+         nPad  := Max( 2, nW - nLeft - nRight )
       ELSE
          // Prefer full text over a truncated reply + clock.
          RETURN cLeft
@@ -3069,10 +3175,10 @@ STATIC FUNCTION AGREPL_ShowWorkedFor( nTurnMs )
    ELSE
       cDur := AGREPL_FmtDur( nTurnMs )
    ENDIF
-   // Grok-style closing line. The model chip is NOT repeated here: the
-   // input box right below always shows "□ Build · model", and printing
-   // it again in the transcript read as a duplicated/stuck row.
-   AGREPL_Out( Chr(10) + AGUI_Color( "Worked for " + cDur, AGUI_Pal( "dim" ) ) + ;
+   // Grok-style closing line. No leading LF: the tip (or reply) already
+   // ends with a newline — an extra LF left a blank row between them.
+   // Model chip is NOT printed here (input box shows "□ Build · model").
+   AGREPL_Out( AGUI_Color( "Worked for " + cDur, AGUI_Pal( "dim" ) ) + ;
                Chr(10) )
    RETURN NIL
 

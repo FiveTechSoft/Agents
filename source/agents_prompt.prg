@@ -47,13 +47,17 @@ FUNCTION AGPROMPT_New( hSize, nTopRow )
 
 // Computes the screen layout for a console of nRows x nCols. box_top sits
 // at max( nContentRow + 1, nTopRow + 1 ), clamped to nRows - BOX_ROWS + 1
-// (the absolute floor). scroll_bottom = box_top - 1. While box_top is
-// above the floor the box "follows" the content; once it hits the floor
-// the box is pinned to the bottom and the scroll region (scroll_top..
-// scroll_bottom) takes over scrolling on overflow. A console shorter
-// than AGPROMPT_MIN_ROWS is reported inactive (the caller falls back).
+// (the absolute floor). scroll_bottom is ALWAYS box_top - 1 so the model
+// chip / input / footer rows are outside the VT scroll region. (When
+// scroll_bottom was nFloor-1 while the box was still travelling, LF
+// scrolls inside the region dragged the "□ Build · model" row into the
+// transcript, and the next Redraw painted a second copy — user saw the
+// chip twice after "Worked for".)
+// While box_top is above the floor the box "follows" the content; once
+// it hits the floor it pins and scroll_top expands to 1 so the banner
+// can scroll away. A console shorter than AGPROMPT_MIN_ROWS is inactive.
 FUNCTION AGPROMPT_Region( nRows, nCols, nContentRow, nTopRow )
-   LOCAL nFloor, nBoxTop
+   LOCAL nFloor, nBoxTop, nScrollBot
    nTopRow := iif( ValType( nTopRow ) == "N" .AND. nTopRow >= 1, nTopRow, 1 )
    nFloor  := nRows - AGPROMPT_BOX_ROWS + 1
    // default nContentRow keeps the box pinned at its floor -- preserves
@@ -63,18 +67,17 @@ FUNCTION AGPROMPT_Region( nRows, nCols, nContentRow, nTopRow )
    nBoxTop := nContentRow + 1
    IF nBoxTop < nTopRow + 1  ; nBoxTop := nTopRow + 1  ; ENDIF
    IF nBoxTop > nFloor       ; nBoxTop := nFloor       ; ENDIF
-   // The scroll region is the FULL band between the pinned header and
-   // the floor while the box is still travelling -- output lands below
-   // the banner without touching it. Once the box pins to its floor the
-   // banner has done its job (the user has seen it) and the region
-   // expands UP to row 1 so further content scrolls the banner off the
-   // top edge. Without this expansion the banner sits frozen at the top
-   // forever, wasting screen rows even after the box is pinned.
+   nScrollBot := nBoxTop - 1
+   IF nScrollBot < nTopRow
+      nScrollBot := nTopRow
+   ENDIF
+   // Once pinned, open scroll_top to row 1 so the startup banner can
+   // scroll off; while travelling keep the banner band (nTopRow).
    RETURN { "rows"          => nRows, ;
             "cols"          => nCols, ;
             "active"        => ( nRows >= AGPROMPT_MIN_ROWS ), ;
             "scroll_top"    => iif( nBoxTop == nFloor, 1, nTopRow ), ;
-            "scroll_bottom" => nFloor - 1, ;
+            "scroll_bottom" => nScrollBot, ;
             "box_top"       => nBoxTop, ;
             "pinned"        => ( nBoxTop == nFloor ) }
 
@@ -258,7 +261,7 @@ FUNCTION AGPROMPT_Teardown( oPrompt )
 // ESC[s slot, owned by AGREPL_Out) is deliberately not touched here.
 FUNCTION AGPROMPT_Redraw( oPrompt )
    LOCAL hReg, hW, hSz, aBadges, nTopRow, nContentRow, nOldBoxTop, i, cWipe
-   LOCAL nWriteStart, nWriteEnd, nWipeEnd, lTrailingLF, hProg
+   LOCAL nWipeEnd, hProg
    hSz := AGCON_Size()
    nTopRow     := hb_HGetDef( oPrompt, "scroll_top",  1 )
    nContentRow := hb_HGetDef( oPrompt, "content_row", nTopRow )
@@ -270,28 +273,17 @@ FUNCTION AGPROMPT_Redraw( oPrompt )
       RETURN oPrompt
    ENDIF
    hW := AGIN_Window( oPrompt[ "editor" ], AGUI_InputInnerWidth() )
-   // When the box has moved DOWN since the last paint (dynamic mode),
-   // wipe every row that was OLD box frame and is NOT (a) about to be
-   // overwritten by the new box paint and (b) NOT a row that just
-   // received content from the last AGREPL_Out write. Rule of thumb:
-   //   wipe = [ oldBoxTop .. min(oldBoxTop+3, newBoxTop-1) ]
-   //          minus the just-written rows.
-   // The just-written rows are [ write_start .. content_row ] for chunks
-   // that do NOT end in LF (cursor lands on the last written text row),
-   // and [ write_start .. content_row - 1 ] for chunks that DO end in LF
-   // (the final CRLF advances cursor onto a blank row). Skipping that
-   // single trailing row is what lets the wipe catch a stale old-box top
-   // frame when multiple LF-bearing writes pile up between paints.
+   // When the box has moved DOWN, always wipe the old box frame rows
+   // (model chip + input + footer) that now sit above the new box.
+   // Never skip the old model-chip row: protecting "just written" rows
+   // used to leave a ghost "□ Build · model" in the transcript while a
+   // fresh chip was painted at the new box_top.
    IF nOldBoxTop > 0 .AND. nOldBoxTop < hReg[ "box_top" ]
-      nWriteStart := hb_HGetDef( oPrompt, "last_write_start", nContentRow )
-      lTrailingLF := hb_HGetDef( oPrompt, "last_write_trailing_lf", .T. )
-      nWriteEnd   := iif( lTrailingLF, nContentRow - 1, nContentRow )
-      nWipeEnd    := Min( nOldBoxTop + 3, hReg[ "box_top" ] - 1 )
+      nWipeEnd := Min( nOldBoxTop + AGPROMPT_BOX_ROWS - 1, ;
+                       hReg[ "box_top" ] - 1 )
       cWipe := ""
       FOR i := nOldBoxTop TO nWipeEnd
-         IF i < nWriteStart .OR. i > nWriteEnd
-            cWipe += Chr(27) + "[" + LTrim( Str( i ) ) + ";1H" + Chr(27) + "[2K"
-         ENDIF
+         cWipe += Chr(27) + "[" + LTrim( Str( i ) ) + ";1H" + Chr(27) + "[2K"
       NEXT
       IF !Empty( cWipe )
          AGPROMPT_Raw( cWipe )

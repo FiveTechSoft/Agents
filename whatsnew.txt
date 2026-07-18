@@ -1,6 +1,19 @@
 Agents ? What's new
 ===================
 
+v2.4.9 (2026-07-18)
+-------------------
+* FIX reply clock: align with user prompt (UTF-8 visual width); clock only
+  on the last line; hold last line instead of cursor-up restamp (that
+  duplicated the "□ Build · model" chip).
+* FIX stacked status rows: single Thinking line that repaints in place;
+  no "Working" flash before Thinking.
+* FIX blank gap between Tip and "Worked for"; fewer empty rows after
+  Thought for when the model sends only whitespace.
+* FIX scroll region: box rows stay outside VT scroll so Build chip is not
+  scrolled into the transcript.
+* Footer: "> Esc interrupt" instead of dotted "esc interrupt".
+
 v2.4.8 (2026-07-18)
 -------------------
 * FIX curl exit 23 false error: treat CURLE_WRITE_ERROR as benign when the
