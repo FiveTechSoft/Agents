@@ -42,6 +42,7 @@ FUNCTION AGHTTP_CurlPost( hReq, bOnChunk )
    LOCAL nExit := -1, nStatus := 0, cErr := "", cBody, cBuf
    LOCAL bIdle, nStart, nLastIdle := 0, nNow, nAvail, nRead
    LOCAL nLimit, lDone := .F., nLastByte := 0, nTotal := 0
+   LOCAL lKilled := .F., lOk := .F., lTimedOut := .F.
 
    nTimeout := iif( hb_HHasKey( hReq, "timeout" ) .AND. ;
                     ValType( hReq[ "timeout" ] ) == "N", hReq[ "timeout" ], 120 )
@@ -79,7 +80,9 @@ FUNCTION AGHTTP_CurlPost( hReq, bOnChunk )
       nNow := hb_MilliSeconds()
       IF ( nNow - nStart ) > nLimit
          cErr := "timeout"
+         lTimedOut := .T.
          AGHTTP_KillProc( hProc )
+         lKilled := .T.
          lDone := .T.
          LOOP
       ENDIF
@@ -99,9 +102,22 @@ FUNCTION AGHTTP_CurlPost( hReq, bOnChunk )
             lDone := .T.
          ENDIF
       ELSEIF nTotal > 0 .AND. nLastByte > 0 .AND. ;
-             ( nNow - nLastByte ) >= 2500
-         // 2.5s of silence after we already got bytes: stream is done.
-         // (GetExitCodeProcess is unreliable on some Harbour process handles.)
+             ( nNow - nLastByte ) >= 4000
+         // 4s silence after bytes: stream finished (or keep-alive hang).
+         // Kill curl *before* closing the pipe so we don't get a noisy
+         // CURLE_WRITE_ERROR (exit 23) from a broken pipe.
+         // GetExitCodeProcess is unreliable on some Harbour process handles.
+         IF AGHTTP_ProcRunning( hProc )
+            AGHTTP_KillProc( hProc )
+            lKilled := .T.
+         ENDIF
+         DO WHILE ( nRead := FRead( hOut, @cBuf, hb_BLen( cBuf ) ) ) > 0
+            nTotal += nRead
+            nLastByte := nNow
+            IF bOnChunk != NIL
+               Eval( bOnChunk, hb_BLeft( cBuf, nRead ) )
+            ENDIF
+         ENDDO
          lDone := .T.
       ELSEIF !AGHTTP_ProcRunning( hProc )
          // curl exited. Drain whatever remains (writer is dead — safe).
@@ -128,7 +144,10 @@ FUNCTION AGHTTP_CurlPost( hReq, bOnChunk )
       IF nAvail > 0
          nRead := FRead( hErr, @cBuf, Min( nAvail, hb_BLen( cBuf ) ) )
          IF nRead > 0
-            cErr += hb_BLeft( cBuf, nRead )
+            // Prefer structured timeout flag over raw stderr noise.
+            IF !lTimedOut
+               cErr += hb_BLeft( cBuf, nRead )
+            ENDIF
          ENDIF
       ENDIF
       FClose( hOut )
@@ -147,14 +166,45 @@ FUNCTION AGHTTP_CurlPost( hReq, bOnChunk )
    IF !Empty( cHdrFile )  ; FErase( cHdrFile )  ; ENDIF
    IF !Empty( cBodyFile ) ; FErase( cBodyFile ) ; ENDIF
 
-   IF Empty( cErr ) .AND. nExit != 0
+   // Classify exit. curl 23 = CURLE_WRITE_ERROR (broken pipe to our reader).
+   // After a successful stream we often close/kill first → 23 is benign.
+   // TerminateProcess after silence end → exit 1; also benign if we got body.
+   lOk := AGHTTP_CurlOk( nExit, nTotal, lKilled, lTimedOut )
+   IF lTimedOut
+      cErr := "timeout"
+   ELSEIF lOk
+      cErr := ""
+   ELSEIF Empty( cErr )
       cErr := "curl exit " + LTrim( Str( nExit ) )
    ENDIF
 
-   RETURN { "ok" => ( nExit == 0 ), ;
+   RETURN { "ok" => lOk, ;
             "status" => nStatus, ;
             "curl_code" => nExit, ;
-            "error" => iif( nExit == 0, "", AllTrim( cErr ) ) }
+            "error" => iif( lOk, "", AllTrim( cErr ) ) }
+
+// True when curl's non-zero exit should not fail the request.
+// nExit 23: write/pipe error after we already drained response bytes.
+// lKilled + body: we terminated curl after intentional stream end (silence).
+STATIC FUNCTION AGHTTP_CurlOk( nExit, nTotal, lKilled, lTimedOut )
+   IF lTimedOut
+      RETURN .F.
+   ENDIF
+   IF nExit == 0
+      RETURN .T.
+   ENDIF
+   IF nTotal <= 0
+      RETURN .F.
+   ENDIF
+   // CURLE_WRITE_ERROR — pipe closed while curl still flushing.
+   IF nExit == 23
+      RETURN .T.
+   ENDIF
+   // We killed curl after receiving a body (silence end / shutdown).
+   IF lKilled
+      RETURN .T.
+   ENDIF
+   RETURN .F.
 
 // Bytes waiting on the pipe (0 = none). Never blocks.
 STATIC FUNCTION AGHTTP_PipeAvail( hPipe )
@@ -303,9 +353,12 @@ STATIC FUNCTION AGHTTP_CurlFetch( hReq )
    IF !Empty( cHdrFile )  ; FErase( cHdrFile )  ; ENDIF
    IF !Empty( cBodyFile ) ; FErase( cBodyFile ) ; ENDIF
 
-   RETURN { "ok" => ( nExit == 0 ), "status" => nStatus, "body" => cBody, ;
-            "error" => iif( nExit == 0, "", ;
-               iif( Empty( cErr ), "curl exit " + LTrim( Str( nExit ) ), AllTrim( cErr ) ) ) }
+   // Same benign write-error rule as streaming POST (exit 23 + body).
+   IF nExit == 0 .OR. ( nExit == 23 .AND. !Empty( cBody ) )
+      RETURN { "ok" => .T., "status" => nStatus, "body" => cBody, "error" => "" }
+   ENDIF
+   RETURN { "ok" => .F., "status" => nStatus, "body" => cBody, ;
+            "error" => iif( Empty( cErr ), "curl exit " + LTrim( Str( nExit ) ), AllTrim( cErr ) ) }
 
 STATIC FUNCTION AGHTTP_ParseStatus( cHdrFile )
    LOCAL cText, cLine, nStatus := 0, aTok

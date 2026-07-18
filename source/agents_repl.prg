@@ -2481,15 +2481,86 @@ STATIC FUNCTION AGREPL_FlushPending( oRender, lTrimTail )
          oRender[ "blankRun" ] := oRender[ "blankRun" ] - 1
       ENDDO
       IF !hb_HGetDef( oRender, "blockClockDone", .T. )
-         cRow := AGREPL_BarRow( aLines[ i ], cClock, nW )
-         AGREPL_Out( AGUI_Color( cRow, "97" ) + Chr(10) )
+         // First line of the reply: clock on the right of the first visual
+         // row; overflow continues on the next lines (never truncated).
+         AGREPL_PrintReplyFirst( aLines[ i ], cClock, nW )
          oRender[ "blockClockDone" ] := .T.
       ELSE
-         AGREPL_Out( AGUI_Color( aLines[ i ], "97" ) + Chr(10) )
+         AGREPL_PrintReplyWrapped( aLines[ i ], nW )
       ENDIF
    NEXT
    oRender[ "pendingText" ] := ""
    RETURN NIL
+
+// First reply row: left text + clock; overflow continues on next rows
+// at full width (never truncated with "...").
+STATIC FUNCTION AGREPL_PrintReplyFirst( cText, cClock, nW )
+   LOCAL nFirstW, cFirst, cRest, cChunk, nSpace
+   cText  := AllTrim( StrTran( hb_CStr( cText ), Chr(13), "" ) )
+   cClock := hb_CStr( cClock )
+   IF Empty( cText )
+      RETURN NIL
+   ENDIF
+   // Reserve columns on row 1 for "  10:34 AM".
+   nFirstW := Max( 20, nW - Len( cClock ) - 2 )
+   IF Len( cText ) <= nFirstW
+      AGREPL_Out( AGUI_Color( AGREPL_BarRow( cText, cClock, nW, .F. ), ;
+                              "97" ) + Chr(10) )
+      RETURN NIL
+   ENDIF
+   cChunk := Left( cText, nFirstW )
+   nSpace := hb_RAt( " ", cChunk )
+   IF nSpace >= Max( 12, Int( nFirstW * 0.35 ) )
+      cFirst := Left( cText, nSpace - 1 )
+      cRest  := LTrim( SubStr( cText, nSpace + 1 ) )
+   ELSE
+      cFirst := Left( cText, nFirstW )
+      cRest  := LTrim( SubStr( cText, nFirstW + 1 ) )
+   ENDIF
+   AGREPL_Out( AGUI_Color( AGREPL_BarRow( cFirst, cClock, nW, .F. ), ;
+                           "97" ) + Chr(10) )
+   IF !Empty( cRest )
+      AGREPL_PrintReplyWrapped( cRest, nW )
+   ENDIF
+   RETURN NIL
+
+// Word-wrap one logical line to nW and print each visual row.
+STATIC FUNCTION AGREPL_PrintReplyWrapped( cText, nW )
+   LOCAL aParts, j
+   aParts := AGREPL_WrapWords( hb_CStr( cText ), nW )
+   FOR j := 1 TO Len( aParts )
+      AGREPL_Out( AGUI_Color( aParts[ j ], "97" ) + Chr(10) )
+   NEXT
+   RETURN NIL
+
+// Split cText into word-wrapped segments of at most nWrap columns.
+// Prefers breaks at spaces; hard-splits only when a single word is longer.
+STATIC FUNCTION AGREPL_WrapWords( cText, nWrap )
+   LOCAL aOut := {}, cChunk, nSpace, nTake
+   cText := AllTrim( StrTran( hb_CStr( cText ), Chr(13), "" ) )
+   IF nWrap < 20
+      nWrap := 20
+   ENDIF
+   IF Empty( cText )
+      RETURN aOut
+   ENDIF
+   DO WHILE Len( cText ) > 0
+      IF Len( cText ) <= nWrap
+         AAdd( aOut, cText )
+         EXIT
+      ENDIF
+      cChunk := Left( cText, nWrap )
+      nSpace := hb_RAt( " ", cChunk )
+      IF nSpace >= Max( 12, Int( nWrap * 0.35 ) )
+         nTake := nSpace - 1
+         AAdd( aOut, Left( cText, nTake ) )
+         cText := LTrim( SubStr( cText, nTake + 1 ) )
+      ELSE
+         AAdd( aOut, Left( cText, nWrap ) )
+         cText := LTrim( SubStr( cText, nWrap + 1 ) )
+      ENDIF
+   ENDDO
+   RETURN aOut
 
 // Counts the visual rows a chunk would consume when written at col 1 of
 // an nCols-wide terminal: every LF adds a row, ANSI CSI sequences are
@@ -2923,18 +2994,28 @@ STATIC FUNCTION AGREPL_Clock12()
    RETURN cH + ":" + Right( "0" + LTrim( Str( nM ) ), 2 ) + " " + cAmpm
 
 // Left text + right text padded to nW visible columns (no ANSI in inputs).
-STATIC FUNCTION AGREPL_BarRow( cLeft, cRight, nW )
+// lAllowTrunc: .T. (default) may shorten the left side with "..." so the
+// clock still fits (user prompt lines). .F. never truncates left — if it
+// does not fit, omit the right side and return full left text.
+STATIC FUNCTION AGREPL_BarRow( cLeft, cRight, nW, lAllowTrunc )
    LOCAL nPad, nVis
    cLeft  := hb_CStr( cLeft )
    cRight := hb_CStr( cRight )
+   IF lAllowTrunc == NIL
+      lAllowTrunc := .T.
+   ENDIF
    nVis   := Len( cLeft ) + Len( cRight )
    nPad   := nW - nVis
    IF nPad < 2
-      // Truncate left so the clock still fits
-      IF Len( cLeft ) > nW - Len( cRight ) - 2 .AND. nW > Len( cRight ) + 5
+      IF lAllowTrunc .AND. ;
+         Len( cLeft ) > nW - Len( cRight ) - 2 .AND. nW > Len( cRight ) + 5
+         // User bar only: keep the clock, clip the left.
          cLeft := Left( cLeft, nW - Len( cRight ) - 5 ) + "..."
+         nPad := Max( 2, nW - Len( cLeft ) - Len( cRight ) )
+      ELSE
+         // Prefer full text over a truncated reply + clock.
+         RETURN cLeft
       ENDIF
-      nPad := Max( 2, nW - Len( cLeft ) - Len( cRight ) )
    ENDIF
    RETURN cLeft + Space( nPad ) + cRight
 
@@ -3021,10 +3102,10 @@ STATIC FUNCTION AGREPL_FlushReasoningTail( oRender )
    LOCAL cPrefix
    IF !Empty( cTail )
       IF !oRender[ "thinkCornerUsed" ]
-         cPrefix := "  " + Chr( 226 ) + Chr( 142 ) + Chr( 191 ) + "  "
+         cPrefix := AGREPL_ThinkCornerPrefix( .T. )
          oRender[ "thinkCornerUsed" ] := .T.
       ELSE
-         cPrefix := "     "
+         cPrefix := AGREPL_ThinkCornerPrefix( .F. )
       ENDIF
       AGREPL_Out( AGREPL_ThinkLine( cPrefix + cTail ) + Chr(10) )
    ENDIF
@@ -3173,11 +3254,28 @@ STATIC FUNCTION AGREPL_FinishReasoning( oRender )
    oRender[ "reasoningLines" ] := 0
    RETURN NIL
 
+// Prefix for reasoning body lines under the "X Thinking" header.
+//
+// Header is printed without a card:  spinner + " " + "Thinking"
+//   col1=spinner, col2=space, col3=T …
+// Think lines go through AGUI_CardLine, which already injects 2 cols of
+// left padding when colour is on. The ⎿ (U+23BF) must land on col 3 so
+// it lines up under the "T", not under the "i" (the old "  ⎿  " prefix
+// stacked on the card pad and shifted the glyph two columns right).
+STATIC FUNCTION AGREPL_ThinkCornerPrefix( lFirst )
+   LOCAL cGlyph := Chr( 226 ) + Chr( 142 ) + Chr( 191 )   // ⎿
+   LOCAL nPad := iif( AGUI_ColorOn(), 0, 2 )
+   IF lFirst
+      RETURN Space( nPad ) + cGlyph + " "   // "⎿ The user" (one space)
+   ENDIF
+   // Same width as glyph + one space after it (text column alignment).
+   RETURN Space( nPad + 2 )
+
 // Prints a single reasoning line, word-wrapped to nWrap chars per visual
-// line. Each visual line gets the "  ⎿  " dimmed prefix.
+// line. First line: ⎿ under the "T" of Thinking; wraps use matching indent.
 STATIC FUNCTION AGREPL_ThinkPrintWrapped( cText, nWrap, oRender )
-   LOCAL cPFirst := "  " + Chr( 226 ) + Chr( 142 ) + Chr( 191 ) + "  "
-   LOCAL cPCont  := "     "   // 5 spaces to align with text after first prefix
+   LOCAL cPFirst := AGREPL_ThinkCornerPrefix( .T. )
+   LOCAL cPCont  := AGREPL_ThinkCornerPrefix( .F. )
    LOCAL cPrefix, cLine, nLen, nSpace
    IF nWrap < 20 ; nWrap := 20 ; ENDIF
    IF Empty( cText )
@@ -3303,7 +3401,7 @@ STATIC FUNCTION AGREPL_Demo( oReg, oPrompt, cModel, aMsgs )
       AGPROMPT_ForcePin( oPrompt )
    ENDIF
 
-   cCorner := "  " + Chr(226)+Chr(142)+Chr(191) + "  "
+   cCorner := AGREPL_ThinkCornerPrefix( .T. )
    cCheck  := Chr(226)+Chr(156)+Chr(147)
    cDot    := Chr(226)+Chr(151)+Chr(143)
 

@@ -1,6 +1,17 @@
 Agents ? What's new
 ===================
 
+v2.4.8 (2026-07-18)
+-------------------
+* FIX curl exit 23 false error: treat CURLE_WRITE_ERROR as benign when the
+  stream body was already received; kill curl before closing the pipe on
+  intentional silence end so broken-pipe noise is avoided.
+* FIX thinking body alignment: ⎿ under the "T" of Thinking (card pad was
+  shifting it under the "i"); single space after the corner glyph.
+* FIX assistant reply truncation: long first lines no longer end in
+  "...  10:34 AM" — text word-wraps to the next line with the clock on the
+  first visual row when it fits.
+
 v2.4.7 (2026-07-17)
 -------------------
 * FIX space bar dropped while typing: the box editor guarded the insert
