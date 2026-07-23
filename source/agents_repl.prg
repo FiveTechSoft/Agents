@@ -821,7 +821,7 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
       IF cMode == "ollama" .AND. Empty( hb_HGetDef( hSet, "api_key", "" ) )
          hSet[ "api_key" ] := "ollama"
       ENDIF
-      // OpenCode Zen needs no API key — clear any leftover cloud key
+      // OpenCode Zen needs no API key ï¿½ clear any leftover cloud key
       // so AGCFG_Resolve picks up the synthetic "public" key.
       IF cMode == "opencode"
          IF hb_HHasKey( hSet, "api_key" )
@@ -877,6 +877,8 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
       AGSETTINGS_Save( hSet )
       AGREPL_Out( AGUI_Color( "[api key wiped from settings.json]", ;
                               AGUI_Pal( "dim" ) ) + Chr(10) )
+   CASE cMode == "list"
+      AGREPL_ProviderList( cRest, hPresets, hSet )
    OTHERWISE
       AGREPL_Out( AGUI_Color( "Unknown /provider sub-command. Type " + ;
          "/provider for the list.", AGUI_Pal( "error" ) ) + Chr(10) )
@@ -887,7 +889,7 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
    ENDIF
    RETURN iif( Empty( hUpd ), NIL, hUpd )
 
-// Implements /provider list — fetches available models from the active
+// Implements /provider list ï¿½ fetches available models from the active
 // provider's /models endpoint and displays them. Works for OpenCode Zen,
 // Ollama (local), and any OpenAI-compatible backend.
 STATIC FUNCTION AGREPL_ProviderList( cArg, hPresets, hSet )
@@ -2269,8 +2271,6 @@ STATIC FUNCTION AGREPL_PlanCard()
       CASE hStep[ "state" ] == "active"
          cRow := AGUI_Color( Chr(226)+Chr(151)+Chr(143), "94" ) + " " + ;
                  AGUI_Color( LTrim( Str( i ) ) + ". " + hStep[ "title" ], "1;94" )
-      CASE cMode == "list"
-       AGREPL_ProviderList( cRest, hPresets, hSet )
     OTHERWISE
          cRow := AGUI_Color( Chr(226)+Chr(151)+Chr(139), "90" ) + " " + ;
                  AGUI_Color( LTrim( Str( i ) ) + ". " + hStep[ "title" ], "90" )
@@ -2921,8 +2921,6 @@ FUNCTION AGREPL_VisualRows( cText, nCols )
       CASE c == Chr(13)
          nCol := 1
          i++
-      CASE cMode == "list"
-       AGREPL_ProviderList( cRest, hPresets, hSet )
     OTHERWISE
          nCol++
          IF nCol > nCols
