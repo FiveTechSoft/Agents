@@ -2521,7 +2521,7 @@ STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
             oEd[ "cursor" ] := hb_UTF8Len( cHist )
          ENDIF
       CASE nKey == -15 .OR. nKey == -16
-         // Wheel over box → history; over transcript → scroll region.
+         // Wheel -> always scroll the transcript.
          AGPROMPT_HandleWheel( oPrompt, nKey )
          LOOP
       CASE nKey == -17 .OR. nKey == -18

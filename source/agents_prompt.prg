@@ -371,39 +371,18 @@ FUNCTION AGPROMPT_ScrollTranscript( oPrompt, nDir, nLines )
    ENDIF
    RETURN NIL
 
-// Mouse wheel: over the sticky box → rotate prompt history; over the
-// transcript area (rows above box_top) → scroll that region up/down.
+
+// Mouse wheel: always scroll the transcript region, whether the cursor is
+// over the prompt box or the content area. History cycling is available
+// via Up/Down arrow keys instead.
 // nKey: -15 wheel forward/up, -16 wheel backward/down.
 FUNCTION AGPROMPT_HandleWheel( oPrompt, nKey )
-   LOCAL nRow, nBox, oEd, cHist
    IF oPrompt == NIL
-      RETURN NIL
-   ENDIF
-   nRow := AGCON_MouseRow()
-   nBox := 0
-   IF hb_HHasKey( oPrompt, "region" ) .AND. ValType( oPrompt[ "region" ] ) == "H"
-      nBox := hb_HGetDef( oPrompt[ "region" ], "box_top", 0 )
-   ENDIF
-   // Unknown row or cursor over the input box (and footer): history.
-   IF nRow < 0 .OR. nBox <= 0 .OR. nRow >= nBox - 1
-      oEd := oPrompt[ "editor" ]
-      IF ValType( oEd ) != "H"
-         RETURN NIL
-      ENDIF
-      IF nKey == -15
-         cHist := AGIN_HistoryPrev( oEd[ "buf" ] )
-      ELSE
-         cHist := AGIN_HistoryNext( oEd[ "buf" ] )
-      ENDIF
-      IF cHist != NIL
-         oEd[ "buf" ] := cHist
-         oEd[ "cursor" ] := hb_UTF8Len( cHist )
-         AGPROMPT_Redraw( oPrompt )
-      ENDIF
       RETURN NIL
    ENDIF
    AGPROMPT_ScrollTranscript( oPrompt, iif( nKey == -15, -1, 1 ), 3 )
    RETURN NIL
+
 
 // Keyboard scroll of the transcript (always content, never history).
 // nKey: -17 PgUp/Ctrl+Up, -18 PgDn/Ctrl+Down.
@@ -556,7 +535,7 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             oEd[ "cursor" ] := hb_UTF8Len( cHist )
          ENDIF
       CASE nKey == -15 .OR. nKey == -16       // Mouse wheel
-         // Over the prompt box → history; over the transcript → scroll.
+         // Mouse wheel -> always scroll the transcript.
          AGPROMPT_HandleWheel( oPrompt, nKey )
       CASE nKey == -17 .OR. nKey == -18       // PgUp/PgDn / Ctrl+Up/Down
          AGPROMPT_HandleScrollKey( oPrompt, nKey )
