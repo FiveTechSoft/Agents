@@ -780,7 +780,10 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
                       "env"      => "OPENAI_API_KEY" }, ;
       "ollama"   => { "base_url" => AGCFG_OllamaBaseUrl(), ;
                       "model"    => AGCFG_OllamaDefaultModel(), ;
-                      "env"      => "" } }
+                      "env"      => "" }, ;
+      "opencode" => { "base_url" => "https://opencode.ai/zen/v1", ;
+                      "model"    => "mimo-v2.5-free", ;
+                      "env"      => "OPENCODE_API_KEY" } }
    DO CASE
    CASE Empty( cMode )
       AGREPL_Out( AGUI_Color( "Current provider:", "1" ) + Chr(10) )
@@ -796,7 +799,9 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
          "  /provider moonshot   -> api.moonshot.cn     / kimi-k2" + Chr(10) + ;
          "  /provider openai     -> api.openai.com      / gpt-5" + Chr(10) + ;
          "  /provider ollama     -> localhost:11434/v1  / llama3.1:8b" + Chr(10) + ;
+         "  /provider opencode   -> opencode.ai/zen/v1  / mimo-v2.5-free" + Chr(10) + ;
          Chr(10) + ;
+         "  /provider list [name]    -- list available models" + Chr(10) + ;
          "  /provider key <secret>   -- save the API key in settings.json" + Chr(10) + ;
          "  /provider model <name>   -- switch the model only" + Chr(10) + ;
          "  /provider clear          -- wipe the stored API key", "90" ) + Chr(10) )
@@ -816,6 +821,13 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
       IF cMode == "ollama" .AND. Empty( hb_HGetDef( hSet, "api_key", "" ) )
          hSet[ "api_key" ] := "ollama"
       ENDIF
+      // OpenCode Zen needs no API key — clear any leftover cloud key
+      // so AGCFG_Resolve picks up the synthetic "public" key.
+      IF cMode == "opencode"
+         IF hb_HHasKey( hSet, "api_key" )
+            hb_HDel( hSet, "api_key" )
+         ENDIF
+      ENDIF
       AGSETTINGS_Save( hSet )
       hUpd[ "model" ] := hSet[ "model" ]
       hUpd[ "rebuild_client" ] := .T.
@@ -830,7 +842,7 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
                  "qwen2.5-coder emits bare JSON in content and is NOT " + ;
                  "compatible with the agent loop. Default ollama ctx 4096 " + ;
                  "is too small for the agent prompt + tool schemas."
-      ELSEIF Empty( AGCFG_Resolve( {=>} )[ "api_key" ] )
+      ELSEIF cMode != "opencode" .AND. Empty( AGCFG_Resolve( {=>} )[ "api_key" ] )
          cMsg += " -- now set the key with /provider key <secret> or " + ;
                  "export " + hPresets[ cMode ][ "env" ]
       ENDIF
@@ -874,6 +886,160 @@ STATIC FUNCTION AGREPL_HandleProvider( cArg, oPrompt )
       AGPROMPT_Redraw( oPrompt )
    ENDIF
    RETURN iif( Empty( hUpd ), NIL, hUpd )
+
+// Implements /provider list — fetches available models from the active
+// provider's /models endpoint and displays them. Works for OpenCode Zen,
+// Ollama (local), and any OpenAI-compatible backend.
+STATIC FUNCTION AGREPL_ProviderList( cArg, hPresets, hSet )
+   LOCAL cProvider, hInfo, cUrl, cKey, hRes, xJson, aModels, hMod
+   LOCAL cModel, cCur, aFree := {}, aPaid := {}
+
+   cProvider := Lower( AllTrim( hb_CStr( cArg ) ) )
+   cCur := Lower( hb_CStr( hSet[ "model" ] ) )
+
+   // Determine which provider to query
+   IF Empty( cProvider )
+      // Use current provider from settings
+      cUrl := hb_HGetDef( hSet, "base_url", "" )
+      // Derive provider name from base_url
+      IF "opencode.ai" $ Lower( cUrl )
+         cProvider := "opencode"
+      ELSEIF "11434" $ cUrl .OR. "ollama" $ Lower( cUrl )
+         cProvider := "ollama"
+      ELSEIF "deepseek" $ Lower( cUrl )
+         cProvider := "deepseek"
+      ELSEIF "bigmodel.cn" $ Lower( cUrl )
+         cProvider := "glm"
+      ELSEIF "moonshot" $ Lower( cUrl )
+         cProvider := "moonshot"
+      ELSEIF "openai" $ Lower( cUrl )
+         cProvider := "openai"
+      ELSE
+         AGREPL_Out( AGUI_Color( "Cannot determine provider from: " + cUrl, ;
+                    AGUI_Pal( "error" ) ) + Chr(10) )
+         RETURN NIL
+      ENDIF
+   ENDIF
+
+   // Resolve URL and key for the requested provider
+   IF hb_HHasKey( hPresets, cProvider )
+      hInfo := hPresets[ cProvider ]
+      cUrl  := hInfo[ "base_url" ]
+   ELSE
+      AGREPL_Out( AGUI_Color( "Unknown provider: " + cProvider + ". Available: " + ;
+                 "deepseek, glm, moonshot, openai, ollama, opencode", ;
+                 AGUI_Pal( "error" ) ) + Chr(10) )
+      RETURN NIL
+   ENDIF
+
+   // Build the /models URL
+   IF Right( cUrl, 1 ) == "/"
+      cUrl := Left( cUrl, Len( cUrl ) - 1 )
+   ENDIF
+
+   // Resolve API key for the request
+   IF cProvider == "opencode"
+      cKey := "public"
+   ELSEIF cProvider == "ollama"
+      cKey := "ollama"
+   ELSE
+      cKey := AGCFG_ResolveKey( hInfo[ "env" ], "api_key", hSet )
+      IF Empty( cKey )
+         AGREPL_Out( AGUI_Color( "No API key for " + cProvider + ". " + ;
+                    "Set with /provider key <secret> or export " + ;
+                    hInfo[ "env" ], AGUI_Pal( "warn" ) ) + Chr(10) )
+         RETURN NIL
+      ENDIF
+   ENDIF
+
+   AGREPL_Out( AGUI_Color( "Fetching models from " + cProvider + "...", ;
+              "90" ) + Chr(10) )
+
+   // Make the request
+   hRes := AGHTTP_Fetch( { ;
+      "url"     => cUrl + "/models", ;
+      "method"  => "GET", ;
+      "headers" => { "Authorization: Bearer " + cKey }, ;
+      "timeout" => 15 } )
+
+   IF ValType( hRes ) != "H" .OR. !hb_HGetDef( hRes, "ok", .F. )
+      AGREPL_Out( AGUI_Color( "Failed to fetch models: " + ;
+                 iif( ValType( hRes ) == "H", ;
+                      hb_HGetDef( hRes, "error", "unknown" ), "no response" ), ;
+                 AGUI_Pal( "error" ) ) + Chr(10) )
+      RETURN NIL
+   ENDIF
+
+   xJson := hb_jsonDecode( hb_HGetDef( hRes, "body", "" ) )
+   IF ValType( xJson ) != "H" .OR. !hb_HHasKey( xJson, "data" ) .OR. ;
+      ValType( xJson[ "data" ] ) != "A"
+      // Ollama returns a different format: { "models": [ { "name": ... } ] }
+      IF hb_HHasKey( xJson, "models" ) .AND. ValType( xJson[ "models" ] ) == "A"
+         aModels := xJson[ "models" ]
+         AGREPL_Out( AGUI_Color( "Models on " + cProvider + ":", "1" ) + Chr(10) )
+         FOR EACH hMod IN aModels
+            IF ValType( hMod ) == "H"
+               cModel := hb_HGetDef( hMod, "name", hb_HGetDef( hMod, "model", "?" ) )
+            ELSEIF ValType( hMod ) == "C"
+               cModel := hMod
+            ELSE
+               LOOP
+            ENDIF
+            AGREPL_Out( AGUI_Color( ;
+               iif( Lower( cModel ) == cCur, "  * ", "    " ) + cModel, ;
+               iif( Lower( cModel ) == cCur, "32", "90" ) ) + Chr(10) )
+         NEXT
+      ELSE
+         AGREPL_Out( AGUI_Color( "No models returned by " + cProvider, ;
+                    AGUI_Pal( "warn" ) ) + Chr(10) )
+      ENDIF
+      RETURN NIL
+   ENDIF
+
+   // OpenAI-compatible format: { "data": [ { "id": "model-name", ... } ] }
+   aModels := xJson[ "data" ]
+
+   // Classify into free and paid
+   FOR EACH hMod IN aModels
+      IF ValType( hMod ) == "H" .AND. hb_HHasKey( hMod, "id" )
+         cModel := hb_CStr( hMod[ "id" ] )
+         IF "-free" $ Lower( cModel ) .OR. ;
+            cProvider == "opencode"  // all OpenCode models are free
+            AAdd( aFree, cModel )
+         ELSE
+            AAdd( aPaid, cModel )
+         ENDIF
+      ENDIF
+   NEXT
+
+   ASort( aFree, , , {| x, y | Lower( x ) < Lower( y ) } )
+   ASort( aPaid, , , {| x, y | Lower( x ) < Lower( y ) } )
+
+   AGREPL_Out( AGUI_Color( "Models on " + cProvider + " (" + ;
+              LTrim( Str( Len( aFree ) + Len( aPaid ) ) ) + "):", ;
+              "1" ) + Chr(10) )
+
+   IF !Empty( aFree )
+      AGREPL_Out( AGUI_Color( "  Free:", "32" ) + Chr(10) )
+      FOR EACH cModel IN aFree
+         AGREPL_Out( AGUI_Color( ;
+            iif( Lower( cModel ) == cCur, "    * ", "      " ) + cModel, ;
+            iif( Lower( cModel ) == cCur, "32", "90" ) ) + Chr(10) )
+      NEXT
+   ENDIF
+
+   IF !Empty( aPaid )
+      AGREPL_Out( AGUI_Color( "  Paid:", "33" ) + Chr(10) )
+      FOR EACH cModel IN aPaid
+         AGREPL_Out( AGUI_Color( ;
+            iif( Lower( cModel ) == cCur, "    * ", "      " ) + cModel, ;
+            iif( Lower( cModel ) == cCur, "32", "90" ) ) + Chr(10) )
+      NEXT
+   ENDIF
+
+   AGREPL_Out( AGUI_Color( Chr(10) + "Use: /provider model <name> to switch", "90" ) + Chr(10) )
+
+   RETURN NIL
 
 // Implements /hook -- thin REPL adapter that delegates to the pure
 // renderer AGHOOKS_Render. The renderer (in cchooks.prg) owns all the
@@ -931,6 +1097,11 @@ STATIC FUNCTION AGREPL_ModelContext( cModel )
    CASE "gemma3"            $ cLow ; RETURN  128000
    CASE "gemma"             $ cLow ; RETURN  128000
    CASE "gemini"            $ cLow ; RETURN 1048576
+   CASE "mimo-v2.5"          $ cLow ; RETURN  200000
+   CASE "deepseek-v4-flash-free" $ cLow ; RETURN  200000
+   CASE "nemotron-3-ultra"   $ cLow ; RETURN 1000000
+   CASE "north-mini-code"    $ cLow ; RETURN  128000
+   CASE "laguna-s"           $ cLow ; RETURN  128000
    ENDCASE
    RETURN 32000
 
@@ -2098,7 +2269,9 @@ STATIC FUNCTION AGREPL_PlanCard()
       CASE hStep[ "state" ] == "active"
          cRow := AGUI_Color( Chr(226)+Chr(151)+Chr(143), "94" ) + " " + ;
                  AGUI_Color( LTrim( Str( i ) ) + ". " + hStep[ "title" ], "1;94" )
-      OTHERWISE
+      CASE cMode == "list"
+       AGREPL_ProviderList( cRest, hPresets, hSet )
+    OTHERWISE
          cRow := AGUI_Color( Chr(226)+Chr(151)+Chr(139), "90" ) + " " + ;
                  AGUI_Color( LTrim( Str( i ) ) + ". " + hStep[ "title" ], "90" )
       ENDCASE
@@ -2748,7 +2921,9 @@ FUNCTION AGREPL_VisualRows( cText, nCols )
       CASE c == Chr(13)
          nCol := 1
          i++
-      OTHERWISE
+      CASE cMode == "list"
+       AGREPL_ProviderList( cRest, hPresets, hSet )
+    OTHERWISE
          nCol++
          IF nCol > nCols
             nRows++

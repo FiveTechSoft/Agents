@@ -72,10 +72,17 @@ FUNCTION AGCFG_Resolve( hOpts )
    ENDIF
 
    // Local Ollama needs no real secret: the HTTP layer always sends
-   // "Authorization: Bearer ollama" for 11434 / ollama URLs. Accept a
+   // "Authorization: Bearer ollama" for 11434 / ollama URLs. Force
    // synthetic key so the agent loop does not block on empty api_key.
-   IF Empty( cKey ) .AND. AGCFG_IsOllamaUrl( hRes[ "base_url" ] )
+   // Always override any stale cloud key from settings.json.
+   IF AGCFG_IsOllamaUrl( hRes[ "base_url" ] )
       cKey := "ollama"
+   ENDIF
+
+   // OpenCode Zen uses free public models — no real API key needed.
+   // Force synthetic key to override any leftover cloud key.
+   IF AGCFG_IsOpenCodeUrl( hRes[ "base_url" ] )
+      cKey := "public"
    ENDIF
 
    IF Empty( cKey )
@@ -97,6 +104,11 @@ FUNCTION AGCFG_Resolve( hOpts )
 FUNCTION AGCFG_IsOllamaUrl( cUrl )
    LOCAL cLow := Lower( hb_CStr( cUrl ) )
    RETURN "11434" $ cLow .OR. "ollama" $ cLow
+
+// True when cUrl looks like an OpenCode Zen endpoint.
+FUNCTION AGCFG_IsOpenCodeUrl( cUrl )
+   LOCAL cLow := Lower( hb_CStr( cUrl ) )
+   RETURN "opencode.ai" $ cLow
 
 // Rewrite localhost / IPv6-loopback to 127.0.0.1 so curl never tries ::1
 // against an Ollama daemon that only listens on IPv4.
