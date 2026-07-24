@@ -22,6 +22,7 @@ STATIC s_nPending  := NIL   // one already-mapped AGCON code, or NIL
 STATIC s_cLastChar := ""    // hb_keyChar() text of last printable key
 STATIC s_lInit     := .F.
 STATIC s_aMouseEvent := NIL   // last peeked mouse event {nType,nRow,nCol}
+STATIC s_lMouseBtnHeld := .F.
 
 /* One-time GT setup, same spirit as hbIDE: New() / Activate(). */
 STATIC FUNCTION _Init()
@@ -94,6 +95,19 @@ FUNCTION AGCON_RawMode( lOn )
    ENDIF
    RETURN .T.
 
+
+/* Safely read mouse coordinates.  Returns { nType, nRow, nCol } or
+ * { nType, 0, 0 } when MRow/MCol fails. */
+STATIC FUNCTION _MouseCoord( nType )
+   LOCAL nRow := 0, nCol := 0
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      nRow := MRow() + 1
+      nCol := MCol() + 1
+   RECOVER
+      nRow := 0
+      nCol := 0
+   END SEQUENCE
+   RETURN { nType, nRow, nCol }
 /* Map a raw Inkey code to AGCON codes, hbIDE-style:
  *   specials via hb_keyStd(), printables via hb_keyChar(). */
 STATIC FUNCTION _MapRaw( nRaw )
