@@ -298,11 +298,6 @@ STATIC FUNCTION _ReadKeyNB()
    IF nWheel != NIL
       RETURN nWheel
    ENDIF
-   // Check for mouse button/drag events before Inkey consumes them
-   nWheel := _CheckMouseEvent()
-   IF nWheel != NIL
-      RETURN nWheel
-   ENDIF
    nRaw := Inkey( , AGCON_INKEY_MASK )
    DO WHILE nRaw == HB_K_RESIZE
       nRaw := Inkey( , AGCON_INKEY_MASK )
@@ -343,11 +338,6 @@ FUNCTION AGCON_ReadKey()
    DO WHILE .T.
       // Check for mouse wheel before blocking on Inkey (gtwin drops these)
       nWheel := _CheckWheel()
-      IF nWheel != NIL
-         RETURN nWheel
-      ENDIF
-      // Check for mouse button/drag events before Inkey consumes them
-      nWheel := _CheckMouseEvent()
       IF nWheel != NIL
          RETURN nWheel
       ENDIF
