@@ -136,7 +136,7 @@ FUNCTION AGMSEL_OnButton( nType, nRow, nCol )
 //   nRowTop = topmost selected row
 //   nRowBot = bottommost selected row
 //
-// First row: from anchor column to end of line.
+// First row: from anchor column to current column.
 // Middle rows: full line.
 // Last row: from start to current column.
 // Single row: from anchor column to current column.
@@ -149,9 +149,9 @@ STATIC FUNCTION _MSEL_ClipLine( cLine, nRow, nRowTop, nRowBot )
       nFrom := Min( s_nAnchorCol, s_nCurCol )
       nTo   := Max( s_nAnchorCol, s_nCurCol )
    ELSEIF nRow == nRowTop
-      // First row: anchor col to end
+      // First row: anchor col to cur col
       nFrom := Min( s_nAnchorCol, s_nCurCol )
-      nTo   := Len( cLine )
+      nTo   := Max( s_nAnchorCol, s_nCurCol )
    ELSEIF nRow == nRowBot
       // Last row: start to cur col
       nFrom := 1
@@ -204,9 +204,9 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
             nFrom := Min( s_nAnchorCol, s_nCurCol )
             nTo   := Max( s_nAnchorCol, s_nCurCol )
          ELSEIF nRow == nRowTop
-            // First row: anchor col to end
+            // First row: anchor col to cur col
             nFrom := Min( s_nAnchorCol, s_nCurCol )
-            nTo   := Len( cClean )
+            nTo   := Max( s_nAnchorCol, s_nCurCol )
          ELSEIF nRow == nRowBot
             // Last row: start to cur col
             nFrom := 1
