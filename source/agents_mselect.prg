@@ -1,9 +1,10 @@
 // agents_mselect.prg -- Mouse text selection in the transcript viewport.
 //
-// Click-and-drag highlights text with black-on-white.
-// Only selected rows are repainted; non-selected rows keep their original
-// ANSI colors. Single FWrite per paint for flicker-free operation.
-// On mouse release: full clean repaint + text copied to clipboard.
+// Click-and-drag highlights text with white background / black foreground.
+// Only selected rows are repainted; non-selected rows untouched.
+// The original ANSI line is written first (preserving all colors), then the
+// selected columns are overwritten with highlight escape codes.
+// Single FWrite per paint for flicker-free operation.
 
 #include "inkey.ch"
 
@@ -146,14 +147,22 @@ STATIC FUNCTION _MSEL_ClipLine( cLine, nRow, nRowTop, nRowBot )
 
 // ---------------------------------------------------------------------------
 // _MSEL_Paint -- repaint only the selected rows with highlight overlay.
-// Non-selected rows are NOT touched, preserving their original ANSI colors.
-// Selected rows: clear line, write normal-left + highlight + normal-right.
-// Single FWrite = no flicker.
+//
+// Strategy for each selected row:
+//   1. Write the ORIGINAL ring buffer line (with ANSI codes) to restore
+//      all original colors/formatting on that row.
+//   2. Then parse the original line to find which bytes correspond to
+//      the selected visual column range [nFrom..nTo].
+//   3. Position cursor at (nRow, nFrom) and write the highlighted text
+//      for just those columns, plus ESC[0m to reset.
+//
+// Non-selected rows are NOT touched at all.
 // ---------------------------------------------------------------------------
 STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
    LOCAL nTotal, nStart, nEnd
-   LOCAL nRowTop, nRowBot, nRow, cOut, cClean, nBuf
-   LOCAL nFrom, nTo, cLeft, cMid, cRight
+   LOCAL nRowTop, nRowBot, nRow, cOut, nBuf
+   LOCAL nFrom, nTo, cOrig, aMap, nByteFrom, nByteTo
+   LOCAL cBefore, cMid, cAfter
 
    nTotal := AGSB_Count()
    IF nTotal == 0 ; RETURN NIL ; ENDIF
@@ -171,49 +180,107 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
    FOR nRow := nRowTop TO nRowBot
       nBuf := nStart + ( nRow - nTop )
       IF nBuf >= 1 .AND. nBuf <= nTotal
-         cClean := _MSEL_StripAnsi( AGSB_GetLine( nBuf ) )
-         IF Len( cClean ) > nCols
-            cClean := Left( cClean, nCols )
+         cOrig := AGSB_GetLine( nBuf )
+         IF Empty( cOrig )
+            LOOP
          ENDIF
 
-         // Determine highlight column range for this row
+         // Determine highlight column range for this row (1-based visual cols)
          IF nRowTop == nRowBot
             nFrom := Min( s_nAnchorCol, s_nCurCol )
             nTo   := Max( s_nAnchorCol, s_nCurCol )
          ELSEIF nRow == nRowTop
             nFrom := Min( s_nAnchorCol, s_nCurCol )
-            nTo   := Len( cClean )
+            nTo   := nCols
          ELSEIF nRow == nRowBot
             nFrom := 1
             nTo   := Max( s_nAnchorCol, s_nCurCol )
          ELSE
             nFrom := 1
-            nTo   := Len( cClean )
+            nTo   := nCols
          ENDIF
 
          IF nFrom < 1 ; nFrom := 1 ; ENDIF
-         IF nTo > Len( cClean ) ; nTo := Len( cClean ) ; ENDIF
-         IF nFrom > Len( cClean ) + 1 ; nFrom := Len( cClean ) + 1 ; ENDIF
 
-         // Position cursor, clear line, write: left + highlight + right
-         cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + Chr(27) + "[2K"
-         cLeft := Left( cClean, nFrom - 1 )
-         IF nTo >= nFrom
-            cMid   := SubStr( cClean, nFrom, nTo - nFrom + 1 )
-            cRight := SubStr( cClean, nTo + 1 )
+         // Map visual columns to byte positions in the original ANSI line.
+         // aMap[ visualCol ] = byte position of that visual character.
+         aMap := _MSEL_MapColumns( cOrig )
+
+         // Clamp nTo to actual line width
+         IF Len( aMap ) > 0
+            IF nTo > Len( aMap )
+               nTo := Len( aMap )
+            ENDIF
          ELSE
-            cMid   := ""
-            cRight := ""
+            nTo := nFrom
          ENDIF
-         cOut += cLeft
+
+         IF nTo < nFrom
+            // Empty or invisible line: just clear and write original
+            cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+                    Chr(27) + "[2K" + cOrig
+            LOOP
+         ENDIF
+
+         // Byte positions in the original string for the highlighted region
+         nByteFrom := aMap[ nFrom ]
+         nByteTo   := aMap[ nTo ]
+
+         // Split the original ANSI line:
+         //   cBefore = bytes before the highlight (preserves original ANSI)
+         //   cMid    = the selected portion (strip ANSI, apply highlight)
+         //   cAfter  = bytes after the highlight (preserves original ANSI)
+         cBefore := Left( cOrig, nByteFrom - 1 )
+         cMid    := _MSEL_StripAnsi( SubStr( cOrig, nByteFrom, ;
+                       nByteTo - nByteFrom + 1 ) )
+         cAfter  := SubStr( cOrig, nByteTo + 1 )
+
+         // Position cursor, clear line, write:
+         //   original-before + ESC[highlight] + stripped-mid + ESC[reset] + original-after
+         cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + Chr(27) + "[2K"
+         cOut += cBefore
          IF !Empty( cMid )
             cOut += Chr(27) + "[48;5;15;30m" + cMid + Chr(27) + "[0m"
          ENDIF
-         cOut += cRight
+         cOut += cAfter
       ENDIF
    NEXT
    FWrite( hb_GetStdOut(), cOut )
    RETURN NIL
+
+// ---------------------------------------------------------------------------
+// _MSEL_MapColumns -- parse an ANSI string and return an array mapping
+// 1-based visual column -> 1-based byte position in the original string.
+// ANSI escape sequences are skipped (they don't occupy visual columns).
+// ---------------------------------------------------------------------------
+STATIC FUNCTION _MSEL_MapColumns( cText )
+   LOCAL aMap := {}, i, cCh, lEsc := .F., lCSI := .F., nVis := 0
+   IF ValType( cText ) != "C" .OR. Empty( cText )
+      RETURN aMap
+   ENDIF
+   FOR i := 1 TO Len( cText )
+      cCh := SubStr( cText, i, 1 )
+      IF lCSI
+         IF Asc( cCh ) >= 64 .AND. Asc( cCh ) <= 126
+            lCSI := .F.
+            lEsc := .F.
+         ENDIF
+      ELSEIF lEsc
+         IF cCh == "["
+            lCSI := .T.
+         ELSE
+            lEsc := .F.
+         ENDIF
+      ELSEIF Asc( cCh ) == 27
+         lEsc := .T.
+      ELSE
+         nVis++
+         IF nVis <= 200  // safety cap
+            AAdd( aMap, i )
+         ENDIF
+      ENDIF
+   NEXT
+   RETURN aMap
 
 // ---------------------------------------------------------------------------
 // _MSEL_PaintClean -- full repaint of viewport from ring buffer, no highlight.
