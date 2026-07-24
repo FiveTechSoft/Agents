@@ -79,16 +79,8 @@ FUNCTION AGMSEL_OnButton( nType, nRow, nCol )
    // --- button UP -> finish selection, copy to clipboard ---
    IF nType == 2 .AND. s_lActive
       IF nRow >= nTop .AND. nRow <= nBot
-         nCol := Max( 1, nCol )
-         lNeedPaint := ( nRow != s_nCurRow ) .OR. ( nCol != s_nCurCol )
-         IF lNeedPaint
-            IF s_cSaved != NIL
-               RestScreen( nTop, 1, nBot, nCols, s_cSaved )
-            ENDIF
-            s_nCurRow := nRow
-            s_nCurCol := nCol
-            _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
-         ENDIF
+         s_nCurRow := nRow
+         s_nCurCol := Max( 1, nCol )
       ENDIF
 
       // Extract selected text from ring buffer
