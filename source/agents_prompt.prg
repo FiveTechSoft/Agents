@@ -480,9 +480,8 @@ FUNCTION AGPROMPT_Poll( oPrompt )
       // All other keys drop the scroll overlay and return to live output.
       IF AGSB_IsScrolling() .AND. ;
          !( nKey == -15 ) .AND. !( nKey == -16 ) .AND. ;
-         !( nKey == -17 ) .AND. !( nKey == -18 )
-         AGSB_ScrollToBottom()
-         AGPROMPT_ScrollTranscript( oPrompt, 1, 0 )
+         !( nKey == -17 ) .AND. !( nKey == -18 ) .AND. ;
+         !( nKey == -19 )
      ENDIF
 
       // any non-Esc key cancels a pending first-Esc -- double-tap must

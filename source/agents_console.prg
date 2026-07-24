@@ -154,11 +154,22 @@ STATIC FUNCTION _MapRaw( nRaw )
       RETURN -15
    CASE nStd == K_MWBACKWARD .OR. nRaw == K_MWBACKWARD .OR. nRaw == 1015
       RETURN -16
-   // Mouse motion and button events: return -99 (unmapped / ignore)
-   // NOTE: Never return 0 here, because input loops (AGIN_ReadLine, AGPROMPT_Poll)
-   // treat 0 as EOF/Exit and terminate the application when the mouse moves!
-   CASE nStd == K_MOUSEMOVE .OR. nStd == K_LBUTTONDOWN .OR. nStd == K_LBUTTONUP .OR. ;
-        nStd == K_RBUTTONDOWN .OR. nStd == K_RBUTTONUP .OR. ;
+   // Left button down/up -> route to selection handler with coordinates
+   CASE nStd == K_LBUTTONDOWN
+      s_lMouseBtnHeld := .T.
+      s_aMouseEvent := { 1, MRow() + 1, MCol() + 1 }
+      RETURN -19
+   CASE nStd == K_LBUTTONUP
+      s_lMouseBtnHeld := .F.
+      s_aMouseEvent := { 2, MRow() + 1, MCol() + 1 }
+      RETURN -19
+   // Mouse move while left button held (drag) -> selection handler
+   CASE nStd == K_MOUSEMOVE .AND. s_lMouseBtnHeld
+      s_aMouseEvent := { 3, MRow() + 1, MCol() + 1 }
+      RETURN -19
+   // Other mouse events: ignore (never return 0 -- it means EOF/exit)
+   CASE nStd == K_RBUTTONDOWN .OR. nStd == K_RBUTTONUP .OR. ;
+        nStd == K_MOUSEMOVE .OR. ;
         ( nRaw >= K_MINMOUSE .AND. nRaw <= 1018 )
       RETURN -99
    ENDCASE

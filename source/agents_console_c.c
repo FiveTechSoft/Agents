@@ -102,7 +102,7 @@ HB_FUNC( AGCON_PEEKMOUSE )
    if( hStdIn == INVALID_HANDLE_VALUE ||
        !GetNumberOfConsoleInputEvents( hStdIn, &nEvents ) || nEvents == 0 )
    {
-      hb_ret();
+      hb_retni( -999 );
       return;
    }
 
@@ -111,8 +111,34 @@ HB_FUNC( AGCON_PEEKMOUSE )
 
    if( !PeekConsoleInput( hStdIn, pRecs, nEvents, &nRead ) || nRead == 0 )
    {
-      hb_ret();
+      hb_retni( -998 );
       return;
+   }
+
+   /* Log: how many events we peeked and what types they are */
+   {
+      char szLog[2048];
+      int nOff = 0;
+      nOff += sprintf( szLog + nOff, "PEEK nRead=%lu\\n", (unsigned long) nRead );
+      for( i = 0; i < nRead && i < 10; i++ )
+      {
+         nOff += sprintf( szLog + nOff, "  [%lu] type=%d",
+                          (unsigned long) i, (int) pRecs[i].EventType );
+         if( pRecs[i].EventType == MOUSE_EVENT )
+         {
+            DWORD fl = pRecs[i].Event.MouseEvent.dwEventFlags;
+            DWORD bt = pRecs[i].Event.MouseEvent.dwButtonState;
+            COORD co = pRecs[i].Event.MouseEvent.dwMousePosition;
+            nOff += sprintf( szLog + nOff, " MOUSE flags=0x%lX btn=0x%lX pos=(%d,%d)",
+                             (unsigned long) fl, (unsigned long) bt,
+                             (int) co.X, (int) co.Y );
+         }
+         nOff += sprintf( szLog + nOff, "\\n" );
+      }
+      {
+         FILE * fp = fopen( "C:\\agents\\mouse.log", "a" );
+         if( fp ) { fprintf( fp, "%s", szLog ); fclose( fp ); }
+      }
    }
 
    for( i = 0; i < nRead; i++ )
