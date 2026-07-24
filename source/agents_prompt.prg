@@ -287,7 +287,7 @@ FUNCTION AGPROMPT_Redraw( oPrompt )
       NEXT
       IF !Empty( cWipe )
          AGPROMPT_Raw( cWipe )
-      ENDIF
+     ENDIF
    ENDIF
    oPrompt[ "last_box_top" ] := hReg[ "box_top" ]
    // combine plan-mode and active skills into one status-line badge list
@@ -354,12 +354,29 @@ FUNCTION AGPROMPT_ScrollTranscript( oPrompt, nDir, nLines )
    IF ValType( nLines ) != "N" .OR. nLines < 0
       nLines := 3
    ENDIF
+   // Compute viewport size for scroll clamping
+   nViewport := 20
+   IF oPrompt != NIL .AND. hb_HHasKey( oPrompt, "region" ) .AND. ;
+      ValType( oPrompt[ "region" ] ) == "H"
+      nTop := hb_HGetDef( oPrompt[ "region" ], "scroll_top", 1 )
+      nBot := hb_HGetDef( oPrompt[ "region" ], "scroll_bottom", 1 )
+      IF nBot > nTop
+         nViewport := nBot - nTop + 1
+      ENDIF
+   ENDIF
    // Update the ring buffer scroll offset (skip when nLines=0: repaint only)
    IF nLines > 0
+      nTotal := AGSB_Count()
       IF nDir < 0
-         AGSB_ScrollUp( nLines )
-      ELSE
-         AGSB_ScrollDown( nLines )
+         // Clamp: do not scroll past where the viewport would be empty
+         nLines := Min( nLines, Max( 0, nTotal - nViewport - AGSB_ScrollOffset() ) )
+      ENDIF
+      IF nLines > 0
+         IF nDir < 0
+            AGSB_ScrollUp( nLines )
+         ELSE
+            AGSB_ScrollDown( nLines )
+         ENDIF
       ENDIF
    ENDIF
    // Render the viewport from the buffer
@@ -422,7 +439,7 @@ FUNCTION AGPROMPT_HandleScrollKey( oPrompt, nKey )
       IF nRows >= 12
          // Page keys move roughly half the content viewport.
          nLines := Max( 5, Int( ( nRows - 4 ) / 2 ) )
-      ENDIF
+     ENDIF
    ENDIF
    // Ctrl+Up/Down use a smaller step (same as wheel).
    IF nKey == -17 .OR. nKey == -18
@@ -451,11 +468,11 @@ FUNCTION AGPROMPT_Poll( oPrompt )
       // Safety: never treat raw CR/LF as printable insert
       IF nKey == 13 .OR. nKey == 10
          nKey := -1
-      ENDIF
+     ENDIF
       nNow := hb_milliseconds()
       IF s_nLastKeyMs > 0 .AND. ( nNow - s_nLastKeyMs ) < 50
          lBurst := .T.
-      ENDIF
+     ENDIF
       s_nLastKeyMs := nNow
 
       // ── Scroll-exit: any non-scroll key returns to the bottom ──
@@ -466,13 +483,13 @@ FUNCTION AGPROMPT_Poll( oPrompt )
          !( nKey == -17 ) .AND. !( nKey == -18 )
          AGSB_ScrollToBottom()
          AGPROMPT_ScrollTranscript( oPrompt, 1, 0 )
-      ENDIF
+     ENDIF
 
       // any non-Esc key cancels a pending first-Esc -- double-tap must
       // be back-to-back, not Esc+other+Esc many seconds later
       IF nKey != -13 .AND. s_nLastEscMs > 0
          s_nLastEscMs := 0
-      ENDIF
+     ENDIF
       // when a suggestion is active, the next key either accepts it (Tab/Enter)
       // or cancels it (any edit). Tab/Backspace/Delete are handled here in full;
       // Enter and printable keys clear the suggestion flag (and buffer for
@@ -497,7 +514,7 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             oEd[ "buf" ] := ""
             oEd[ "cursor" ] := 0
          ENDCASE
-      ENDIF
+     ENDIF
       DO CASE
       CASE nKey == -13                       // Esc -> interrupt, no message
          // Double-tap detection: a second Esc within AGPROMPT_DBLESC_MS ms
@@ -507,10 +524,10 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             ( hb_milliseconds() - s_nLastEscMs ) <= AGPROMPT_DBLESC_MS
             oPrompt[ "interrupt" ] := { "kind" => "rewind", "text" => "" }
             s_nLastEscMs := 0
-         ELSE
+       ELSE
             oPrompt[ "interrupt" ] := { "kind" => "esc", "text" => "" }
             s_nLastEscMs := hb_milliseconds()
-         ENDIF
+       ENDIF
          cAction := "interrupt"
       CASE nKey == -1                        // Enter -> classify the buffer
          // expand a paste placeholder back to its real content before
@@ -520,7 +537,7 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             !Empty( oPrompt[ "paste" ] ) .AND. ;
             AGPROMPT_IsPlaceholder( cSubmit )
             cSubmit := oPrompt[ "paste" ]
-         ENDIF
+       ENDIF
          hC := AGPROMPT_Classify( cSubmit )
          DO CASE
          CASE hC[ "action" ] == "empty"
@@ -538,12 +555,12 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             // and never needs the pending line.
             IF AGPROMPT_IsBusy( oPrompt )
                AGPROMPT_NotifyPending( oPrompt, hC[ "text" ] )
-            ENDIF
+          ENDIF
          ENDCASE
          AGIN_HistoryReset()
          IF hb_HHasKey( oPrompt, "paste" )
             hb_HDel( oPrompt, "paste" )
-         ENDIF
+       ENDIF
          oPrompt[ "editor" ] := AGIN_New( "" )
          oEd := oPrompt[ "editor" ]
       CASE nKey == -2                          // Backspace
@@ -553,9 +570,9 @@ FUNCTION AGPROMPT_Poll( oPrompt )
             hb_HDel( oPrompt, "paste" )
             oEd[ "buf" ] := ""
             oEd[ "cursor" ] := 0
-         ELSE
+       ELSE
             AGIN_Backspace( oEd )
-         ENDIF
+       ENDIF
       CASE nKey == -3 ; AGIN_Left( oEd )
       CASE nKey == -4 ; AGIN_Right( oEd )
       CASE nKey == -5 ; AGIN_Home( oEd )
@@ -566,13 +583,13 @@ FUNCTION AGPROMPT_Poll( oPrompt )
          IF cHist != NIL
             oEd[ "buf" ] := cHist
             oEd[ "cursor" ] := hb_UTF8Len( cHist )
-         ENDIF
+       ENDIF
       CASE nKey == -10                         // Down -> next history entry
          cHist := AGIN_HistoryNext( oEd[ "buf" ] )
          IF cHist != NIL
             oEd[ "buf" ] := cHist
             oEd[ "cursor" ] := hb_UTF8Len( cHist )
-         ENDIF
+       ENDIF
       CASE nKey == -15 .OR. nKey == -16       // Mouse wheel
          // Mouse wheel -> always scroll the transcript.
          AGPROMPT_HandleWheel( oPrompt, nKey )
@@ -586,17 +603,17 @@ FUNCTION AGPROMPT_Poll( oPrompt )
       // (Batching at the end failed to run under some WSL drain paths.)
       IF nKey != -1 .OR. cAction == "none"
          AGPROMPT_Redraw( oPrompt )
-      ENDIF
+     ENDIF
       IF cAction == "interrupt"
          EXIT   // stop draining once an interrupt is seen
-      ENDIF
+     ENDIF
       // After Enter queued a message, stop draining so the REPL can run it
       IF cAction == "queued"
          // Ensure the box shows empty after submit (Enter path may skip
          // the per-key redraw when nKey == -1).
          AGPROMPT_Redraw( oPrompt )
          EXIT
-      ENDIF
+     ENDIF
    ENDDO
    // post-burst paste collapse: after the burst ends, if the editor buffer
    // has newlines AND the burst flagged itself as a paste, stash the real
