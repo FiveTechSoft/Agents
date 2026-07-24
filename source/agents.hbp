@@ -3,6 +3,7 @@
 -gtwin
 -o../agents
 agents_console.prg
+agents_console_c.c
 agents_repl.prg
 agents.prg
 agents_api.prg
@@ -36,3 +37,4 @@ agents_select.prg
 agents_todo.prg
 agents_skill.prg
 agents_propose.prg
+agents_screenbuf.prg

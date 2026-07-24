@@ -36,14 +36,54 @@ STATIC FUNCTION _Init()
    ENDIF
    RETURN NIL
 
+
 /* Interactive console assumed when a real GT is linked (not gtnul).
  * Same stance as the original Agents comment and as hbIDE. */
 FUNCTION AGCON_HasConsole()
    _Init()
+   AGCON_FixMouse()
    RETURN .T.
 
-/* Suppress runtime Ctrl+C abort while the editor owns the keys.
- * The GT already puts the TTY in cbreak/raw; we do not touch termios. */
+/* Fix the Windows Console input mode for mouse wheel support.
+ * gtwin sets ENABLE_MOUSE_INPUT but Windows Terminal on Win11 may
+ * override it or need VT input disabled. This uses C helpers to
+ * diagnose and fix the mode AFTER gtwin's own init.
+ * Also removes ENABLE_VIRTUAL_TERMINAL_INPUT (0x0200) which causes
+ * Windows Terminal to send mouse events as VT escape sequences
+ * instead of classic MOUSE_EVENT records via ReadConsoleInput. */
+FUNCTION AGCON_FixMouse()
+   LOCAL nMode := -1, nNew, cLog
+   cLog := "AGCON_FixMouse called" + Chr(13) + Chr(10)
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      nMode := AGCON_GETCONMODE()
+   RECOVER
+      cLog += "  C call failed (exception)" + Chr(13) + Chr(10)
+   END SEQUENCE
+   cLog += "  nMode=" + LTrim(Str(nMode)) + " 0x" + hb_NumToHex( nMode, 8 ) + Chr(13) + Chr(10)
+   IF nMode >= 0
+      cLog += "  MOUSE=" + iif( hb_bitAnd( nMode, 0x0010 ) != 0, "Y", "N" )
+      cLog += " VT=" + iif( hb_bitAnd( nMode, 0x0200 ) != 0, "Y", "N" )
+      cLog += " QEDIT=" + iif( hb_bitAnd( nMode, 0x0040 ) != 0, "Y", "N" )
+      cLog += " EXT=" + iif( hb_bitAnd( nMode, 0x0080 ) != 0, "Y", "N" ) + Chr(13) + Chr(10)
+      // Set ENABLE_MOUSE_INPUT (0x10) + ENABLE_EXTENDED_FLAGS (0x80)
+      // Clear ENABLE_QUICK_EDIT_MODE (0x40) + ENABLE_VIRTUAL_TERMINAL_INPUT (0x200)
+      nNew := hb_bitOr( hb_bitAnd( nMode, hb_bitNot( 0x0240 ) ), 0x0090 )
+      IF nNew != nMode
+         BEGIN SEQUENCE WITH {| o | Break( o ) }
+            AGCON_SETCONMODE( nNew )
+         RECOVER
+            cLog += "  SetConMode FAILED" + Chr(13) + Chr(10)
+         END SEQUENCE
+         cLog += "  FIXED -> 0x" + hb_NumToHex( nNew, 8 ) + Chr(13) + Chr(10)
+      ELSE
+         cLog += "  Mode OK" + Chr(13) + Chr(10)
+      ENDIF
+   ELSE
+      cLog += "  C function returned error" + Chr(13) + Chr(10)
+   ENDIF
+   hb_MemoWrit( "C:\agents\wheel.log", cLog, .F. )
+   RETURN nMode >= 0
+
 FUNCTION AGCON_RawMode( lOn )
    _Init()
    Set( _SET_CANCEL, ! lOn )
@@ -93,7 +133,7 @@ STATIC FUNCTION _MapRaw( nRaw )
       RETURN -8
    CASE nStd == K_CTRL_E ; RETURN -14   // selector "explain"
    CASE nStd == K_UP
-      // Ctrl+Up → scroll transcript; plain Up → history
+      // Ctrl+Up -> scroll transcript; plain Up -> history
       RETURN iif( hb_bitAnd( nMod, HB_GTI_KBD_CTRL ) != 0, -17, -9 )
    CASE nStd == K_DOWN
       RETURN iif( hb_bitAnd( nMod, HB_GTI_KBD_CTRL ) != 0, -18, -10 )
@@ -109,8 +149,17 @@ STATIC FUNCTION _MapRaw( nRaw )
    CASE nStd == K_TAB    ; RETURN -12
    CASE nStd == K_ESC    ; RETURN -13
    // Mouse wheel (gtwin/Windows Terminal). Some GTs leave them on nRaw.
-   CASE nStd == K_MWFORWARD  .OR. nRaw == K_MWFORWARD  ; RETURN -15
-   CASE nStd == K_MWBACKWARD .OR. nRaw == K_MWBACKWARD ; RETURN -16
+   CASE nStd == K_MWFORWARD  .OR. nRaw == K_MWFORWARD  .OR. nRaw == 1014
+      RETURN -15
+   CASE nStd == K_MWBACKWARD .OR. nRaw == K_MWBACKWARD .OR. nRaw == 1015
+      RETURN -16
+   // Mouse motion and button events: return -99 (unmapped / ignore)
+   // NOTE: Never return 0 here, because input loops (AGIN_ReadLine, AGPROMPT_Poll)
+   // treat 0 as EOF/Exit and terminate the application when the mouse moves!
+   CASE nStd == K_MOUSEMOVE .OR. nStd == K_LBUTTONDOWN .OR. nStd == K_LBUTTONUP .OR. ;
+        nStd == K_RBUTTONDOWN .OR. nStd == K_RBUTTONUP .OR. ;
+        ( nRaw >= K_MINMOUSE .AND. nRaw <= 1018 )
+      RETURN -99
    ENDCASE
    // Printable: hbIDE inserts with hb_keyChar(nKey), never hb_keyVal()
    cKey := hb_keyChar( nRaw )
@@ -167,6 +216,23 @@ FUNCTION AGCON_PushKey( nKey )
    s_nPending := nKey
    RETURN NIL
 
+/* Check for a mouse wheel event via the C helper (AGCON_PEEKWHEEL).
+ * gtwin does not translate MOUSE_WHEELED records into K_MWFORWARD /
+ * K_MWBACKWARD, so Inkey() never returns them.  This peeks at the raw
+ * console input buffer and consumes any wheel event before gtwin sees it.
+ * Returns -15 (wheel up) / -16 (wheel down), or NIL when nothing pending. */
+STATIC FUNCTION _CheckWheel()
+   LOCAL nWheel := 0
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      nWheel := AGCON_PEEKWHEEL()
+   RECOVER
+      RETURN NIL
+   END SEQUENCE
+   IF ValType( nWheel ) != "N" .OR. nWheel == 0
+      RETURN NIL
+   ENDIF
+   RETURN iif( nWheel > 0, -15, -16 )
+
 /* Non-blocking peek of one raw key -> mapped, or NIL.
  * IMPORTANT: Inkey(0) waits FOREVER, and so does any timeout below one
  * hundredth of a second: hbgtcore.c hb_gt_def_InkeyGet() computes
@@ -176,8 +242,13 @@ FUNCTION AGCON_PushKey( nKey )
  * A true no-wait poll omits the timeout argument: Inkey( , mask ) sets
  * fWait = .F. and returns 0 immediately when no key is pending. */
 STATIC FUNCTION _ReadKeyNB()
-   LOCAL nRaw
+   LOCAL nRaw, nWheel
    _Init()
+   // Check for mouse wheel first (gtwin drops these)
+   nWheel := _CheckWheel()
+   IF nWheel != NIL
+      RETURN nWheel
+   ENDIF
    nRaw := Inkey( , AGCON_INKEY_MASK )
    DO WHILE nRaw == HB_K_RESIZE
       nRaw := Inkey( , AGCON_INKEY_MASK )
@@ -200,6 +271,7 @@ FUNCTION AGCON_MouseRow()
    ENDIF
    RETURN nRow
 
+
 /* AGCON_ReadKey() -- blocks for one key (hbIDE: InKey(0, ...)):
  *   >0 codepoint  0 EOF  -1 Enter  -2 BS  -3 Left  -4 Right  -5 Home
  *   -6 End  -7 Del  -8 Ctrl+C  -9 Up  -10 Down  -11 S-Enter  -12 Tab
@@ -207,7 +279,7 @@ FUNCTION AGCON_MouseRow()
  *   -17 ScrollUp (PgUp / Ctrl+Up)  -18 ScrollDown (PgDn / Ctrl+Down)
  *   -99 unmapped */
 FUNCTION AGCON_ReadKey()
-   LOCAL nKey, nRaw
+   LOCAL nKey, nRaw, nWheel
    _Init()
    IF s_nPending != NIL
       nKey := s_nPending
@@ -215,22 +287,36 @@ FUNCTION AGCON_ReadKey()
       RETURN nKey
    ENDIF
    DO WHILE .T.
-      nRaw := Inkey( 0, AGCON_INKEY_MASK )
-      IF nRaw == 0
-         RETURN 0
+      // Check for mouse wheel before blocking on Inkey (gtwin drops these)
+      nWheel := _CheckWheel()
+      IF nWheel != NIL
+         RETURN nWheel
       ENDIF
+      // Use a short timeout instead of Inkey(0) so we can periodically
+      // check for mouse wheel events that gtwin ignores.
+      nRaw := Inkey( 0.05, AGCON_INKEY_MASK )
       IF nRaw == HB_K_RESIZE
          LOOP
       ENDIF
-      RETURN _MapRaw( nRaw )
+      IF nRaw != 0
+         RETURN _MapRaw( nRaw )
+      ENDIF
+      // nRaw == 0: timeout with no key -- loop back to check wheel
    ENDDO
    RETURN 0
 
+
 /* Wait up to nMs ms for a key; leave it in s_nPending. */
 FUNCTION AGCON_WaitKey( nMs )
-   LOCAL nRaw, nSec
+   LOCAL nRaw, nSec, nWheel
    _Init()
    IF s_nPending != NIL
+      RETURN .T.
+   ENDIF
+   // Check for mouse wheel first (gtwin drops these)
+   nWheel := _CheckWheel()
+   IF nWheel != NIL
+      s_nPending := nWheel
       RETURN .T.
    ENDIF
    IF ValType( nMs ) != "N" .OR. nMs < 0

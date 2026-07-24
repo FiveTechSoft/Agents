@@ -347,31 +347,59 @@ FUNCTION AGPROMPT_Redraw( oPrompt )
               LTrim( Str( 3 + hW[ "col" ] ) ) + "H" )
    RETURN oPrompt
 
-// Scroll the transcript region above the prompt box.
-// nDir < 0 = show content above (wheel up / PgUp); > 0 = show below.
-// nLines: how many rows to move (default 3; Page keys use a larger step).
+// Scroll the transcript region using the ring buffer.
 FUNCTION AGPROMPT_ScrollTranscript( oPrompt, nDir, nLines )
-   LOCAL n, cSeq
-   IF ValType( nLines ) != "N" .OR. nLines < 1
+   LOCAL nTop, nBot, nCols, nRow, nTotal, nViewport, nStart, nEnd, j
+   LOCAL cLine
+   IF ValType( nLines ) != "N" .OR. nLines < 0
       nLines := 3
    ENDIF
-   n := nLines
-   // Wheel up / PgUp → CSI n T (scroll down region = reveal upper lines)
-   // Wheel down / PgDn → CSI n S
-   IF nDir < 0
-      cSeq := Chr(27) + "[" + LTrim( Str( n ) ) + "T"
-   ELSE
-      cSeq := Chr(27) + "[" + LTrim( Str( n ) ) + "S"
+   // Update the ring buffer scroll offset (skip when nLines=0: repaint only)
+   IF nLines > 0
+      IF nDir < 0
+         AGSB_ScrollUp( nLines )
+      ELSE
+         AGSB_ScrollDown( nLines )
+      ENDIF
    ENDIF
-   AGPROMPT_Raw( cSeq )
-   IF oPrompt != NIL .AND. hb_HHasKey( oPrompt, "region" ) .AND. ;
-      ValType( oPrompt[ "region" ] ) == "H" .AND. ;
-      hb_HGetDef( oPrompt[ "region" ], "active", .F. ) == .T.
-      FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
+   // Render the viewport from the buffer
+   IF oPrompt == NIL .OR. !hb_HHasKey( oPrompt, "region" ) .OR. ;
+      ValType( oPrompt[ "region" ] ) != "H"
+      RETURN NIL
    ENDIF
+   nTop := hb_HGetDef( oPrompt[ "region" ], "scroll_top", 1 )
+   nBot := hb_HGetDef( oPrompt[ "region" ], "scroll_bottom", 1 )
+   nCols := hb_HGetDef( oPrompt[ "region" ], "cols", 80 )
+   IF nBot <= nTop
+      RETURN NIL
+   ENDIF
+   nViewport := nBot - nTop + 1
+   nTotal := AGSB_Count()
+   IF nTotal == 0
+      RETURN NIL
+   ENDIF
+   // Compute which lines are visible: the scroll offset counts from the
+   // bottom of the buffer.  offset 0 = show last nViewport lines.
+   nEnd   := nTotal - AGSB_ScrollOffset()
+   nStart := nEnd - nViewport + 1
+   IF nStart < 1 ; nStart := 1 ; ENDIF
+   IF nEnd > nTotal ; nEnd := nTotal ; ENDIF
+   // Paint each viewport row
+   FOR nRow := nTop TO nBot
+      j := nStart + ( nRow - nTop )
+      // Position cursor, clear row, write buffer line
+      AGPROMPT_Raw( Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+                   Chr(27) + "[2K" )
+      IF j >= nStart .AND. j <= nEnd .AND. j <= nTotal
+         cLine := AGSB_GetLine( j )
+         IF !Empty( cLine )
+            FWrite( hb_GetStdOut(), cLine )
+         ENDIF
+      ENDIF
+   NEXT
+   // Return cursor to the input box
+   FWrite( hb_GetStdOut(), AGREPL_BoxCursorSeq() )
    RETURN NIL
-
-
 // Mouse wheel: always scroll the transcript region, whether the cursor is
 // over the prompt box or the content area. History cycling is available
 // via Up/Down arrow keys instead.
@@ -429,6 +457,17 @@ FUNCTION AGPROMPT_Poll( oPrompt )
          lBurst := .T.
       ENDIF
       s_nLastKeyMs := nNow
+
+      // ── Scroll-exit: any non-scroll key returns to the bottom ──
+      // Wheel (-15/-16) and PgUp/PgDn (-17/-18) keep scrolling.
+      // All other keys drop the scroll overlay and return to live output.
+      IF AGSB_IsScrolling() .AND. ;
+         !( nKey == -15 ) .AND. !( nKey == -16 ) .AND. ;
+         !( nKey == -17 ) .AND. !( nKey == -18 )
+         AGSB_ScrollToBottom()
+         AGPROMPT_ScrollTranscript( oPrompt, 1, 0 )
+      ENDIF
+
       // any non-Esc key cancels a pending first-Esc -- double-tap must
       // be back-to-back, not Esc+other+Esc many seconds later
       IF nKey != -13 .AND. s_nLastEscMs > 0

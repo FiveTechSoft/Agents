@@ -231,6 +231,7 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
    LOCAL aMsgs, cLine, hAction, aTurn, hRes, cMsg, cSuggest, lCooked, hLoaded, hTurn, oPrompt
    LOCAL cBanner, nHeaderRows, i
    s_cSessionModel := hb_CStr( cModel )
+   AGSB_Init()        // ring buffer for scroll-back
    aMsgs    := { { "role" => "system", "content" => AGUI_SystemPrompt() } }
    cSuggest := ""
    cBanner  := AGUI_Banner( cModel, hb_cwd(), hb_GetEnv( "USERNAME" ) )
@@ -336,6 +337,7 @@ FUNCTION AGREPL_Run( oClient, oReg, cModel, bGate, nMaxIter )
          AGREPL_ShowHelp( oPrompt )
       CASE hAction[ "type" ] == "clear"
          AGREPL_ClearScreen( oPrompt )
+          AGSB_Clear()         // clear scroll-back buffer
          aMsgs := { { "role" => "system", "content" => AGUI_SystemPrompt() } }
          s_hSessionUsage := {=>}
          s_nSessionTurnMs := 0
@@ -2549,6 +2551,7 @@ STATIC FUNCTION AGREPL_PromptIdle( oPrompt )
 
 
 STATIC FUNCTION AGREPL_ClearScreen( oPrompt )
+   AGSB_Clear()         // clear scroll-back buffer
    IF !AGCON_HasConsole() .OR. !AGUI_ColorOn()
       RETURN NIL
    ENDIF
@@ -4273,45 +4276,41 @@ FUNCTION AGREPL_OverwriteAtAnchor( cText )
 // normalised to CRLF: bypassing the GT also loses its LF -> CRLF translation,
 // and a Windows console needs the CR to return to column 0.
 FUNCTION AGREPL_Out( cText )
-   LOCAL nNL, i, lTrailingLF
+   LOCAL nNL, i, lTrailingLF, aBufLines, cClean, j
+
+   // ── Ring-buffer capture: store every display row so scroll-back
+   // can replay it.  The text is split on LF; each piece is one
+   // screen row.  ESC[K (clear-to-end) is stripped before storing.
+   IF ValType( cText ) == "C" .AND. Len( cText ) > 0
+      cClean := StrTran( cText, Chr(13), "" )
+      cClean := StrTran( cClean, Chr(27) + "[K", "" )
+      aBufLines := hb_ATokens( cClean, Chr(10) )
+      FOR j := 1 TO Len( aBufLines )
+         IF j < Len( aBufLines )
+            AGSB_Append( aBufLines[ j ] )
+         ELSE
+            // last fragment without trailing LF: append as continuation
+            IF !Empty( aBufLines[ j ] ) .AND. AGSB_Count() > 0
+               AGSB_Append( aBufLines[ j ] )
+            ENDIF
+         ENDIF
+      NEXT
+   ENDIF
+
+   // ── Original screen output path ──
    // Test the length, not Empty(): Empty() is true for a whitespace-only
    // string, so a streamed delta of just "\n" would be dropped and the line
    // break lost.
    IF ValType( cText ) == "C" .AND. Len( cText ) > 0
       cText := StrTran( cText, Chr(13), "" )
-      // Capture the trailing-LF status BEFORE the LF substitution below so
-      // AGPROMPT_Redraw's wipe can tell whether the cursor lands on a new
-      // empty row (trailing LF) or on the last written content row (no
-      // trailing LF). Without this, a chunk like the FlushPending bullet
-      // "\n + glyph + 2sp" -- no trailing LF -- has its just-written content
-      // wiped by the wipe range Max(oldBoxTop, contentRow) ... newBoxTop-1.
       lTrailingLF := Right( cText, 1 ) == Chr(10)
-      // Clear-to-end-of-line BEFORE each line break, so a short content
-      // line never lets the previous frame's trailing chars (a box top
-      // border, an old reply) survive to the right of the new text.
-      // Order: ESC[K, then CR LF.
       cText := StrTran( cText, Chr(10), Chr(27) + "[K" + Chr(13) + Chr(10) )
-      // Same protection for the FINAL line of the chunk (no trailing LF)
-      // -- append ESC[K so the trailing junk on its row is wiped too.
       IF !lTrailingLF
          cText += Chr(27) + "[K"
       ENDIF
       IF s_oBoxPrompt != NIL .AND. s_oBoxPrompt[ "region" ][ "active" ]
-         // box mode: jump to the saved scroll-region anchor, write there,
-         // re-save the anchor, then return the cursor to the input box so
-         // the visible cursor stays where the user is typing.
          FWrite( hb_GetStdOut(), ;
             Chr(27) + "[u" + cText + Chr(27) + "[s" + AGREPL_BoxCursorSeq() )
-         // While the box is still "travelling" (not yet pinned to the
-         // floor), advance content_row by the number of VISUAL rows the
-         // chunk consumed -- not just LFs. A long line that auto-wraps
-         // occupies several physical rows even with a single \n; missing
-         // those rows in the count leaves the box overlapping the
-         // wrapped content. Once content_row + 1 reaches the floor the
-         // region becomes pinned and the LF-driven scroll takes over.
-         // Spinner updates (ESC[1G ESC[K prefix) overwrite the same
-         // physical row — skip content_row advance so the box doesn't
-         // drift down with every animation frame.
          IF !( Left( cText, 7 ) == Chr(27) + "[1G" + Chr(27) + "[K" )
             IF !hb_HGetDef( s_oBoxPrompt[ "region" ], "pinned", .F. )
                nNL := AGREPL_VisualRows( cText, AGREPL_Cols() )

@@ -697,7 +697,7 @@ STATIC FUNCTION AGUI_PadCell( cText, nWidth, cAlign )
 // version in releasenotes.md and the Releases section of README.md, then
 // tag the commit v<x.y.z>. All four must stay in sync.
 FUNCTION AGUI_Version()
-   RETURN "2.5.1"
+   RETURN "2.5.2"
 
 // The pool of short usage tips shown on the banner and at the idle prompt.
 FUNCTION AGUI_Tips()
@@ -1096,6 +1096,17 @@ FUNCTION AGUI_SkillsStatusLine( aActive, nCols )
       cLine := PadR( cLine, Max( 1, nCols - 1 ) )
       RETURN AGUI_Color( cLine, AGUI_Pal( "accent" ) )
    ENDIF
+   // Scroll position indicator: show when scrolled away from bottom
+   IF AGSB_IsScrolling()
+      cLine := "  " + Chr(226)+Chr(134)+Chr(128) + " " + ;
+                "[scrolling] " + ;
+                LTrim( Str( AGSB_Count() - AGSB_ScrollOffset() ) ) + ;
+                " / " + LTrim( Str( AGSB_Count() ) ) + " lines" + ;
+                "  — any key to return"
+      cLine := PadR( cLine, Max( 1, nCols - 1 ) )
+      RETURN AGUI_Color( cLine, AGUI_Pal( "accent" ) )
+   ENDIF
+
    // Footer: > Esc interrupt  <tip centered>  tokens  /help
    nTok := AGREPL_SessionTokens()
    RETURN AGUI_OpenCodeFooter( nTok, nCols )
