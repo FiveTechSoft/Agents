@@ -1,9 +1,9 @@
 // agents_mselect.prg -- Mouse text selection in the transcript viewport.
 //
-// Click-and-drag highlights text with white background / black foreground.
+// Click-and-drag highlights text with white background.
 // Only selected rows are repainted; non-selected rows untouched.
-// The original ANSI line is written first (preserving all colors), then the
-// selected columns are overwritten with highlight escape codes.
+// Strategy: INSERT highlight escape codes into the original ANSI line
+// at the exact byte positions, so only the background changes.
 // Single FWrite per paint for flicker-free operation.
 
 #include "inkey.ch"
@@ -148,21 +148,19 @@ STATIC FUNCTION _MSEL_ClipLine( cLine, nRow, nRowTop, nRowBot )
 // ---------------------------------------------------------------------------
 // _MSEL_Paint -- repaint only the selected rows with highlight overlay.
 //
-// Strategy for each selected row:
-//   1. Write the ORIGINAL ring buffer line (with ANSI codes) to restore
-//      all original colors/formatting on that row.
-//   2. Then parse the original line to find which bytes correspond to
-//      the selected visual column range [nFrom..nTo].
-//   3. Position cursor at (nRow, nFrom) and write the highlighted text
-//      for just those columns, plus ESC[0m to reset.
+// For each selected row, we INSERT two ANSI escape codes into the
+// original ring buffer line:
+//   ESC[48;5;15m  before the first selected character (white background)
+//   ESC[49m       after the last selected character  (reset background)
 //
+// This changes ONLY the background of the selected characters.
+// The original foreground color, bold, dim, etc. are ALL preserved.
 // Non-selected rows are NOT touched at all.
 // ---------------------------------------------------------------------------
 STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
    LOCAL nTotal, nStart, nEnd
    LOCAL nRowTop, nRowBot, nRow, cOut, nBuf
    LOCAL nFrom, nTo, cOrig, aMap, nByteFrom, nByteTo
-   LOCAL cBefore, cMid, cAfter
 
    nTotal := AGSB_Count()
    IF nTotal == 0 ; RETURN NIL ; ENDIF
@@ -202,8 +200,7 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
 
          IF nFrom < 1 ; nFrom := 1 ; ENDIF
 
-         // Map visual columns to byte positions in the original ANSI line.
-         // aMap[ visualCol ] = byte position of that visual character.
+         // Map visual columns to byte positions in the original ANSI line
          aMap := _MSEL_MapColumns( cOrig )
 
          // Clamp nTo to actual line width
@@ -212,37 +209,34 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
                nTo := Len( aMap )
             ENDIF
          ELSE
-            nTo := nFrom
-         ENDIF
-
-         IF nTo < nFrom
-            // Empty or invisible line: just clear and write original
+            // No visible characters -- just clear and write original
             cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
                     Chr(27) + "[2K" + cOrig
             LOOP
          ENDIF
 
-         // Byte positions in the original string for the highlighted region
+         IF nTo < nFrom
+            cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+                    Chr(27) + "[2K" + cOrig
+            LOOP
+         ENDIF
+
+         // Byte positions in the original string
          nByteFrom := aMap[ nFrom ]
          nByteTo   := aMap[ nTo ]
 
-         // Split the original ANSI line:
-         //   cBefore = bytes before the highlight (preserves original ANSI)
-         //   cMid    = the selected portion (strip ANSI, apply highlight)
-         //   cAfter  = bytes after the highlight (preserves original ANSI)
-         cBefore := Left( cOrig, nByteFrom - 1 )
-         cMid    := _MSEL_StripAnsi( SubStr( cOrig, nByteFrom, ;
-                       nByteTo - nByteFrom + 1 ) )
-         cAfter  := SubStr( cOrig, nByteTo + 1 )
-
-         // Position cursor, clear line, write:
-         //   original-before + ESC[highlight] + stripped-mid + ESC[reset] + original-after
+         // Build output: insert ESC[48;5;15m before selected, ESC[49m after
+         //
+         //   cOrig[1..nByteFrom-1] + ESC[bg-white] + cOrig[nByteFrom..nByteTo] + ESC[bg-reset] + cOrig[nByteTo+1..end]
+         //
+         // This changes ONLY the background color of the selected characters.
+         // All original foreground colors, bold, dim, etc. are preserved.
          cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + Chr(27) + "[2K"
-         cOut += cBefore
-         IF !Empty( cMid )
-            cOut += Chr(27) + "[48;5;15;30m" + cMid + Chr(27) + "[0m"
-         ENDIF
-         cOut += cAfter
+         cOut += Left( cOrig, nByteFrom - 1 )
+         cOut += Chr(27) + "[48;5;15m"
+         cOut += SubStr( cOrig, nByteFrom, nByteTo - nByteFrom + 1 )
+         cOut += Chr(27) + "[49m"
+         cOut += SubStr( cOrig, nByteTo + 1 )
       ENDIF
    NEXT
    FWrite( hb_GetStdOut(), cOut )
