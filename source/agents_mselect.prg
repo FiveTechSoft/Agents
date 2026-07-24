@@ -1,7 +1,9 @@
-﻿// agents_mselect.prg -- Mouse text selection in the transcript viewport.
+// agents_mselect.prg -- Mouse text selection in the transcript viewport.
 //
 // Click-and-drag in the scroll region highlights text with black-on-white.
-// Selection starts at the click column and extends to the end of each line.
+// First line: from click column to end of line.
+// Middle lines: full lines.
+// Last line: from start of line to current mouse column.
 // On mouse release the selected text is copied to the Windows clipboard.
 // Uses SaveScreen()/RestScreen() to eliminate flickering.
 
@@ -12,6 +14,7 @@ STATIC s_lActive    := .F.
 STATIC s_nAnchorRow := 0
 STATIC s_nAnchorCol := 1    // column where mouse was clicked
 STATIC s_nCurRow    := 0
+STATIC s_nCurCol    := 1    // current mouse column
 STATIC s_cSaved     := NIL  // saved screen snapshot for flicker-free repaint
 
 // ---------------------------------------------------------------------------
@@ -26,6 +29,7 @@ FUNCTION AGMSEL_OnButton( nType, nRow, nCol )
    LOCAL nTotal, nStart, nEnd
    LOCAL nBuf, i, cLine, cText, nLines
    LOCAL nRowTop, nRowBot
+   LOCAL lNeedPaint
 
    oPrompt := AGREPL_BoxPrompt()
    IF oPrompt == NIL .OR. !hb_HHasKey( oPrompt, "region" ) .OR. ;
@@ -44,12 +48,12 @@ FUNCTION AGMSEL_OnButton( nType, nRow, nCol )
    // --- button DOWN -> start selection ---
    IF nType == 1
       IF nRow >= nTop .AND. nRow <= nBot
-         // Save screen snapshot BEFORE any repaint
-         s_cSaved := SaveScreen( nTop, 1, nBot, nCols )
+         s_cSaved     := SaveScreen( nTop, 1, nBot, nCols )
          s_lActive    := .T.
          s_nAnchorRow := nRow
          s_nAnchorCol := Max( 1, nCol )
          s_nCurRow    := nRow
+         s_nCurCol    := Max( 1, nCol )
          _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
       ENDIF
       RETURN NIL
@@ -58,12 +62,14 @@ FUNCTION AGMSEL_OnButton( nType, nRow, nCol )
    // --- drag -> extend selection ---
    IF nType == 3 .AND. s_lActive
       IF nRow >= nTop .AND. nRow <= nBot
-         IF nRow != s_nCurRow
-            // Restore saved screen, then repaint with new highlight
+         nCol := Max( 1, nCol )
+         lNeedPaint := ( nRow != s_nCurRow ) .OR. ( nCol != s_nCurCol )
+         IF lNeedPaint
             IF s_cSaved != NIL
                RestScreen( nTop, 1, nBot, nCols, s_cSaved )
             ENDIF
             s_nCurRow := nRow
+            s_nCurCol := nCol
             _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
          ENDIF
       ENDIF
@@ -73,11 +79,14 @@ FUNCTION AGMSEL_OnButton( nType, nRow, nCol )
    // --- button UP -> finish selection, copy to clipboard ---
    IF nType == 2 .AND. s_lActive
       IF nRow >= nTop .AND. nRow <= nBot
-         IF nRow != s_nCurRow
+         nCol := Max( 1, nCol )
+         lNeedPaint := ( nRow != s_nCurRow ) .OR. ( nCol != s_nCurCol )
+         IF lNeedPaint
             IF s_cSaved != NIL
                RestScreen( nTop, 1, nBot, nCols, s_cSaved )
             ENDIF
             s_nCurRow := nRow
+            s_nCurCol := nCol
             _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
          ENDIF
       ENDIF
@@ -98,19 +107,14 @@ FUNCTION AGMSEL_OnButton( nType, nRow, nCol )
          FOR i := nRowTop TO nRowBot
             nBuf := nStart + ( i - nTop )
             IF nBuf >= 1 .AND. nBuf <= nTotal
-               cLine := RTrim( _MSEL_StripAnsi( AGSB_GetLine( nBuf ) ) )
-               // Clip at anchor column
-               IF s_nAnchorCol > 1 .AND. Len( cLine ) >= s_nAnchorCol
-                  cLine := SubStr( cLine, s_nAnchorCol )
-               ELSEIF s_nAnchorCol > 1
-                  cLine := ""
-               ENDIF
+               cLine := _MSEL_StripAnsi( AGSB_GetLine( nBuf ) )
+               cLine := _MSEL_ClipLine( cLine, i, nRowTop, nRowBot )
                IF !Empty( cLine )
-                  cText += cLine
-                  nLines++
-                  IF i < nRowBot
+                  IF nLines > 0
                      cText += Chr(13) + Chr(10)
                   ENDIF
+                  cText += cLine
+                  nLines++
                ENDIF
             ENDIF
          NEXT
@@ -128,18 +132,57 @@ FUNCTION AGMSEL_OnButton( nType, nRow, nCol )
       s_nAnchorRow := 0
       s_nAnchorCol := 1
       s_nCurRow    := 0
+      s_nCurCol    := 1
       RETURN NIL
    ENDIF
 
    RETURN NIL
 
 // ---------------------------------------------------------------------------
+// _MSEL_ClipLine -- clip a single line for selection/extraction.
+//   nRow    = screen row being processed
+//   nRowTop = topmost selected row
+//   nRowBot = bottommost selected row
+//
+// First row: from anchor column to end of line.
+// Middle rows: full line.
+// Last row: from start to current column.
+// Single row: from anchor column to current column.
+// ---------------------------------------------------------------------------
+STATIC FUNCTION _MSEL_ClipLine( cLine, nRow, nRowTop, nRowBot )
+   LOCAL nFrom, nTo
+
+   IF nRowTop == nRowBot
+      // Single row: anchor col to cur col
+      nFrom := Min( s_nAnchorCol, s_nCurCol )
+      nTo   := Max( s_nAnchorCol, s_nCurCol )
+   ELSEIF nRow == nRowTop
+      // First row: anchor col to end
+      nFrom := Min( s_nAnchorCol, s_nCurCol )
+      nTo   := Len( cLine )
+   ELSEIF nRow == nRowBot
+      // Last row: start to cur col
+      nFrom := 1
+      nTo   := Max( s_nAnchorCol, s_nCurCol )
+   ELSE
+      // Middle row: full line
+      RETURN RTrim( cLine )
+   ENDIF
+
+   IF nFrom < 1 ; nFrom := 1 ; ENDIF
+   IF nTo > Len( cLine ) ; nTo := Len( cLine ) ; ENDIF
+   IF nTo < nFrom
+      RETURN ""
+   ENDIF
+   RETURN RTrim( SubStr( cLine, nFrom, nTo - nFrom + 1 ) )
+
+// ---------------------------------------------------------------------------
 // _MSEL_Paint -- paint selected rows with black-on-white highlight.
-// Expects the screen to be in clean state (restored from saved snapshot).
 // ---------------------------------------------------------------------------
 STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
    LOCAL nTotal, nStart, nEnd, nBuf
-   LOCAL nRowTop, nRowBot, nRow, cOut, cClean, cTail, nLen
+   LOCAL nRowTop, nRowBot, nRow, cOut, cClean
+   LOCAL nFrom, nTo, cLeft, cMid
 
    nTotal := AGSB_Count()
    IF nTotal == 0 ; RETURN NIL ; ENDIF
@@ -154,7 +197,6 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
    IF nRowTop < nTop ; nRowTop := nTop ; ENDIF
    IF nRowBot > nBot ; nRowBot := nBot ; ENDIF
 
-   // Paint only the selected rows with black-on-white highlight
    cOut := ""
    FOR nRow := nRowTop TO nRowBot
       nBuf := nStart + ( nRow - nTop )
@@ -163,33 +205,45 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
          IF Len( cClean ) > nCols
             cClean := Left( cClean, nCols )
          ENDIF
-         nLen := Len( cClean )
-         // Build: spaces before anchor column + highlighted text from anchor
-         //        + fill remaining columns with spaces for clean edge
-         IF s_nAnchorCol > nLen
-            // Entire line is before anchor: no highlight, just fill
-            cClean := PadR( cClean, nCols )
-            cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
-                    Chr(27) + "[2K" + cClean
+
+         // Determine highlight column range for this row
+         IF nRowTop == nRowBot
+            // Single row: anchor col to cur col
+            nFrom := Min( s_nAnchorCol, s_nCurCol )
+            nTo   := Max( s_nAnchorCol, s_nCurCol )
+         ELSEIF nRow == nRowTop
+            // First row: anchor col to end
+            nFrom := Min( s_nAnchorCol, s_nCurCol )
+            nTo   := Len( cClean )
+         ELSEIF nRow == nRowBot
+            // Last row: start to cur col
+            nFrom := 1
+            nTo   := Max( s_nAnchorCol, s_nCurCol )
          ELSE
-            // Part before anchor (normal) + highlighted part + fill
-            IF s_nAnchorCol > 1
-               cTail := Left( cClean, s_nAnchorCol - 1 )
-            ELSE
-               cTail := ""
-            ENDIF
-            cClean := SubStr( cClean, s_nAnchorCol )
-            // Pad highlighted part to fill remaining columns
-            nLen := nCols - Len( cTail )
-            IF Len( cClean ) < nLen
-               cClean := cClean + Space( nLen - Len( cClean ) )
-            ELSE
-               cClean := Left( cClean, nLen )
-            ENDIF
-            cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
-                    Chr(27) + "[2K" + cTail + ;
-                    Chr(27) + "[47;30m" + cClean + Chr(27) + "[0m"
+            // Middle row: full line
+            nFrom := 1
+            nTo   := Len( cClean )
          ENDIF
+
+         IF nFrom < 1 ; nFrom := 1 ; ENDIF
+         IF nTo > Len( cClean ) ; nTo := Len( cClean ) ; ENDIF
+
+         // Build line: left (normal) + mid (highlighted) + right fill
+         cLeft := ""
+         IF nFrom > 1
+            cLeft := Left( cClean, nFrom - 1 )
+         ENDIF
+         IF nTo >= nFrom
+            cMid := SubStr( cClean, nFrom, nTo - nFrom + 1 )
+         ELSE
+            cMid := ""
+         ENDIF
+         // Pad to fill entire row width
+         cMid := PadR( cMid, nCols - Len( cLeft ) )
+
+         cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+                 Chr(27) + "[2K" + cLeft + ;
+                 Chr(27) + "[47;30m" + cMid + Chr(27) + "[0m"
       ENDIF
    NEXT
    cOut += AGREPL_BoxCursorSeq()
