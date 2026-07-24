@@ -387,10 +387,10 @@ FUNCTION AGPROMPT_ScrollTranscript( oPrompt, nDir, nLines )
    // Paint each viewport row
    FOR nRow := nTop TO nBot
       j := nStart + ( nRow - nTop )
-      // Position cursor, clear row, write buffer line
-      AGPROMPT_Raw( Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
-                   Chr(27) + "[2K" )
-      IF j >= nStart .AND. j <= nEnd .AND. j <= nTotal
+      // Only clear+write rows that have buffer data
+      IF j >= 1 .AND. j <= nTotal
+         AGPROMPT_Raw( Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
+                      Chr(27) + "[2K" )
          cLine := AGSB_GetLine( j )
          IF !Empty( cLine )
             FWrite( hb_GetStdOut(), cLine )
