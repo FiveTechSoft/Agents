@@ -21,6 +21,7 @@
 STATIC s_nPending  := NIL   // one already-mapped AGCON code, or NIL
 STATIC s_cLastChar := ""    // hb_keyChar() text of last printable key
 STATIC s_lInit     := .F.
+STATIC s_aMouseEvent := NIL   // last peeked mouse event {nType,nRow,nCol}
 
 /* One-time GT setup, same spirit as hbIDE: New() / Activate(). */
 STATIC FUNCTION _Init()
@@ -232,6 +233,29 @@ STATIC FUNCTION _CheckWheel()
       RETURN NIL
    ENDIF
    RETURN iif( nWheel > 0, -15, -16 )
+/* Check for mouse button/drag events via the C helper (AGCON_PEEKMOUSE).
+ * gtwin maps these to -99 which is useless, so we peek at the raw queue
+ * before Inkey() can consume them.  Returns -19 when a mouse event is
+ * pending, storing the event data in s_aMouseEvent for AGCON_MouseEvent().
+ * Returns NIL when nothing pending. */
+STATIC FUNCTION _CheckMouseEvent()
+   LOCAL aEvt
+   BEGIN SEQUENCE WITH {| o | Break( o ) }
+      aEvt := AGCON_PEEKMOUSE()
+   RECOVER
+      RETURN NIL
+   END SEQUENCE
+   IF aEvt == NIL .OR. ValType( aEvt ) != "A" .OR. Len( aEvt ) < 3
+      RETURN NIL
+   ENDIF
+   s_aMouseEvent := aEvt
+   RETURN -19
+
+/* Return the last peeked mouse event {nType, nRow, nCol} or NIL. */
+FUNCTION AGCON_MouseEvent()
+   LOCAL aEvt := s_aMouseEvent
+   s_aMouseEvent := NIL
+   RETURN aEvt
 
 /* Non-blocking peek of one raw key -> mapped, or NIL.
  * IMPORTANT: Inkey(0) waits FOREVER, and so does any timeout below one
@@ -246,6 +270,11 @@ STATIC FUNCTION _ReadKeyNB()
    _Init()
    // Check for mouse wheel first (gtwin drops these)
    nWheel := _CheckWheel()
+   IF nWheel != NIL
+      RETURN nWheel
+   ENDIF
+   // Check for mouse button/drag events before Inkey consumes them
+   nWheel := _CheckMouseEvent()
    IF nWheel != NIL
       RETURN nWheel
    ENDIF
@@ -289,6 +318,11 @@ FUNCTION AGCON_ReadKey()
    DO WHILE .T.
       // Check for mouse wheel before blocking on Inkey (gtwin drops these)
       nWheel := _CheckWheel()
+      IF nWheel != NIL
+         RETURN nWheel
+      ENDIF
+      // Check for mouse button/drag events before Inkey consumes them
+      nWheel := _CheckMouseEvent()
       IF nWheel != NIL
          RETURN nWheel
       ENDIF

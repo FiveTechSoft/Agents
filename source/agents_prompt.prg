@@ -463,12 +463,6 @@ FUNCTION AGPROMPT_Poll( oPrompt )
    LOCAL oEd := oPrompt[ "editor" ], nKey, hC, cAction := "none", lDrained := .F.
    LOCAL cHist, nNow, lBurst := .F., nLines, cSubmit, cPlaceholder, nNext
    DO WHILE AGCON_KeyPending()
-      // Check for mouse selection events before key processing.
-      // AGCON_PEEKMOUSE consumes the raw event so gtwin never sees it.
-      IF AGMSEL_CheckEvent( oPrompt )
-         lDrained := .T.
-         LOOP
-      ENDIF
       lDrained := .T.
       nKey := AGCON_ReadKey()
       // Safety: never treat raw CR/LF as printable insert
@@ -601,6 +595,9 @@ FUNCTION AGPROMPT_Poll( oPrompt )
          AGPROMPT_HandleWheel( oPrompt, nKey )
       CASE nKey == -17 .OR. nKey == -18       // PgUp/PgDn / Ctrl+Up/Down
          AGPROMPT_HandleScrollKey( oPrompt, nKey )
+      CASE nKey == -19                      // Mouse button/drag event
+         // Read the event from the C helper and route to selection handler.
+         AGMSEL_HandleEvent( oPrompt )
       CASE nKey == -11 ; AGIN_Insert( oEd, Chr(10) )   // Shift+Enter -> newline
       CASE nKey > 0 ; AGIN_Insert( oEd, AGCON_PrintableText( nKey ) )
       // other keys (Tab, Ctrl+C, unmapped) are ignored mid-prompt

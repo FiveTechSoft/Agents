@@ -11,7 +11,7 @@
 //   Each selected screen row maps to a ring-buffer line via the viewport math
 //   (same formula as AGPROMPT_ScrollTranscript).
 //
-// Integration: AGPROMPT_Poll calls AGMSEL_CheckEvent() in its drain loop.
+// Integration: AGPROMPT_Poll calls AGMSEL_HandleEvent() in its drain loop.
 // If a click lands in the transcript region (above the box), selection begins.
 // While selecting, each mouse-drag repaints the affected rows with reverse
 // video.  On button-up the text is extracted, ANSI-stripped, and sent to the
@@ -28,11 +28,11 @@ STATIC s_nCurRow   := 0      // current screen row during drag
 #define MSEL_TRIM_RIGHT  .T.
 
 // ---------------------------------------------------------------------------
-// AGMSEL_CheckEvent( oPrompt ) -- called from AGPROMPT_Poll drain loop.
+// AGMSEL_HandleEvent( oPrompt ) -- called from AGPROMPT_Poll drain loop.
 //   Returns .T. when the event was consumed (selection active or finished).
 //   Returns .F. when nothing happened (no mouse event pending).
 // ---------------------------------------------------------------------------
-FUNCTION AGMSEL_CheckEvent( oPrompt )
+FUNCTION AGMSEL_HandleEvent( oPrompt )
    LOCAL aEvt, nType, nRow, nCol
    LOCAL hReg, nTop, nBot, nCols
    LOCAL nStart, nEnd, nViewport, nTotal
@@ -45,12 +45,8 @@ FUNCTION AGMSEL_CheckEvent( oPrompt )
    ENDIF
    hReg := oPrompt[ "region" ]
 
-   // Peek for a mouse event
-   BEGIN SEQUENCE WITH {| o | Break( o ) }
-      aEvt := AGCON_PEEKMOUSE()
-   RECOVER
-      RETURN .F.
-   END SEQUENCE
+   // Read the mouse event stored by _CheckMouseEvent() in agents_console.prg
+   aEvt := AGCON_MouseEvent()
 
    IF aEvt == NIL .OR. ValType( aEvt ) != "A" .OR. Len( aEvt ) < 3
       RETURN .F.
