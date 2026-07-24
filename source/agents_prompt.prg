@@ -480,8 +480,7 @@ FUNCTION AGPROMPT_Poll( oPrompt )
       // All other keys drop the scroll overlay and return to live output.
       IF AGSB_IsScrolling() .AND. ;
          !( nKey == -15 ) .AND. !( nKey == -16 ) .AND. ;
-         !( nKey == -17 ) .AND. !( nKey == -18 ) .AND. ;
-         !( nKey == -19 )
+         !( nKey == -17 ) .AND. !( nKey == -18 )
      ENDIF
 
       // any non-Esc key cancels a pending first-Esc -- double-tap must
@@ -594,16 +593,13 @@ FUNCTION AGPROMPT_Poll( oPrompt )
          AGPROMPT_HandleWheel( oPrompt, nKey )
       CASE nKey == -17 .OR. nKey == -18       // PgUp/PgDn / Ctrl+Up/Down
          AGPROMPT_HandleScrollKey( oPrompt, nKey )
-      CASE nKey == -19                      // Mouse button/drag event
-         // Read the event from the C helper and route to selection handler.
-         AGMSEL_HandleEvent( oPrompt )
       CASE nKey == -11 ; AGIN_Insert( oEd, Chr(10) )   // Shift+Enter -> newline
       CASE nKey > 0 ; AGIN_Insert( oEd, AGCON_PrintableText( nKey ) )
       // other keys (Tab, Ctrl+C, unmapped) are ignored mid-prompt
       ENDCASE
       // Repaint after every key so the user sees input immediately.
       // (Batching at the end failed to run under some WSL drain paths.)
-      IF nKey != -19 .AND. ( nKey != -1 .OR. cAction == "none" )
+      IF ( nKey != -1 .OR. cAction == "none" )
          AGPROMPT_Redraw( oPrompt )
       ENDIF
       IF cAction == "interrupt"

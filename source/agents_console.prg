@@ -21,7 +21,6 @@
 STATIC s_nPending  := NIL   // one already-mapped AGCON code, or NIL
 STATIC s_cLastChar := ""    // hb_keyChar() text of last printable key
 STATIC s_lInit     := .F.
-STATIC s_aMouseEvent := NIL   // last peeked mouse event {nType,nRow,nCol}
 STATIC s_lMouseBtnHeld := .F.
 
 /* One-time GT setup, same spirit as hbIDE: New() / Activate(). */
@@ -96,18 +95,6 @@ FUNCTION AGCON_RawMode( lOn )
    RETURN .T.
 
 
-/* Safely read mouse coordinates.  Returns { nType, nRow, nCol } or
- * { nType, 0, 0 } when MRow/MCol fails. */
-STATIC FUNCTION _MouseCoord( nType )
-   LOCAL nRow := 0, nCol := 0
-   BEGIN SEQUENCE WITH {| o | Break( o ) }
-      nRow := MRow() + 1
-      nCol := MCol() + 1
-   RECOVER
-      nRow := 0
-      nCol := 0
-   END SEQUENCE
-   RETURN { nType, nRow, nCol }
 /* Map a raw Inkey code to AGCON codes, hbIDE-style:
  *   specials via hb_keyStd(), printables via hb_keyChar(). */
 STATIC FUNCTION _MapRaw( nRaw )
@@ -168,22 +155,20 @@ STATIC FUNCTION _MapRaw( nRaw )
       RETURN -15
    CASE nStd == K_MWBACKWARD .OR. nRaw == K_MWBACKWARD .OR. nRaw == 1015
       RETURN -16
-   // Left button down/up -> route to selection handler with coordinates
+   // Mouse button/move events: handle selection directly (like test_mselect).
    CASE nStd == K_LBUTTONDOWN
       s_lMouseBtnHeld := .T.
-      s_aMouseEvent := { 1, MRow() + 1, MCol() + 1 }
-      RETURN -19
+      AGMSEL_OnButton( 1, MRow() + 1, MCol() + 1 )
+      RETURN -99
    CASE nStd == K_LBUTTONUP
       s_lMouseBtnHeld := .F.
-      s_aMouseEvent := { 2, MRow() + 1, MCol() + 1 }
-      RETURN -19
-   // Mouse move while left button held (drag) -> selection handler
+      AGMSEL_OnButton( 2, MRow() + 1, MCol() + 1 )
+      RETURN -99
    CASE nStd == K_MOUSEMOVE .AND. s_lMouseBtnHeld
-      s_aMouseEvent := { 3, MRow() + 1, MCol() + 1 }
-      RETURN -19
+      AGMSEL_OnButton( 3, MRow() + 1, MCol() + 1 )
+      RETURN -99
    // Other mouse events: ignore (never return 0 -- it means EOF/exit)
    CASE nStd == K_RBUTTONDOWN .OR. nStd == K_RBUTTONUP .OR. ;
-        nStd == K_MOUSEMOVE .OR. ;
         ( nRaw >= K_MINMOUSE .AND. nRaw <= 1018 )
       RETURN -99
    ENDCASE
@@ -258,30 +243,6 @@ STATIC FUNCTION _CheckWheel()
       RETURN NIL
    ENDIF
    RETURN iif( nWheel > 0, -15, -16 )
-/* Check for mouse button/drag events via the C helper (AGCON_PEEKMOUSE).
- * gtwin maps these to -99 which is useless, so we peek at the raw queue
- * before Inkey() can consume them.  Returns -19 when a mouse event is
- * pending, storing the event data in s_aMouseEvent for AGCON_MouseEvent().
- * Returns NIL when nothing pending. */
-STATIC FUNCTION _CheckMouseEvent()
-   LOCAL aEvt
-   BEGIN SEQUENCE WITH {| o | Break( o ) }
-      aEvt := AGCON_PEEKMOUSE()
-   RECOVER
-      RETURN NIL
-   END SEQUENCE
-   IF aEvt == NIL .OR. ValType( aEvt ) != "A" .OR. Len( aEvt ) < 3
-      RETURN NIL
-   ENDIF
-   s_aMouseEvent := aEvt
-   RETURN -19
-
-/* Return the last peeked mouse event {nType, nRow, nCol} or NIL. */
-FUNCTION AGCON_MouseEvent()
-   LOCAL aEvt := s_aMouseEvent
-   s_aMouseEvent := NIL
-   RETURN aEvt
-
 /* Non-blocking peek of one raw key -> mapped, or NIL.
  * IMPORTANT: Inkey(0) waits FOREVER, and so does any timeout below one
  * hundredth of a second: hbgtcore.c hb_gt_def_InkeyGet() computes
