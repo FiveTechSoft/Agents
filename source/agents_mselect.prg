@@ -1,9 +1,10 @@
 // agents_mselect.prg -- Mouse text selection in the transcript viewport.
 //
-// Click-and-drag highlights text with white background.
+// Click-and-drag highlights text with reverse video.
 // Only selected rows are repainted; non-selected rows untouched.
-// Strategy: INSERT highlight escape codes into the original ANSI line
-// at the exact byte positions, so only the background changes.
+// Strategy: INSERT ESC[7m (reverse video) into the original ANSI line
+// at the exact byte positions. This inverts whatever colors are there,
+// making the selection visible regardless of original foreground/background.
 // Single FWrite per paint for flicker-free operation.
 
 #include "inkey.ch"
@@ -150,12 +151,11 @@ STATIC FUNCTION _MSEL_ClipLine( cLine, nRow, nRowTop, nRowBot )
 //
 // For each selected row, we INSERT two ANSI escape codes into the
 // original ring buffer line:
-//   ESC[48;5;15m  before the first selected character (white background)
-//   ESC[49m       after the last selected character  (reset background)
+//   ESC[7m   before the first selected character (reverse video on)
+//   ESC[27m  after the last selected character  (reverse video off)
 //
-// This changes ONLY the background of the selected characters.
-// The original foreground color, bold, dim, etc. are ALL preserved.
-// Non-selected rows are NOT touched at all.
+// Reverse video inverts fg/bg, so the selection is visible regardless
+// of the original color scheme. Non-selected rows are NOT touched.
 // ---------------------------------------------------------------------------
 STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
    LOCAL nTotal, nStart, nEnd
@@ -209,7 +209,6 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
                nTo := Len( aMap )
             ENDIF
          ELSE
-            // No visible characters -- just clear and write original
             cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + ;
                     Chr(27) + "[2K" + cOrig
             LOOP
@@ -225,17 +224,12 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
          nByteFrom := aMap[ nFrom ]
          nByteTo   := aMap[ nTo ]
 
-         // Build output: insert ESC[48;5;15m before selected, ESC[49m after
-         //
-         //   cOrig[1..nByteFrom-1] + ESC[bg-white] + cOrig[nByteFrom..nByteTo] + ESC[bg-reset] + cOrig[nByteTo+1..end]
-         //
-         // This changes ONLY the background color of the selected characters.
-         // All original foreground colors, bold, dim, etc. are preserved.
+         // Position cursor, clear line, insert reverse-video markers
          cOut += Chr(27) + "[" + LTrim( Str( nRow ) ) + ";1H" + Chr(27) + "[2K"
          cOut += Left( cOrig, nByteFrom - 1 )
-         cOut += Chr(27) + "[48;5;15m"
+         cOut += Chr(27) + "[7m"
          cOut += SubStr( cOrig, nByteFrom, nByteTo - nByteFrom + 1 )
-         cOut += Chr(27) + "[49m"
+         cOut += Chr(27) + "[27m"
          cOut += SubStr( cOrig, nByteTo + 1 )
       ENDIF
    NEXT
@@ -245,34 +239,66 @@ STATIC FUNCTION _MSEL_Paint( oPrompt, nTop, nBot, nCols, nViewport )
 // ---------------------------------------------------------------------------
 // _MSEL_MapColumns -- parse an ANSI string and return an array mapping
 // 1-based visual column -> 1-based byte position in the original string.
-// ANSI escape sequences are skipped (they don't occupy visual columns).
+// All escape sequences (CSI and non-CSI) are skipped.
 // ---------------------------------------------------------------------------
 STATIC FUNCTION _MSEL_MapColumns( cText )
-   LOCAL aMap := {}, i, cCh, lEsc := .F., lCSI := .F., nVis := 0
+   LOCAL aMap := {}, i, cCh, nVis := 0
+   LOCAL nState := 0   // 0=normal, 1=ESC seen, 2=CSI param, 3=OSC param
    IF ValType( cText ) != "C" .OR. Empty( cText )
       RETURN aMap
    ENDIF
    FOR i := 1 TO Len( cText )
       cCh := SubStr( cText, i, 1 )
-      IF lCSI
-         IF Asc( cCh ) >= 64 .AND. Asc( cCh ) <= 126
-            lCSI := .F.
-            lEsc := .F.
-         ENDIF
-      ELSEIF lEsc
-         IF cCh == "["
-            lCSI := .T.
+      DO CASE
+      CASE nState == 0
+         IF Asc( cCh ) == 27
+            nState := 1        // ESC seen, wait for type char
          ELSE
-            lEsc := .F.
+            nVis++
+            IF nVis <= 200
+               AAdd( aMap, i )
+            ENDIF
          ENDIF
-      ELSEIF Asc( cCh ) == 27
-         lEsc := .T.
-      ELSE
-         nVis++
-         IF nVis <= 200  // safety cap
-            AAdd( aMap, i )
+      CASE nState == 1
+         // Character after ESC determines the sequence type
+         IF cCh == "["
+            nState := 2        // CSI: ESC[ ... final_byte
+         ELSEIF cCh == "]"
+            nState := 3        // OSC: ESC] ... ST or BEL
+         ELSE
+            nState := 0        // Two-byte sequence (ESC X), back to normal
          ENDIF
-      ENDIF
+      CASE nState == 2
+         // CSI: consume until final byte (0x40-0x7E)
+         IF Asc( cCh ) >= 64 .AND. Asc( cCh ) <= 126
+            nState := 0
+         ENDIF
+      CASE nState == 3
+         // OSC: consume until ST (ESC\) or BEL (0x07)
+         IF Asc( cCh ) == 7        // BEL
+            nState := 0
+         ELSEIF Asc( cCh ) == 27   // ESC -- might be start of ST
+            // Check if next byte is '\' (but we can't peek, so mark ESC)
+            // We'll handle ESC\ in state 4
+            nState := 4
+         ENDIF
+      CASE nState == 4
+         // After ESC inside OSC: if '\', end OSC; otherwise restart
+         IF cCh == "\"
+            nState := 0        // ST found: ESC\
+         ELSE
+            // ESC followed by something else inside OSC -- treat as new ESC
+            IF Asc( cCh ) == 27
+               nState := 1
+            ELSEIF cCh == "["
+               nState := 2
+            ELSEIF cCh == "]"
+               nState := 3
+            ELSE
+               nState := 0
+            ENDIF
+         ENDIF
+      ENDCASE
    NEXT
    RETURN aMap
 
@@ -303,28 +329,51 @@ STATIC FUNCTION _MSEL_PaintClean( oPrompt, nTop, nBot, nCols, nViewport )
 
 // ---------------------------------------------------------------------------
 STATIC FUNCTION _MSEL_StripAnsi( cText )
-   LOCAL cOut := "", i, cCh, lEsc := .F., lCSI := .F.
+   LOCAL cOut := "", i, cCh
+   LOCAL nState := 0   // 0=normal, 1=ESC seen, 2=CSI param, 3=OSC param, 4=OSC ESC
    IF ValType( cText ) != "C" .OR. Empty( cText )
       RETURN ""
    ENDIF
    FOR i := 1 TO Len( cText )
       cCh := SubStr( cText, i, 1 )
-      IF lCSI
-         IF Asc( cCh ) >= 64 .AND. Asc( cCh ) <= 126
-            lCSI := .F.
-            lEsc := .F.
-         ENDIF
-      ELSEIF lEsc
-         IF cCh == "["
-            lCSI := .T.
+      DO CASE
+      CASE nState == 0
+         IF Asc( cCh ) == 27
+            nState := 1
          ELSE
-            lEsc := .F.
+            cOut += cCh
          ENDIF
-      ELSEIF Asc( cCh ) == 27
-         lEsc := .T.
-      ELSE
-         cOut += cCh
-      ENDIF
+      CASE nState == 1
+         IF cCh == "["
+            nState := 2
+         ELSEIF cCh == "]"
+            nState := 3
+         ELSE
+            nState := 0
+         ENDIF
+      CASE nState == 2
+         IF Asc( cCh ) >= 64 .AND. Asc( cCh ) <= 126
+            nState := 0
+         ENDIF
+      CASE nState == 3
+         IF Asc( cCh ) == 7
+            nState := 0
+         ELSEIF Asc( cCh ) == 27
+            nState := 4
+         ENDIF
+      CASE nState == 4
+         IF cCh == "\"
+            nState := 0
+         ELSEIF Asc( cCh ) == 27
+            nState := 1
+         ELSEIF cCh == "["
+            nState := 2
+         ELSEIF cCh == "]"
+            nState := 3
+         ELSE
+            nState := 0
+         ENDIF
+      ENDCASE
    NEXT
    RETURN cOut
 
