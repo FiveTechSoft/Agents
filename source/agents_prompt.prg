@@ -603,8 +603,7 @@ FUNCTION AGPROMPT_Poll( oPrompt )
       ENDCASE
       // Repaint after every key so the user sees input immediately.
       // (Batching at the end failed to run under some WSL drain paths.)
-      IF nKey != -1 .OR. cAction == "none"
-         AGPROMPT_Redraw( oPrompt )
+      IF nKey != -1 .AND. nKey != -19 .OR. cAction == "none"
      ENDIF
       IF cAction == "interrupt"
          EXIT   // stop draining once an interrupt is seen
