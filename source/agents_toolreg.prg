@@ -25,6 +25,10 @@ FUNCTION AGTOOLS_Registry( hKeys )
    AGTOOLS_Register( oReg, AGTOOL_DispatchAgent() )
    AGTOOLS_Register( oReg, AGTOOL_DispatchAgentBackground() )
    AGTOOLS_Register( oReg, AGTOOL_ProposeAgents() )
+   AGTOOLS_Register( oReg, AGTOOL_GrokChat() )
+   AGTOOLS_Register( oReg, AGTOOL_GrokList() )
+   AGTOOLS_Register( oReg, AGTOOL_DeepSeekChat() )
+   AGTOOLS_Register( oReg, AGTOOL_DeepSeekList() )
    RETURN oReg
 
 // Strips a tool registry down to the set allowed for a subagent of the
