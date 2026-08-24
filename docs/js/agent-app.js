@@ -1589,7 +1589,11 @@ let acItems=[], acIdx=-1;
 function acOpen(){ const d=document.getElementById('acdd'); return d && d.style.display==='block'; }
 function acPlace(){ const i=document.getElementById('prompt'), d=document.getElementById('acdd');
   if(!i||!d) return; const r=i.getBoundingClientRect();
-  d.style.left=r.left+'px'; d.style.top=(r.bottom+6)+'px'; d.style.width=r.width+'px'; }
+  // open UPWARD: the prompt sits at the bottom of the screen
+  d.style.left=r.left+'px';
+  d.style.bottom=(window.innerHeight-r.top+6)+'px';
+  d.style.top='auto';
+  d.style.width=r.width+'px'; }
 function acClose(){ const d=document.getElementById('acdd'); if(d){ d.style.display='none'; } acItems=[]; acIdx=-1; }
 function acRender(){
   const d=document.getElementById('acdd');

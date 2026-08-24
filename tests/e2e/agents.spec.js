@@ -18,6 +18,10 @@ test('slash autocomplete opens with filtered options', async ({ page }) => {
   const items = page.locator('#acdd .ac-item');
   await expect(items).toHaveCount(7);            // clear, cost, compact, clone, cc, classify, cron
   await expect(items.first()).toContainText('/clear');
+  // the dropdown must open UPWARD (above the input)
+  const dd = await page.locator('#acdd').boundingBox();
+  const inp = await input.boundingBox();
+  expect(dd.y + dd.height).toBeLessThanOrEqual(inp.y + 1);
 });
 
 test('/help opens the commands card', async ({ page }) => {
