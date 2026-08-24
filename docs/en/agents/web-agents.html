@@ -16,7 +16,7 @@
 
   <main id="content">
     <h1>Web Agents</h1>
-    <p>Agents that run entirely in the browser using WebView2 or as standalone HTML5/JS applications. No server required — the AI agent logic runs client-side with transformers.js for local inference or connects to cloud APIs (DeepSeek, OpenAI, Ollama).</p>
+    <p>Agents that run entirely in the browser using WebView2 or as standalone HTML5/JS applications. No server required — the AI agent logic runs client-side with transformers.js or connects to cloud APIs (<a href="https://github.com/anomalyco/opencode" target="_blank">OpenCode</a> Ox Alpha, DeepSeek, OpenAI, Ollama). Default model: <strong>Ox Alpha</strong> (<code>x-preview-f-free</code>) via the OpenCode Zen API — free, no API key — with automatic fallback to the other free OpenCode models when unavailable.</p>
 
     <h2 id="architecture">Architecture</h2>
     <div class="mermaid">
@@ -26,7 +26,7 @@ graph TD
     C --> D[Tool Registry]
     C --> E[Skills System]
     C --> F[API Client]
-    F --> G[DeepSeek / OpenAI / Ollama]
+    F --> G[OpenCode Zen: Ox Alpha + free fallbacks / DeepSeek / OpenAI / Ollama]
     D --> H[read / write / shell / grep...]
     E --> I[.md skill files]
     </div>
@@ -35,7 +35,7 @@ graph TD
     <ul>
       <li><strong>Zero-install:</strong> Runs in any modern browser or embedded WebView2 control</li>
       <li><strong>Local AI:</strong> Transformer.js for on-device inference (no cloud required)</li>
-      <li><strong>Cloud AI:</strong> Connects to DeepSeek, OpenAI, Ollama, or any OpenAI-compatible API</li>
+      <li><strong>Cloud AI:</strong> Connects to OpenCode (Ox Alpha), DeepSeek, OpenAI, Ollama, or any OpenAI-compatible API</li>
       <li><strong>Streaming SSE:</strong> Real-time token-by-token streaming responses</li>
       <li><strong>17 Built-in Tools:</strong> read, write, edit, glob, grep, shell, web_search, web_fetch, github_read, github_write, memory, ask_user, todo_write, use_skill, dispatch_agent, dispatch_agent_background, propose_agents</li>
       <li><strong>Skills System:</strong> Markdown-based skill files with YAML frontmatter, auto-activation via trigger regex</li>
@@ -44,12 +44,32 @@ graph TD
     </ul>
 
     <h2 id="quick-start">Quick Start</h2>
-    <pre><code>// Create a Web Agent
+    <pre><code>// Create a Web Agent powered by Ox Alpha (OpenCode Zen)
+// https://github.com/anomalyco/opencode — no API key required
 const agent = new Agent({
-  apiKey: 'sk-...',
-  model: 'deepseek-v4-pro',
-  baseUrl: 'https://api.deepseek.com'
-});
+  model: 'x-preview-f-free',              // Ox Alpha Free
+  baseUrl: 'https://opencode.ai/zen/v1',
+  apiKey: 'public',
+  fallbackModels: await discoverFreeModels()
+});</code></pre>
+
+    <h2 id="free-models">Free Models &amp; Dynamic Fallback</h2>
+    <p>Web Agents query the OpenCode Zen endpoint <code>GET /models</code> at startup to <strong>dynamically discover which free models are available</strong> (ids ending in <code>-free</code>). The retry order always starts with <strong>Ox Alpha</strong> (<code>x-preview-f-free</code>), then <strong>Mimo</strong> (<code>mimo-v2.5-free</code>), followed by the remaining free models as reported by the API:</p>
+    <pre><code>// Discover free models from OpenCode Zen, ordered by preference
+async function discoverFreeModels() {
+  const PREFERRED = ['x-preview-f-free', 'mimo-v2.5-free']; // Ox Alpha, Mimo
+  const res = await fetch('https://opencode.ai/zen/v1/models', {
+    headers: { 'Authorization': 'Bearer public' }
+  });
+  const { data } = await res.json();
+  const free = data.map(m => m.id).filter(id => id.endsWith('-free'));
+  // Preferred models first, remaining free models by availability
+  return [
+    ...PREFERRED.filter(id => free.includes(id)),
+    ...free.filter(id => !PREFERRED.includes(id))
+  ];
+}</code></pre>
+    <p>If a request fails (rate limit, upstream error, timeout), the Agent automatically retries with the next model in the list.</p>
 
 // Run a task
 const result = await agent.run('Find all .prg files and summarize them');

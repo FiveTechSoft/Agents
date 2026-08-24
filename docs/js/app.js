@@ -3,6 +3,7 @@
 // Search index
 var searchIndex = [
   { k: "web agents browser online html5 javascript tool calling web agent", t: "Web Agents", u: "../../en/agents/web-agents.html", s: "Agents" },
+  { k: "free models opencode zen ox alpha x-preview-f-free mimo fallback dynamic discovery", t: "Free Models & Fallback", u: "../../en/agents/web-agents.html#free-models", s: "Agents" },
   { k: "agents exe executable windows desktop harbour fivewin standalone", t: "Agents EXE", u: "../../en/agents/agents-exe.html", s: "Agents" },
   { k: "agents apk android mobile phone tablet harbour apk", t: "Agents APK", u: "../../en/agents/agents-apk.html", s: "Agents" },
   { k: "class agent tools skills planning multi agent dispatch oop harbour", t: "Class Agent", u: "../../en/agents/agents-exe.html#class-agent", s: "Agents" },
