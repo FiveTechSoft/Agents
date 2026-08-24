@@ -1648,8 +1648,8 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
     await fsDel(p); refreshDisk(); return 'deleted '+p; }
   if(name==='ask_user'){ return 'El usuario respondio: '+(await askUser(args.question, args.options)); }
   if(name==='dispatch_agents'){ return await dispatchAgents(args.tasks||[], args.contract||''); }
-  if(name==='web_search'){ try{ const r=await fetch('https://s.jina.ai/'+encodeURIComponent(args.query||''),{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,4000); }catch(e){ return 'web_search error: '+e; } }
-  if(name==='web_fetch'){ try{ const u=(args.url||''); const r=await fetch('https://r.jina.ai/'+u,{headers:{'Accept':'text/plain'}}); return (await r.text()).slice(0,6000); }catch(e){ return 'web_fetch error: '+e; } }
+  if(name==='web_search'){ return await webSearchTool(args.query||''); }
+  if(name==='web_fetch'){ try{ const u=(args.url||''); const r=await fetch(WEBPROXY+encodeURIComponent(u)); const t=await r.text(); if(!r.ok) throw new Error('HTTP '+r.status); return t.slice(0,6000); }catch(e){ return 'web_fetch error: '+e; } }
   if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
@@ -1767,6 +1767,25 @@ async function dispatchAgents(tasks,contract){
 }
 
 function getKey(){ return 'public'; }   // OpenCode Zen free models need no API key
+
+/* ===== Web search / fetch via fivetechsoft.com proxy (Jina anonymous is blocked) ===== */
+const WEBPROXY='https://api.fivetechsoft.com/webfetch.php?url=';
+// web_search: Wikipedia API (ES + EN) through the outbound fetch proxy, like termux
+async function webSearchTool(query){
+  const q=encodeURIComponent(query);
+  let out='';
+  for(const lang of ['es','en']){
+    try{
+      const u='https://'+lang+'.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=5&srsearch='+q;
+      const r=await fetch(WEBPROXY+encodeURIComponent(u));
+      if(!r.ok) continue;
+      const j=await r.json();
+      const hits=((j.query&&j.query.search)||[]).map(s=>'['+lang+'] '+s.title+'\nhttps://'+lang+'.wikipedia.org/wiki/'+encodeURIComponent(s.title.replace(/ /g,'_'))+'\n'+(s.snippet||'').replace(/<[^>]+>/g,''));
+      if(hits.length) out+=(out?'\n':'')+hits.join('\n\n');
+    }catch(e){}
+  }
+  return out ? out.slice(0,4000) : 'web_search: sin resultados para "'+query+'"';
+}
 
 /* ===== OpenCode Zen: dynamic free-model discovery + fallback ===== */
 const OC_URL='https://api.fivetechsoft.com/zen/v1';   // OpenCode Zen via fivetechsoft.com proxy
