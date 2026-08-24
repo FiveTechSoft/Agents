@@ -22,3 +22,5 @@ scripts/error.log
 .env
 .env.*
 !.env.example
+node_modules/
+test-results/
