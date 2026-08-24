@@ -1583,6 +1583,7 @@ const SLASH_CMDS=[
   ['/py','Ejecuta código Python sobre el disco','Run Python code on the disk'],
   ['/cc','Compila y ejecuta C con clang (WASM)','Compile and run C with clang (WASM)'],
   ['/classify','Clasifica ficheros del disco con IA local','Classify disk files with local AI'],
+  ['/ssh','Conexión SSH a un servidor remoto','SSH connection to a remote server'],
   ['/exit','Cierra la sesión actual','Close the current session']
 ];
 let acItems=[], acIdx=-1;
@@ -2640,7 +2641,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/perm','Permisos: allow·ask·deny por tool'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/perm','Permisos: allow·ask·deny por tool'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/classify','Clasifica ficheros con IA local'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub'],['/key','Info API key (no se necesita)'],['/clear','Limpiar conversación'],['/help','Esta ayuda']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
