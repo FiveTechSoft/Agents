@@ -1712,7 +1712,7 @@ async function runDemoLLM(){
   const seq=['/goal '+topic, '/plan',
     T('Crea un fichero (en el disco virtual) relacionado con: '+topic+'. Inventa un nombre adecuado y un contenido breve.','Create a file (on the virtual disk) related to: '+topic+'. Invent a suitable name and short content.'),
     T('Ahora edita ese fichero para ampliarlo un poco','Now edit that file to expand it a bit'), '/cost',
-    '/action list', '/action runs'];
+    '/action list', '/action runs', '/cron'];
   for(const p of seq){ const i=document.getElementById('prompt'); i.value=p; await run(); await sleep(900); }
   tool('✓ Demo (LLM) completada.');
   setWorking(false);
