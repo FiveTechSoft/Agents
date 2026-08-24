@@ -1511,7 +1511,12 @@ async function actionCmd(arg){
     }catch(e){ tool('/action error: '+e); } finally{ setWorking(false); }
     return;
   }
-  tool('action: list | runs | run <workflow> [rama]');
+  tool('Uso: /action list | runs | run <workflow.yml|nombre> [rama]\n'+
+       'Ejemplos:\n'+
+       '  /action list                    — workflows del repo actual\n'+
+       '  /action run pages-build-deployment\n'+
+       '  /action run build.yml main      — dispara y sigue el progreso\n'+
+       '  /action runs                    — últimos 8 runs con estado');
 }
 async function actionDefaultBranch(repo,H){
   try{ const j=await (await fetch('https://api.github.com/repos/'+repo,{headers:H})).json(); return j.default_branch||'main'; }catch(e){ return 'main'; }
@@ -1533,6 +1538,62 @@ async function actionWaitRun(repo,wfName,ref,H){
   }
   tool('/action: timeout esperando el run. Mira el estado con /action runs.');
 }
+
+/* ===== /cron — tareas programadas (local y nube) ===== */
+const cronJobs=(()=>{ try{ return JSON.parse(localStorage.getItem('crons')||'[]'); }catch(e){ return []; } })();
+function cronSave(){ try{ localStorage.setItem('crons',JSON.stringify(cronJobs)); }catch(e){} }
+function cronParseEvery(s){ const m=/^(\d+)(m|h|d)$/i.exec(s||''); if(!m) return 0;
+  return parseInt(m[1])*({m:60e3,h:3600e3,d:86400e3})[m[2].toLowerCase()]; }
+async function cronCmd(arg){
+  arg=(arg||'').trim();
+  if(arg==='gh'||arg.startsWith('gh ')){
+    const m=/^gh\s+"([^"]+)"\s+(.+)$/.exec(arg);
+    if(!m){ tool('Uso: /cron gh "*/15 * * * *" <descripción de la tarea>'); return; }
+    const sched=m[1], task=m[2];
+    if(!/^\S+\s+\S+\s+\S+\s+\S+\s+\S+$/.test(sched)){ tool('/cron: expresión cron inválida (5 campos): '+sched); return; }
+    const yml='name: Agents Cron\n'+
+      'on:\n  schedule:\n    - cron: "'+sched+'"\n  workflow_dispatch: {}\n'+
+      'jobs:\n  task:\n    runs-on: ubuntu-latest\n    steps:\n'+
+      '      - uses: actions/checkout@v4\n'+
+      '      - name: Tarea programada (edita este paso)\n        run: |\n'+
+      '          echo "Tarea: '+task.replace(/"/g,'\\"')+'"\n'+
+      '          # Edita este paso con lo que quieras ejecutar en la nube\n';
+    await fsPut('.github/workflows/agents-cron.yml',yml); refreshDisk();
+    tool('✓ Creado .github/workflows/agents-cron.yml con schedule "'+sched+'".\nEdita el paso "Tarea programada" (/edit .github/workflows/agents-cron.yml … o sh cat) y sube los cambios con /git push. Se disparará en la nube aunque cierres el navegador.\nCompruébalo después con /action runs.');
+    flowAdd('tool','/cron gh '+sched,yml.slice(0,300));
+    return;
+  }
+  if(/^del\s+\d+$/i.test(arg)){
+    const id=parseInt(arg.split(/\s+/)[1]); const ix=cronJobs.findIndex(j=>j.id===id);
+    if(ix<0){ tool('/cron: no existe la tarea #'+id+'. Usa /cron para listar.'); return; }
+    const removed=cronJobs.splice(ix,1)[0]; cronSave();
+    tool('✕ Tarea #'+id+' eliminada ('+removed.everyLabel+' · '+removed.cmd+').'); return;
+  }
+  if(!arg || arg==='list'){
+    tool(cronJobs.length?
+      cronJobs.map(j=>'#'+j.id+' · cada '+j.everyLabel+' · '+j.cmd).join('\n')+'\n\n/cron del <id> elimina · /cron gh "<schedule>" <tarea> crea un workflow en GitHub Actions.' :
+      'Sin tareas programadas.\nUso:\n  /cron <30m|2h|1d> <comando>   — repite un comando mientras esta pestaña esté abierta (ej: /cron 30m /action runs)\n  /cron del <id>                — elimina una tarea\n  /cron gh "*/15 * * * *" <tarea> — programa en la nube vía GitHub Actions');
+    return;
+  }
+  const sp=arg.indexOf(' ');
+  if(sp<0){ tool('Uso: /cron <30m|2h|1d> <comando>'); return; }
+  const everyLabel=arg.slice(0,sp), cmd=arg.slice(sp+1).trim(), ms=cronParseEvery(everyLabel);
+  if(!ms || !cmd){ tool('Uso: /cron <30m|2h|1d> <comando>   — ej: /cron 30m /action runs'); return; }
+  const job={id:cronJobs.reduce((mx,j)=>Math.max(mx,j.id),0)+1, ms:ms, everyLabel:everyLabel, cmd:cmd, next:Date.now()+ms};
+  cronJobs.push(job); cronSave();
+  tool('⏰ Tarea #'+job.id+' programada cada '+everyLabel+': "'+cmd+'"\n(activa mientras esta pestaña esté abierta; se salta si el agente está ocupado).\nPara que corra en la nube sin navegador: /cron gh "*/'+Math.max(1,Math.round(ms/60e3))+' * * * *" '+cmd);
+}
+setInterval(()=>{
+  const now=Date.now(); let changed=false;
+  for(const j of cronJobs){
+    if(now<j.next) continue;
+    if(workN>0){ j.next=now+15000; changed=true; continue; }   // agent busy: retry soon
+    j.next=now+j.ms; changed=true;
+    tool('⏰ /cron ejecuta: '+j.cmd);
+    runCmd(j.cmd);
+  }
+  if(changed) cronSave();
+}, 20000);
 
 /* =====================================================================
    Mini command shell + optional LLM agent (OpenCode Zen free models, function calling).
@@ -1566,6 +1627,7 @@ const SLASH_CMDS=[
   ['/clone','Clona un repo de GitHub en el disco','Clone a GitHub repo into the disk'],
   ['/git','Operación git: status, add, commit, push…','Git operation: status, add, commit, push…'],
   ['/action','GitHub Actions: list, runs, run <workflow> [rama]','GitHub Actions: list, runs, run <workflow> [branch]'],
+  ['/cron','Tareas programadas: <30m|2h|1d> <cmd>, del <id>, gh "<schedule>" <tarea>','Scheduled tasks: <30m|2h|1d> <cmd>, del <id>, gh "<schedule>" <task>'],
   ['/share','Comparte la sesión mediante un enlace','Share the session via a link'],
   ['/skill','Gestiona skills (list, run, generate…)','Manage skills (list, run, generate…)'],
   ['/tool','Registra herramientas propias del usuario','Register user-defined tools'],
@@ -1649,7 +1711,8 @@ async function runDemoLLM(){
   tool('Tema de la demo: '+topic);
   const seq=['/goal '+topic, '/plan',
     T('Crea un fichero (en el disco virtual) relacionado con: '+topic+'. Inventa un nombre adecuado y un contenido breve.','Create a file (on the virtual disk) related to: '+topic+'. Invent a suitable name and short content.'),
-    T('Ahora edita ese fichero para ampliarlo un poco','Now edit that file to expand it a bit'), '/cost'];
+    T('Ahora edita ese fichero para ampliarlo un poco','Now edit that file to expand it a bit'), '/cost',
+    '/action list', '/action runs'];
   for(const p of seq){ const i=document.getElementById('prompt'); i.value=p; await run(); await sleep(900); }
   tool('✓ Demo (LLM) completada.');
   setWorking(false);
@@ -2419,6 +2482,7 @@ async function slashCmd(v){
       sshConnect(wsUrl, host+(port!==22?':'+port:''), user, true);
       break;
     }
+    case '/cron': await cronCmd(arg); break;
     case '/classify': {
       classifyCard();
       break;
@@ -2596,7 +2660,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
