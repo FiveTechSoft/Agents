@@ -99,10 +99,11 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
         </button>
         <input id="prompt" placeholder="comando: ls · write a.txt Hola · read a.txt · del a.txt · (o pregunta al LLM)"
-          onkeydown="promptKey(event)"
+          onkeydown="promptKey(event)" oninput="acUpdate()" onclick="acUpdate()"
           class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500">
         <button id="sendbtn" onclick="run()" class="bg-blue-600 hover:bg-blue-500 rounded-lg px-6 py-3 text-base font-semibold shrink-0">Enviar</button>
       </div>
+      <div id="acdd" class="hidden" style="position:fixed;z-index:60;display:none;max-height:320px;overflow-y:auto;background:#111827;border:1px solid #374151;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.55);"></div>
       <div class="text-[10px] text-gray-500 text-center mt-2 flex justify-center gap-4">
         <span><kbd class="bg-gray-700 px-1 rounded border border-gray-600">Ctrl</kbd>+<kbd class="bg-gray-700 px-1 rounded border border-gray-600">K</kbd> limpiar</span>
         <span><kbd class="bg-gray-700 px-1 rounded border border-gray-600">Esc</kbd> parar</span>
@@ -1478,7 +1479,81 @@ const hist=(()=>{ try{ return JSON.parse(localStorage.getItem('hist')||'[]'); }c
 let histI=hist.length;
 function saveHist(){ try{ localStorage.setItem('hist',JSON.stringify(hist.filter(c=>!/^\/(key|ghtoken)\s/i.test(c)).slice(-100))); }catch(e){} }
 function runCmd(cmd){ const p=document.getElementById('prompt'); p.value=cmd; run(); }
+/* ===== slash command autocomplete: dropdown under the prompt ===== */
+const SLASH_CMDS=[
+  ['/help','Muestra la ayuda con todos los comandos','Show help with all commands'],
+  ['/clear','Limpia la conversación y el disco de trabajo','Clear the conversation and flow'],
+  ['/cost','Métricas de la sesión (tokens, coste)','Session metrics (tokens, cost)'],
+  ['/compact','Compacta el contexto de la conversación','Compact the conversation context'],
+  ['/init','Crea AGENTS.md con reglas del proyecto','Create AGENTS.md with project rules'],
+  ['/key','Información sobre la API key (no se necesita)','Info about API key (not needed)'],
+  ['/ghtoken','Fija el token de GitHub para push/pull','Set GitHub token for push/pull'],
+  ['/goal','Fija o muestra el objetivo actual','Set or show current goal'],
+  ['/plan','Genera un plan en pasos (opcional: tarea)','Generate a step-by-step plan'],
+  ['/run','Ejecuta el plan actual','Run the current plan'],
+  ['/loop','Bucle autónomo hacia un objetivo','Autonomous loop toward a goal'],
+  ['/proxy','Fija el proxy CORS para git/binarios','Set CORS proxy for git/binaries'],
+  ['/clone','Clona un repo de GitHub en el disco','Clone a GitHub repo into the disk'],
+  ['/git','Operación git: status, add, commit, push…','Git operation: status, add, commit, push…'],
+  ['/share','Comparte la sesión mediante un enlace','Share the session via a link'],
+  ['/skill','Gestiona skills (list, run, generate…)','Manage skills (list, run, generate…)'],
+  ['/tool','Registra herramientas propias del usuario','Register user-defined tools'],
+  ['/sh','Ejecuta un comando de shell simulado','Run a simulated shell command'],
+  ['/btw','Interjección: nota para el agente en marcha','Aside: note for the running agent'],
+  ['/py','Ejecuta código Python sobre el disco','Run Python code on the disk'],
+  ['/cc','Compila y ejecuta C con clang (WASM)','Compile and run C with clang (WASM)'],
+  ['/classify','Clasifica ficheros del disco con IA local','Classify disk files with local AI'],
+  ['/exit','Cierra la sesión actual','Close the current session']
+];
+let acItems=[], acIdx=-1;
+function acOpen(){ const d=document.getElementById('acdd'); return d && d.style.display==='block'; }
+function acPlace(){ const i=document.getElementById('prompt'), d=document.getElementById('acdd');
+  if(!i||!d) return; const r=i.getBoundingClientRect();
+  d.style.left=r.left+'px'; d.style.top=(r.bottom+6)+'px'; d.style.width=r.width+'px'; }
+function acClose(){ const d=document.getElementById('acdd'); if(d){ d.style.display='none'; } acItems=[]; acIdx=-1; }
+function acRender(){
+  const d=document.getElementById('acdd');
+  const i=document.getElementById('prompt');
+  const parts=i.value.slice(1).split(/\s+/);
+  const typed='/'+(parts[0]||'').toLowerCase();
+  acItems=SLASH_CMDS.filter(c=>c[0].trim().startsWith(typed));
+  if(!acItems.length){ acClose(); return; }
+  d.innerHTML=acItems.map((c,n)=>
+    '<div class="ac-item" data-n="'+n+'" style="display:flex;align-items:center;gap:12px;padding:7px 14px;cursor:pointer;font-size:13px;"'+
+    ' onmousedown="event.preventDefault();acPick('+n+')">'+
+    '<span style="font-family:ui-monospace,monospace;color:#93c5fd;">'+c[0].trim()+'</span>'+
+    '<span style="margin-left:auto;padding-left:16px;text-align:right;color:#9ca3af;font-size:11px;">'+T(c[2],c[1])+'</span></div>').join('');
+  Array.from(d.children).forEach(el2=>{
+    el2.onmouseenter=()=>{ acIdx=parseInt(el2.dataset.n); acHl(); };
+    el2.onmouseleave=()=>{ acIdx=-1; acHl(); };
+  });
+  d.style.display='block'; acIdx=-1; acHl(); acPlace();
+}
+function acHl(){ const d=document.getElementById('acdd'); if(!d) return;
+  Array.from(d.children).forEach((el2,n)=>{ el2.style.background=(n===acIdx)?'#1f2937':'transparent'; });
+  if(acIdx>=0 && d.children[acIdx]) d.children[acIdx].scrollIntoView({block:'nearest'}); }
+function acUpdate(){
+  const i=document.getElementById('prompt');
+  if(!i || !/^\/\S*$/.test(i.value)){ acClose(); return; }   // only while typing "/cmd" (no args yet)
+  acRender();
+}
+function acMove(step){ if(!acItems.length) return; acIdx=(acIdx+step+acItems.length)%acItems.length; acHl(); }
+function acPick(n){
+  const c=acItems[n]; if(!c) return;
+  const i=document.getElementById('prompt');
+  i.value=c[0].trim()+' '; acClose(); i.focus();
+}
+document.addEventListener('mousedown',e=>{ const d=document.getElementById('acdd'); if(d && !d.contains(e.target) && e.target.id!=='prompt') acClose(); });
+window.addEventListener('resize',()=>{ if(acOpen()) acPlace(); });
+
 function promptKey(e){ const i=e.target;
+  if(e.key==='Escape' && acOpen()){ acClose(); e.preventDefault(); return; }
+  if(acOpen()){
+    if(e.key==='ArrowDown'){ acMove(1); e.preventDefault(); return; }
+    if(e.key==='ArrowUp'){ acMove(-1); e.preventDefault(); return; }
+    if(e.key==='Tab'){ acPick(acIdx>=0?acIdx:0); e.preventDefault(); return; }
+    if(e.key==='Enter'){ if(acIdx>=0){ acPick(acIdx); } else { acClose(); run(); } e.preventDefault(); return; }
+  }
   if(e.key==='Enter'){ run(); return; }
   if(e.key==='Tab'){ if(!i.value){ i.value=HINTS[hintIdx]; e.preventDefault(); } return; }   // accept the current runnable hint (not the static placeholder)
   if(e.key==='ArrowUp'){ if(hist.length && histI>0){ histI--; i.value=hist[histI]; e.preventDefault(); setTimeout(()=>i.setSelectionRange(i.value.length,i.value.length),0); } }
