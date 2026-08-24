@@ -1464,6 +1464,76 @@ async function gitCmd(arg){ const sp=(arg||'').indexOf(' '); const sub=(sp<0?arg
     case 'pull': await gitPull(); break; case 'branch': { try{ tool('branch: '+(await git.currentBranch({fs:GFS,dir:GITDIR})||'(detached)')); }catch(e){ tool('branch: '+e); } break; }
     case 'card': case '': await gitCard(); break; default: tool('git: status|log|commit <msg>|push|pull|branch'); } }
 
+/* ===== /action — GitHub Actions desde el agente (list | run | runs) ===== */
+function actionRepo(){ return GIT_REPO || document.getElementById('ghrepo').value.trim() || 'FiveTechSoft/Agents'; }
+async function actionCmd(arg){
+  const sp=(arg||'').indexOf(' ');
+  const sub=(sp<0?(arg||''):arg.slice(0,sp)).toLowerCase();
+  const rest=sp<0?'':arg.slice(sp+1).trim();
+  const repo=actionRepo(), H=ghHeaders();
+  if(sub==='list'||sub===''){
+    setWorking(true);
+    try{
+      const r=await fetch('https://api.github.com/repos/'+repo+'/actions/workflows',{headers:H});
+      const j=await r.json();
+      if(!r.ok){ tool('/action: HTTP '+r.status+' ('+((j.message)||repo)+')'); return; }
+      const wfs=(j.workflows||[]).map(w=>w.path.split('/').pop()+'  ·  '+w.name+'  ['+w.state+']');
+      tool(wfs.length? ('Workflows en '+repo+':\n'+wfs.join('\n')) : '/action: sin workflows en '+repo);
+    }catch(e){ tool('/action error: '+e); } finally{ setWorking(false); }
+    return;
+  }
+  if(sub==='runs'){
+    setWorking(true);
+    try{
+      const r=await fetch('https://api.github.com/repos/'+repo+'/actions/runs?per_page=8',{headers:H});
+      const j=await r.json();
+      if(!r.ok){ tool('/action: HTTP '+r.status); return; }
+      const rows=(j.workflow_runs||[]).map(x=>x.run_number+' · '+x.name+' · '+x.head_branch+' · '+
+        (x.conclusion||x.status)+(x.html_url?(' \u2192 '+x.html_url):''));
+      tool(rows.length? ('Últimos runs en '+repo+':\n'+rows.join('\n')) : '/action: sin runs.');
+    }catch(e){ tool('/action error: '+e); } finally{ setWorking(false); }
+    return;
+  }
+  if(sub==='run'){
+    const parts=rest.split(/\s+/); const wf=parts[0]; const ref=parts[1]||(await actionDefaultBranch(repo,H));
+    if(!wf){ tool('Uso: /action run <workflow.yml|nombre> [rama]'); return; }
+    setWorking(true);
+    try{
+      // resolve id by filename or display name
+      const lw=await (await fetch('https://api.github.com/repos/'+repo+'/actions/workflows',{headers:H})).json();
+      const w=(lw.workflows||[]).find(w=>w.path.split('/').pop().toLowerCase()===wf.toLowerCase()||w.name.toLowerCase()===wf.toLowerCase()||w.id==wf);
+      if(!w){ tool('/action: workflow no encontrado: '+wf+'. Usa /action list.'); return; }
+      const dr=await fetch('https://api.github.com/repos/'+repo+'/actions/workflows/'+w.id+'/dispatches',
+        {method:'POST',headers:Object.assign({'Content-Type':'application/json'},H),body:JSON.stringify({ref})});
+      if(dr.status!==204){ tool('/action dispatch: HTTP '+dr.status+(dr.status===403?' (el token necesita permiso actions:write)':'')); return; }
+      tool('▶ Dispatch '+w.path.split('/').pop()+' en '+ref+' …');
+      await actionWaitRun(repo,w.name,ref,H);
+    }catch(e){ tool('/action error: '+e); } finally{ setWorking(false); }
+    return;
+  }
+  tool('action: list | runs | run <workflow> [rama]');
+}
+async function actionDefaultBranch(repo,H){
+  try{ const j=await (await fetch('https://api.github.com/repos/'+repo,{headers:H})).json(); return j.default_branch||'main'; }catch(e){ return 'main'; }
+}
+async function actionWaitRun(repo,wfName,ref,H){
+  let seenId=null;
+  for(let i=0;i<24;i++){
+    await new Promise(r=>setTimeout(r,i?5000:2000));
+    let j=null; try{ j=await (await fetch('https://api.github.com/repos/'+repo+'/actions/runs?per_page=5',{headers:H})).json(); }catch(e){}
+    const run=((j&&j.workflow_runs)||[]).find(x=>x.name===wfName&&x.head_branch===ref);
+    if(!run || run.id===seenId) continue;
+    seenId=run.id;
+    if(run.conclusion){
+      tool((run.conclusion==='success'?'✓ Run #'+run.run_number+' completado':'✕ Run #'+run.run_number+': '+run.conclusion)+(run.html_url?' → '+run.html_url:''));
+      flowAdd('tool','/action '+run.conclusion,'');
+      return run.conclusion;
+    }
+    tool('⏳ Run #'+(run.run_number||'?')+' en curso…');
+  }
+  tool('/action: timeout esperando el run. Mira el estado con /action runs.');
+}
+
 /* =====================================================================
    Mini command shell + optional LLM agent (OpenCode Zen free models, function calling).
    Shell commands operate directly on the virtual disk.
@@ -1495,6 +1565,7 @@ const SLASH_CMDS=[
   ['/proxy','Fija el proxy CORS para git/binarios','Set CORS proxy for git/binaries'],
   ['/clone','Clona un repo de GitHub en el disco','Clone a GitHub repo into the disk'],
   ['/git','Operación git: status, add, commit, push…','Git operation: status, add, commit, push…'],
+  ['/action','GitHub Actions: list, runs, run <workflow> [rama]','GitHub Actions: list, runs, run <workflow> [branch]'],
   ['/share','Comparte la sesión mediante un enlace','Share the session via a link'],
   ['/skill','Gestiona skills (list, run, generate…)','Manage skills (list, run, generate…)'],
   ['/tool','Registra herramientas propias del usuario','Register user-defined tools'],
@@ -2320,6 +2391,7 @@ async function slashCmd(v){
     case '/proxy': if(arg){ setProxy(arg); tool(T('Proxy CORS: ','CORS proxy: ')+PROXY+' '+T('(git smart-http + binarios)','(git smart-http + binaries)')); } else tool(PROXY?('proxy: '+PROXY):T('Sin proxy. Uso: /proxy <url-del-worker>. Ver docs/cloudflare-worker.js','No proxy. Usage: /proxy <worker-url>. See docs/cloudflare-worker.js')); break;
     case '/clone': await gitClone(arg||GIT_REPO||document.getElementById('ghrepo').value.trim()||'FiveTechSoft/Agents'); break;
     case '/git': await gitCmd(arg); break;
+    case '/action': await actionCmd(arg); break;
     case '/share': await shareSession(); break;
     case '/skill': await skillCmd(arg); break;
     case '/tool': await toolCmd(arg); break;
@@ -2524,7 +2596,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
