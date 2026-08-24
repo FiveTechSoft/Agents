@@ -80,7 +80,7 @@
           </button>
           <div id="langmenu" class="hidden absolute right-0 mt-1 bg-gray-800 border border-gray-700 rounded shadow-lg z-50 overflow-hidden min-w-[120px]"></div>
         </div>
-        <button id="thinkbtn" onclick="toggleThink()" title="Ver razonamiento del modelo (deepseek-reasoner)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🧠</button>
+        <button id="thinkbtn" onclick="toggleThink()" title="Ver razonamiento del modelo" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🧠</button>
         <button id="demobtn" onclick="runDemo()" title="Demo automática" class="bg-blue-700 hover:bg-blue-600 border border-blue-600 rounded px-2 py-1">▶ Demo</button>
         <button id="stopbtn" onclick="stopAgent()" title="Detener" class="bg-gray-800 hover:bg-red-700 border border-gray-700 rounded px-2 py-1">■ Stop</button>
         <button onclick="flowCard()" title="Flow: secuencia de lo que hizo el agente (didáctico)" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1">🔀 Flow</button>
@@ -1463,7 +1463,7 @@ async function gitCmd(arg){ const sp=(arg||'').indexOf(' '); const sub=(sp<0?arg
     case 'card': case '': await gitCard(); break; default: tool('git: status|log|commit <msg>|push|pull|branch'); } }
 
 /* =====================================================================
-   Mini command shell + optional LLM agent (DeepSeek, function calling).
+   Mini command shell + optional LLM agent (OpenCode Zen free models, function calling).
    Shell commands operate directly on the virtual disk.
    ===================================================================== */
 // runnable suggestions: shown as placeholder AND inserted by Tab
@@ -1487,18 +1487,15 @@ function promptKey(e){ const i=e.target;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function runDemo(){
   clearChat();
-  if(localStorage.getItem('ds_key')){ await runDemoLLM(); } else { await runDemoSim(); }
+  { await runDemoLLM(); }
 }
 async function runDemoLLM(){
   setWorking(true);
   tool('▶ Demo (con LLM): el agente procesará una conversación distinta cada vez.'); await sleep(300);
-  const key=localStorage.getItem('ds_key');
-  // ask DeepSeek for a fresh topic so every demo differs
+  // ask the LLM for a fresh topic so every demo differs
   let topic='organizar notas de un proyecto';
   try{
-    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-      body:JSON.stringify({model:MODEL,messages:[{role:'user',content:'Give ONE short idea (max 8 words, in '+(LANGS[curLang]||'español')+') of a small distinct task to demo an agent that creates and edits files on a disk. Only the idea, no quotes or trailing punctuation.'}]})});
+    const r=await ocChat({model:MODEL,messages:[{role:'user',content:'Give ONE short idea (max 8 words, in '+(LANGS[curLang]||'español')+') of a small distinct task to demo an agent that creates and edits files on a disk. Only the idea, no quotes or trailing punctuation.'}]});
     const j=await r.json(); addUsage(j.usage);
     topic=((j.choices&&j.choices[0].message.content)||topic).trim().replace(/^["']|["'.]+$/g,'');
   }catch(e){ tool('(no pude pedir tema; uso uno por defecto)'); }
@@ -1747,9 +1744,7 @@ async function subAgent(task,setStatus,contract){
   const contractBlock = contract ? '\n\n📋 CONTRATO TÉCNICO (OBLIGATORIO — todos los sub-agentes deben seguir estos nombres exactos):\n'+contract+'\n' : '';
   const msgs=[{role:'system',content:'Eres un sub-agente. Realiza SOLO esta subtarea usando las tools del disco. Responde en '+(LANGS[curLang]||'español')+', muy breve.'},{role:'user',content:contractBlock+task}];
   for(let s=0;s<5;s++){
-    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},signal:agentAbort.signal,
-      body:JSON.stringify({model:MODEL,messages:msgs,tools:SUBTOOLS})});
+    const r=await ocChat({model:MODEL,messages:msgs,tools:SUBTOOLS},{signal:agentAbort.signal});
     if(!r.ok) throw new Error('LLM '+r.status);
     const j=await r.json(); addUsage(j.usage);
     const mo=j.choices[0].message; msgs.push(mo);
@@ -1770,7 +1765,41 @@ async function dispatchAgents(tasks,contract){
   return 'Sub-agentes terminados:\n'+tasks.map((t,i)=>(i+1)+') '+t+' => '+results[i]).join('\n');
 }
 
-function getKey(){ let k=localStorage.getItem('ds_key'); if(!k){ k=prompt('DeepSeek API key (se guarda en este navegador):')||''; if(k)localStorage.setItem('ds_key',k); } return k; }
+function getKey(){ return 'public'; }   // OpenCode Zen free models need no API key
+
+/* ===== OpenCode Zen: dynamic free-model discovery + fallback ===== */
+const OC_URL='https://opencode.ai/zen/v1';
+let FREE_MODELS=null;
+async function discoverFreeModels(){
+  if(FREE_MODELS) return FREE_MODELS;
+  const PREFERRED=['x-preview-f-free','mimo-v2.5-free'];   // Ox Alpha, Mimo
+  try{
+    const r=await fetch(OC_URL+'/models',{headers:{'Authorization':'Bearer public'}});
+    const j=await r.json();
+    const free=((j&&j.data)||[]).map(m=>m.id).filter(id=>/-free$/.test(id));
+    FREE_MODELS=free.length ? [...PREFERRED.filter(id=>free.includes(id)),...free.filter(id=>!PREFERRED.includes(id))] : PREFERRED;
+  }catch(e){ FREE_MODELS=PREFERRED.slice(); }
+  return FREE_MODELS;
+}
+// POST to OpenCode Zen chat/completions: tries MODEL first, then the other
+// free models by availability. Returns the raw Response of the first OK call.
+async function ocChat(body,opt){
+  opt=opt||{};
+  const models=[MODEL,...(await discoverFreeModels()).filter(m=>m!==MODEL)];
+  let lastErr;
+  for(const m of models){
+    try{
+      body.model=m;
+      const r=await fetch(OC_URL+'/chat/completions',{method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer public'},
+        signal:opt.signal, body:JSON.stringify(body)});
+      if(r.ok) return r;
+      try{ await r.body&&r.body.cancel(); }catch(e){}
+      lastErr=new Error('LLM '+r.status);
+    }catch(e){ if(e.name==='AbortError') throw e; lastErr=e; }
+  }
+  throw lastErr;
+}
 
 /* ===== Flow: didactic timeline of what the agent did (prompts, tool calls, replies) ===== */
 let FLOW=(()=>{ try{ return JSON.parse(sessionStorage.getItem('flow')||'[]'); }catch(e){ return []; } })();
@@ -1901,7 +1930,7 @@ function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getEl
   const st=document.getElementById('status');
   if(workN>0 && !tTimer){ tStart=Date.now(); tOutTok=0; if(st)st.classList.remove('hidden'); updStatus(); tTimer=setInterval(updStatus,200); }
   else if(workN===0 && tTimer){ clearInterval(tTimer); tTimer=null; updStatus(); setTimeout(()=>{ if(workN===0&&st)st.classList.add('hidden'); },5000); } }
-let MODEL=(()=>{ try{ return localStorage.getItem('model')||'deepseek-v4-flash'; }catch(e){ return 'deepseek-v4-flash'; } })();
+let MODEL=(()=>{ try{ return localStorage.getItem('model')||'x-preview-f-free'; }catch(e){ return 'x-preview-f-free'; } })();
 let THINK=(()=>{ try{ return localStorage.getItem('think')==='1'; }catch(e){ return false; } })();  // V4 thinking mode (supports tools)
 function toggleThink(){ THINK=!THINK; try{localStorage.setItem('think',THINK?'1':'0');}catch(e){}
   const b=document.getElementById('thinkbtn'); if(b) b.classList.toggle('bg-purple-700', THINK);
@@ -2019,9 +2048,7 @@ async function streamChat(msgs, wait){
   }
   const body={model:MODEL,messages:msgs,tools:allTools,stream:true};   // V4 thinking supports tools
   if(THINK) body.thinking={type:'enabled'};
-  const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+getKey()},
-    signal:agentAbort.signal, body:JSON.stringify(body)});
+  const r=await ocChat(body,{signal:agentAbort.signal});
   if(!r.ok||!r.body) throw new Error('LLM '+r.status);
   const reader=r.body.getReader(), dec=new TextDecoder(); let buf='', content='', reasoning='', usg=null, reasonBox=null; const tcs=[];
   while(true){ const {done,value}=await reader.read(); if(done)break;
@@ -2041,7 +2068,6 @@ async function streamChat(msgs, wait){
 }
 
 async function agent(text){
-  const key=getKey(); if(!key){ tool('Sin API key.'); return; }
   AGENT_WAITING=false;
   convo.push({role:'user',content:text}); curPanel=null;
   const snap=await snapshotDisk();   // for rollback on abort
@@ -2062,7 +2088,7 @@ async function agent(text){
       let wait=bot('<span class="text-gray-400">pensando…</span>'); let res;
       try{ res=await streamChat(msgs, wait); }
       catch(e){ if(e.name==='AbortError'){ wait.remove(); convo.pop(); await restoreDisk(snap); abortCard(true); return; }
-        wait.remove(); convo.pop(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS de DeepSeek).',String(e),()=>agent(text)); return; }   // pop: agent(text) re-pushes it on retry
+        wait.remove(); convo.pop(); errorCard('Error de conexión','No se pudo contactar con el LLM (red o CORS).',String(e),()=>agent(text)); return; }   // pop: agent(text) re-pushes it on retry
       addUsage(res.usage);
       const mo={role:'assistant',content:res.content||''}; if(res.reasoning)mo.reasoning_content=res.reasoning; if(res.tool_calls.length)mo.tool_calls=res.tool_calls; msgs.push(mo);
       if(res.reasoning) flowAdd('think',res.reasoning.slice(0,400));
@@ -2110,9 +2136,9 @@ async function shareSession(){
     for(const f of items){ sz+=(f.content||'').length; if(sz>300000){ fits=false; break; } disk[f.path]=f.content||''; }
     if(fits) data.disk=disk; }catch(e){}
   let json=JSON.stringify(data); const base=location.origin+location.pathname; let url=null;
-  // safety net: if the DeepSeek key or GitHub token ever leaked into the conversation
+  // safety net: if the GitHub token ever leaked into the conversation
   // or a disk file, redact it before the session leaves this browser
-  try{ const secrets=[localStorage.getItem('ds_key')||'', ghTok()||''].filter(s=>s.length>8);
+  try{ const secrets=[ghTok()||''].filter(s=>s.length>8);
     for(const s of secrets){ if(json.indexOf(s)>=0){ json=json.split(s).join('[REDACTED]'); tool(T('⚠️ Una clave aparecía en la sesión y se ha ocultado en el enlace.','⚠️ A key appeared in the session and was redacted from the link.')); } } }catch(e){}
   { // shortest links: a Cloudflare Worker stores the session in KV (see docs/cloudflare-worker.js).
     // Default worker = the app's own; /proxy overrides it with your own deployment.
@@ -2179,7 +2205,7 @@ async function slashCmd(v){
     case '/cost': costCard(usage); break;
     case '/compact': await compactNow(); break;
     case '/init': { const p='AGENTS.md'; const ex=await fsGet(p); if(!ex) await fsPut(p,'# Reglas del proyecto\n\n- Estilo de codigo: ...\n- No tocar: ...\n- Tests: ...\n'); refreshDisk(); initCard(p); break; }
-    case '/key': if(arg){ localStorage.setItem('ds_key',arg); tool(T('API key guardada en este navegador.','API key saved in this browser.')); } else tool(T('Uso: /key <api-key>','Usage: /key <api-key>')); break;
+    case '/key': tool(T('No se necesita API key: Agents Web usa los modelos gratuitos de OpenCode Zen (Ox Alpha y fallbacks automáticos).','No API key needed: Agents Web uses the free OpenCode Zen models (Ox Alpha with automatic fallbacks).')); break;
     case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool(T('Token de GitHub puesto (push/pull).','GitHub token set (push/pull).')); } else tool(T('Uso: /ghtoken <token>','Usage: /ghtoken <token>')); break;
     case '/goal': { const g=arg||localStorage.getItem('goal')||'Explorar y organizar los ficheros del disco virtual con ayuda de la IA, y sincronizarlos con GitHub.'; if(arg)localStorage.setItem('goal',arg); goalCard(g); break; }
     case '/plan':
@@ -2310,7 +2336,6 @@ function liveLoopCard(maxIter){
 }
 // real autonomous loop: keep running the agent toward a goal until DONE / limit / stop
 async function loopRun(goal, maxIter){
-  if(!getKey()){ tool('Sin API key (/key).'); return; }
   maxIter=maxIter||10; loopStop=false; curPanel=null;
   const card=liveLoopCard(maxIter); setWorking(true);
   const msgs=[{role:'system',content:'Eres Agents Web en modo BUCLE AUTONOMO. Responde en '+(LANGS[curLang]||'español')+'. Objetivo: '+goal+'. En cada turno AVANZA usando las tools del disco/shell/web. NO pidas confirmacion. Cuando el objetivo este COMPLETO responde una linea que empiece exactamente con "DONE".'},{role:'user',content:'Empieza a trabajar en el objetivo.'}];
@@ -2364,10 +2389,8 @@ function diffCard(path, ops){
 /* ===== session usage + /cost /compact /init /help cards (mockup 3) ===== */
 let usage={pin:0,pout:0,phit:0};
 function addUsage(u){ if(!u)return; usage.pin+=u.prompt_tokens||0; usage.pout+=u.completion_tokens||0; usage.phit+=u.prompt_cache_hit_tokens||0; }
-// DeepSeek pricing: $0.14/M input cache-miss, $0.0028/M input cache-HIT (98% off), $0.28/M output.
-// Agent loops re-send the conversation prefix every step (= cache hits), so billing all input
-// as cache-miss overstated the session cost several-fold.
-function estCost(u){ const hit=Math.min(u.phit||0,u.pin); return ((u.pin-hit)/1e6*0.14 + hit/1e6*0.0028 + u.pout/1e6*0.28); }
+// OpenCode Zen free models: no billing — session cost is $0.00 (tokens still tracked).
+function estCost(u){ return 0; }
 function costCard(u){
   const tot=u.pin+u.pout||1, pi=Math.round(u.pin/tot*100), po=100-pi;
   const c=el('<div class="bg-gradient-to-br from-emerald-900/40 to-gray-800 border border-emerald-800/50 p-4 rounded-xl max-w-[90%]"></div>');
@@ -2533,7 +2556,6 @@ async function skillCmd(arg){
 }
 
 async function planReal(task){
-  const key=getKey(); if(!key){ tool('Sin API key para /plan (usa /key).'); return; }
   // task priority: explicit arg -> stored /goal -> invent from the recent conversation
   let userContent;
   if(task){ userContent='Tarea: '+task; }
@@ -2555,16 +2577,14 @@ async function planReal(task){
   const wait=bot('<span class="text-gray-400">generando plan…</span>'); agentAbort=new AbortController();
   setWorking(true);
   try{
-    const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key}, signal:agentAbort.signal,
-      body:JSON.stringify({model:MODEL,messages:[
-        {role:'system',content:'You are a planner. Break the request into 3 to 6 short concrete steps. Reply ONLY with compact JSON: {"steps":[{"title":"...","state":"active|pending"}]}. First step active, the rest pending. No prose.'},
-        {role:'user',content:userContent}]})});
+    const r=await ocChat({model:MODEL,messages:[
+      {role:'system',content:'You are a planner. Break the request into 3 to 6 short concrete steps. Reply ONLY with compact JSON: {"steps":[{"title":"...","state":"active|pending"}]}. First step active, the rest pending. No prose.'},
+      {role:'user',content:userContent}]});
     const j=await r.json(); const txt=(j.choices&&j.choices[0].message.content)||'';
     const m=txt.match(/\{[\s\S]*\}/); let steps=[];
     try{ steps=(JSON.parse(m?m[0]:txt).steps)||[]; }catch(e){}
     wait.remove(); lastPlan=steps.length?steps:lastPlan; planCard(steps);
-  }catch(e){ if(e.name==='AbortError') wait.innerHTML='(detenido)'; else wait.innerHTML='Error: '+e+' (posible CORS de DeepSeek)'; }
+  }catch(e){ if(e.name==='AbortError') wait.innerHTML='(detenido)'; else wait.innerHTML='Error: '+e+' (posible CORS)'; }
   finally{ setWorking(false); }
 }
 
