@@ -1768,7 +1768,7 @@ async function dispatchAgents(tasks,contract){
 function getKey(){ return 'public'; }   // OpenCode Zen free models need no API key
 
 /* ===== OpenCode Zen: dynamic free-model discovery + fallback ===== */
-const OC_URL='https://opencode.ai/zen/v1';
+const OC_URL='https://api.fivetechsoft.com/zen/v1';   // OpenCode Zen via fivetechsoft.com proxy
 let FREE_MODELS=null;
 async function discoverFreeModels(){
   if(FREE_MODELS) return FREE_MODELS;

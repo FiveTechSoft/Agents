@@ -48,7 +48,7 @@ graph TD
 // https://github.com/anomalyco/opencode — no API key required
 const agent = new Agent({
   model: 'x-preview-f-free',              // Ox Alpha Free
-  baseUrl: 'https://opencode.ai/zen/v1',
+  baseUrl: 'https://api.fivetechsoft.com/zen/v1',   // OpenCode Zen via fivetechsoft.com
   apiKey: 'public',
   fallbackModels: await discoverFreeModels()
 });</code></pre>
@@ -58,7 +58,7 @@ const agent = new Agent({
     <pre><code>// Discover free models from OpenCode Zen, ordered by preference
 async function discoverFreeModels() {
   const PREFERRED = ['x-preview-f-free', 'mimo-v2.5-free']; // Ox Alpha, Mimo
-  const res = await fetch('https://opencode.ai/zen/v1/models', {
+  const res = await fetch('https://api.fivetechsoft.com/zen/v1/models', {
     headers: { 'Authorization': 'Bearer public' }
   });
   const { data } = await res.json();
