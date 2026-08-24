@@ -71,6 +71,7 @@
       <span class="font-semibold flex items-center gap-2">
         <button onclick="toggleDisk()" class="md:hidden bg-gray-800 border border-gray-700 rounded px-2 py-1" title="Disco">💾</button>
         <span id="agi" class="inline-block">😎</span> <a href="https://github.com/fivetechsoft/agents" target="_blank" rel="noopener" title="Código fuente en GitHub" class="hover:text-blue-400">Agents — Web</a> <!-- v03f646a -->
+        <span id="modeltag" class="text-[10px] font-mono text-gray-300 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 truncate max-w-[180px]" title="Agente IA en uso"></span>
         <span id="status" class="hidden text-[10px] font-mono text-gray-400 ml-1 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5"></span>
       </span>
       <div class="flex items-center gap-1.5 text-xs">
@@ -1769,6 +1770,9 @@ function getKey(){ return 'public'; }   // OpenCode Zen free models need no API 
 
 /* ===== OpenCode Zen: dynamic free-model discovery + fallback ===== */
 const OC_URL='https://api.fivetechsoft.com/zen/v1';   // OpenCode Zen via fivetechsoft.com proxy
+const MODEL_NAMES={'x-preview-f-free':'Ox Alpha','mimo-v2.5-free':'Mimo','deepseek-v4-flash-free':'DeepSeek Flash','hy3-free':'Hy3','nemotron-3-ultra-free':'Nemotron Ultra','nemotron-3.5-lightning-free':'Nemotron Lightning','laguna-s-2.1-free':'Laguna'};
+function modelName(m){ return MODEL_NAMES[m]||m; }
+function setModelTag(m){ const t=document.getElementById('modeltag'); if(t){ t.textContent='🤖 '+modelName(m); t.title='Agente IA en uso: '+m+' (OpenCode Zen)'; } }
 let FREE_MODELS=null;
 async function discoverFreeModels(){
   if(FREE_MODELS) return FREE_MODELS;
@@ -1793,7 +1797,7 @@ async function ocChat(body,opt){
       const r=await fetch(OC_URL+'/chat/completions',{method:'POST',
         headers:{'Content-Type':'application/json','Authorization':'Bearer public'},
         signal:opt.signal, body:JSON.stringify(body)});
-      if(r.ok) return r;
+      if(r.ok){ if(MODEL!==m){ MODEL=m; try{localStorage.setItem('model',m);}catch(e){} } setModelTag(m); return r; }
       try{ await r.body&&r.body.cancel(); }catch(e){}
       lastErr=new Error('LLM '+r.status);
     }catch(e){ if(e.name==='AbortError') throw e; lastErr=e; }
@@ -1931,6 +1935,9 @@ function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getEl
   if(workN>0 && !tTimer){ tStart=Date.now(); tOutTok=0; if(st)st.classList.remove('hidden'); updStatus(); tTimer=setInterval(updStatus,200); }
   else if(workN===0 && tTimer){ clearInterval(tTimer); tTimer=null; updStatus(); setTimeout(()=>{ if(workN===0&&st)st.classList.add('hidden'); },5000); } }
 let MODEL=(()=>{ try{ return localStorage.getItem('model')||'x-preview-f-free'; }catch(e){ return 'x-preview-f-free'; } })();
+setModelTag(MODEL);
+// resolve the friendly name as soon as the free-model list is available
+discoverFreeModels();
 let THINK=(()=>{ try{ return localStorage.getItem('think')==='1'; }catch(e){ return false; } })();  // V4 thinking mode (supports tools)
 function toggleThink(){ THINK=!THINK; try{localStorage.setItem('think',THINK?'1':'0');}catch(e){}
   const b=document.getElementById('thinkbtn'); if(b) b.classList.toggle('bg-purple-700', THINK);
