@@ -10,42 +10,49 @@
   <nav id="sidebar">
     <div id="sidebar-header">
       <h2>Agents</h2>
-      <div class="version">Version 1.0</div>
+      <div class="version">Version 2.2</div>
     </div>
   </nav>
 
   <main id="content">
     <h1>Web Agents</h1>
-    <p>Agents that run entirely in the browser using WebView2 or as standalone HTML5/JS applications. No server required — the AI agent logic runs client-side with transformers.js or connects to cloud APIs (<a href="https://github.com/anomalyco/opencode" target="_blank">OpenCode</a> Ox Alpha, DeepSeek, OpenAI, Ollama). Default model: <strong>Ox Alpha</strong> (<code>x-preview-f-free</code>) via the OpenCode Zen API — free, no API key — with automatic fallback to the other free OpenCode models when unavailable.</p>
+    <p>An AI agent that runs entirely in your browser as a static HTML5/JS app (GitHub Pages) — no server required. It works on a virtual disk (IndexedDB), runs real WASM runtimes, and connects to cloud LLM APIs. Default model: <strong>Ox Alpha</strong> (<code>x-preview-f-free</code>) via the OpenCode Zen API — free, no API key — with automatic fallback to other free OpenCode models when unavailable (<code>mimo-v2.5-free</code>, DeepSeek Flash, Hy3, Nemotron, Laguna).</p>
 
     <h2 id="architecture">Architecture</h2>
     <div class="mermaid">
 graph TD
-    A[Browser / WebView2] --> B[Agents.js]
-    B --> C[Agent Class]
+    A[Browser / WebView2] --> B[agent-app.js]
+    B --> C[Agent Loop + Streaming SSE]
     C --> D[Tool Registry]
     C --> E[Skills System]
     C --> F[API Client]
-    F --> G[OpenCode Zen: Ox Alpha + free fallbacks / DeepSeek / OpenAI / Ollama]
-    D --> H[read / write / shell / grep...]
-    E --> I[.md skill files]
+    F --> G[OpenCode Zen: Ox Alpha + free fallbacks]
+    D --> H[Virtual disk: IndexedDB]
+    H --> I[Pyodide / clang / PHP-WASM / SQLite]
     </div>
 
     <h2 id="features">Features</h2>
     <ul>
-      <li><strong>Zero-install:</strong> Runs in any modern browser or embedded WebView2 control</li>
-      <li><strong>Local AI:</strong> Transformer.js for on-device inference (no cloud required)</li>
-      <li><strong>Cloud AI:</strong> Connects to OpenCode (Ox Alpha), DeepSeek, OpenAI, Ollama, or any OpenAI-compatible API</li>
-      <li><strong>Streaming SSE:</strong> Real-time token-by-token streaming responses</li>
-      <li><strong>17 Built-in Tools:</strong> read, write, edit, glob, grep, shell, web_search, web_fetch, github_read, github_write, memory, ask_user, todo_write, use_skill, dispatch_agent, dispatch_agent_background, propose_agents</li>
-      <li><strong>Skills System:</strong> Markdown-based skill files with YAML frontmatter, auto-activation via trigger regex</li>
-      <li><strong>Multi-Agent Dispatch:</strong> Spawn subagents (blocking or background) for parallel task execution</li>
-      <li><strong>Permission Gate:</strong> allow/deny/ask per tool with plan-mode lock</li>
+      <li><strong>Zero-install:</strong> Runs in any modern browser or embedded WebView2 control (~500 KB HTML+JS+Wasm)</li>
+      <li><strong>Cloud AI:</strong> OpenCode Zen (Ox Alpha default) with dynamic discovery of free models and automatic retry/fallback</li>
+      <li><strong>Streaming SSE:</strong> Real-time token-by-token streaming responses, including live reasoning content (thinking mode)</li>
+      <li><strong>21 Built-in Tools:</strong> see the table below</li>
+      <li><strong>Real runtimes in WASM:</strong> Python (Pyodide), C (clang/Wasmer), PHP 8 (@php-wasm with web preview of .php pages), SQLite (SQL on virtual .db files)</li>
+      <li><strong>Skills System:</strong> Markdown skills injected into the system prompt; created/toggled by the agent itself or via /skill</li>
+      <li><strong>User-defined tools:</strong> register_tool lets the agent create new callable commands from scripts on disk; they persist in localStorage</li>
+      <li><strong>Persistent memory:</strong> remember tool writes durable facts to MEMORY.md, available in future sessions (/memory, /distill)</li>
+      <li><strong>Scheduled tasks:</strong> recurring prompts/commands every N minutes/hours/days while the page is open (/cron, schedule_task tool)</li>
+      <li><strong>SSH gateway:</strong> connect to remote servers over WebSocket→TCP (ssh2)</li>
+      <li><strong>Voice:</strong> TTS reads the replies aloud; pick a voice with /voice</li>
+      <li><strong>Multi-Agent Dispatch:</strong> dispatch_agents runs 2–4 subagents in parallel around a shared contract</li>
+      <li><strong>Permission Gate:</strong> allow/deny/ask per tool via /perm</li>
+      <li><strong>Sessions:</strong> persist across reloads; export to Markdown (/export), shareable read-only links (/share)</li>
+      <li><strong>PWA:</strong> installable web app (manifest.webmanifest)</li>
     </ul>
 
     <h2 id="quick-start">Quick Start</h2>
-    <pre><code>// Create a Web Agent powered by Ox Alpha (OpenCode Zen)
-// https://github.com/anomalyco/opencode — no API key required
+    <pre><code>// The agent discovers free models from OpenCode Zen at startup
+// and always tries Ox Alpha first — no API key required
 const agent = new Agent({
   model: 'x-preview-f-free',              // Ox Alpha Free
   baseUrl: 'https://api.fivetechsoft.com/zen/v1',   // OpenCode Zen via fivetechsoft.com
@@ -71,10 +78,6 @@ async function discoverFreeModels() {
 }</code></pre>
     <p>If a request fails (rate limit, upstream error, timeout), the Agent automatically retries with the next model in the list.</p>
 
-// Run a task
-const result = await agent.run('Find all .prg files and summarize them');
-console.log(result.content);</code></pre>
-
     <h2 id="webview2">FiveWin TWebView2 Integration</h2>
     <p>Web Agents integrate natively with FiveWin's <strong>TWebView2</strong> class, providing a full chat UI inside desktop applications:</p>
     <pre><code>#include "FiveWin.ch"
@@ -90,27 +93,49 @@ RETURN NIL</code></pre>
     <h2 id="tools">Available Tools</h2>
     <table>
       <tr><th>Tool</th><th>Description</th><th>Access</th></tr>
-      <tr><td><code>read</code></td><td>Read a text file with line numbers</td><td>Read</td></tr>
-      <tr><td><code>write</code></td><td>Write/overwrite a file, shows diff</td><td>Write</td></tr>
-      <tr><td><code>edit</code></td><td>Replace exact string in file</td><td>Write</td></tr>
-      <tr><td><code>glob</code></td><td>List files matching pattern</td><td>Read</td></tr>
-      <tr><td><code>grep</code></td><td>Regex search in file contents</td><td>Read</td></tr>
-      <tr><td><code>shell</code></td><td>Run shell command with timeout</td><td>Write</td></tr>
-      <tr><td><code>web_search</code></td><td>DuckDuckGo web search</td><td>Read</td></tr>
-      <tr><td><code>web_fetch</code></td><td>Fetch URL content</td><td>Read</td></tr>
-      <tr><td><code>memory</code></td><td>Read/write persistent memory</td><td>Read</td></tr>
-      <tr><td><code>ask_user</code></td><td>Interactive multiple-choice</td><td>UI</td></tr>
-      <tr><td><code>use_skill</code></td><td>Activate a skill</td><td>UI</td></tr>
-      <tr><td><code>dispatch_agent</code></td><td>Launch blocking subagent</td><td>Dispatch</td></tr>
-      <tr><td><code>dispatch_agent_background</code></td><td>Launch background subagent</td><td>Dispatch</td></tr>
-      <tr><td><code>propose_agents</code></td><td>Batch subagent proposal</td><td>Dispatch</td></tr>
+      <tr><td><code>list_files</code></td><td>List files on the virtual disk</td><td>Read</td></tr>
+      <tr><td><code>read_file</code></td><td>Read a file from the disk</td><td>Read</td></tr>
+      <tr><td><code>write_file</code></td><td>Create/overwrite a file (shows diff)</td><td>Write</td></tr>
+      <tr><td><code>delete_file</code></td><td>Delete a file</td><td>Write</td></tr>
+      <tr><td><code>shell</code></td><td>POSIX-like shell on the virtual disk (ls, cat, grep, pipes, redirects...)</td><td>Write</td></tr>
+      <tr><td><code>sql</code></td><td>Execute SQL on a virtual .db file (SQLite in WASM)</td><td>Write</td></tr>
+      <tr><td><code>python</code></td><td>Run real Python (Pyodide/CPython in WASM), shares the disk</td><td>Write</td></tr>
+      <tr><td><code>cc</code></td><td>Compile &amp; run C with real clang (Wasmer/WASM)</td><td>Write</td></tr>
+      <tr><td><code>web_search</code></td><td>DuckDuckGo/jina web search</td><td>Read</td></tr>
+      <tr><td><code>web_fetch</code></td><td>Fetch URL readable text</td><td>Read</td></tr>
+      <tr><td><code>git</code></td><td>Real git on a cloned repo (isomorphic-git): status/log/commit/push/pull/clone</td><td>Write</td></tr>
+      <tr><td><code>remember</code></td><td>Save a durable fact to persistent MEMORY.md</td><td>Memory</td></tr>
+      <tr><td><code>schedule_task</code></td><td>Schedule a recurring task (every 1m, 5m, 30m, 2h, 1d)</td><td>Cron</td></tr>
+      <tr><td><code>ask_user</code></td><td>Interactive question with rich multiple-choice options</td><td>UI</td></tr>
+      <tr><td><code>dispatch_agents</code></td><td>Run 2–4 independent subtasks in parallel sub-agents around a shared contract</td><td>Dispatch</td></tr>
+      <tr><td><code>register_tool</code> / <code>user_tools</code> / <code>unregister_tool</code></td><td>Agent-created tools from scripts on disk (persist in localStorage)</td><td>Extend</td></tr>
+      <tr><td><code>create_skill</code> / <code>toggle_skill</code></td><td>Create skills and activate/deactivate them into the system prompt</td><td>Skills</td></tr>
+      <tr><td><code>classify_disk</code></td><td>Auto-classify all files using local AI (transformers.js zero-shot)</td><td>UI</td></tr>
+    </table>
+
+    <h2 id="slash-commands">Slash Commands</h2>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><code>/cost · /compact · /distill · /init</code></td><td>Session cost, compress history, distill session → summary + MEMORY.md, create AGENTS.md</td></tr>
+      <tr><td><code>/goal · /plan · /run · /loop</code></td><td>Set goal, generate plan, execute plan, autonomous loop (&lt;objetivo&gt; [maxIter])</td></tr>
+      <tr><td><code>/clone · /git · /action</code></td><td>Clone repo, git status·log·commit·push, GitHub Actions: list·runs·run</td></tr>
+      <tr><td><code>/cron</code></td><td>Scheduled tasks: &lt;30m|2h|1d&gt; &lt;cmd&gt;, del &lt;id&gt;, gh "&lt;schedule&gt;" &lt;task&gt;</td></tr>
+      <tr><td><code>/perm</code></td><td>Per-tool permissions: /perm shell ask, deny…</td></tr>
+      <tr><td><code>/voice</code></td><td>TTS voice reading replies: list and pick (1,2…, del)</td></tr>
+      <tr><td><code>/memory · /export · /share</code></td><td>Show MEMORY.md, export session as Markdown, share session link (read-only)</td></tr>
+      <tr><td><code>/skill · /tool</code></td><td>Reusable skills, agent tools registry</td></tr>
+      <tr><td><code>/sh · /py · /cc · /php · /classify</code></td><td>Terminal, Python (WASM), C (WASM), PHP (WASM), AI file classification</td></tr>
+      <tr><td><code>/ssh · /exit</code></td><td>SSH connection to a remote server / close it</td></tr>
+      <tr><td><code>/btw</code></td><td>Aside: note for the running agent without interrupting</td></tr>
+      <tr><td><code>/proxy</code></td><td>Set CORS proxy for real git smart-http and binaries (docs/cloudflare-worker.js)</td></tr>
+      <tr><td><code>/ghtoken · /key · /clear · /help</code></td><td>GitHub token, API key info, clear conversation, help</td></tr>
     </table>
 
     <h2 id="disk-classifier">AI Disk Classifier</h2>
-    <p>Web Agents include an <strong>AI disk classifier</strong> powered by transformers.js — classify files on disk using local AI models without sending data to any cloud service.</p>
-    <pre><code>// Classify files on disk
+    <p>Web Agents include an <strong>AI disk classifier</strong> powered by transformers.js — classify files on the virtual disk using local AI models without sending data to any cloud service.</p>
+    <pre><code>// Classify files on the disk
 const result = await agent.run(
-  'Classify all files in c:\\projects by type (source, config, doc, asset)'
+  'Classify all files by type (source, config, doc, asset)'
 );</code></pre>
 
   </main>

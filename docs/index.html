@@ -68,7 +68,10 @@
       <span class="font-semibold flex items-center gap-2">
         <button onclick="toggleDisk()" class="md:hidden bg-gray-800 border border-gray-700 rounded px-2 py-1" title="Disco">💾</button>
         <span id="agi" class="inline-block">😎</span> <a href="https://github.com/fivetechsoft/agents" target="_blank" rel="noopener" title="Código fuente en GitHub" class="hover:text-blue-400">Agents — Web</a> <!-- v03f646a -->
-        <span id="modeltag" class="text-[10px] font-mono text-gray-300 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 truncate max-w-[180px]" title="Agente IA en uso"></span>
+        <span class="relative">
+          <button id="modeltag" onclick="toggleModelMenu(event)" title="Agente IA en uso — click para cambiar" class="text-[10px] font-mono text-gray-300 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 truncate max-w-[180px] hover:bg-gray-700 cursor-pointer"></button>
+          <div id="modelmenu" class="hidden absolute left-0 mt-1 bg-gray-800 border border-gray-700 rounded shadow-lg z-50 overflow-hidden min-w-[200px]"></div>
+        </span>
         <span id="status" class="hidden text-[10px] font-mono text-gray-400 ml-1 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5"></span>
       </span>
       <div class="flex items-center gap-1.5 text-xs">

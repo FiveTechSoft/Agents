@@ -2024,7 +2024,7 @@ async function webSearchTool(query){
 const OC_URL='https://api.fivetechsoft.com/zen/v1';   // OpenCode Zen via fivetechsoft.com proxy
 const MODEL_NAMES={'x-preview-f-free':'Ox Alpha','mimo-v2.5-free':'Mimo','deepseek-v4-flash-free':'DeepSeek Flash','hy3-free':'Hy3','nemotron-3-ultra-free':'Nemotron Ultra','nemotron-3.5-lightning-free':'Nemotron Lightning','laguna-s-2.1-free':'Laguna'};
 function modelName(m){ return MODEL_NAMES[m]||m; }
-function setModelTag(m){ const t=document.getElementById('modeltag'); if(t){ t.textContent='🤖 '+modelName(m); t.title='Agente IA en uso: '+m+' (OpenCode Zen)'; } }
+function setModelTag(m){ const t=document.getElementById('modeltag'); if(t){ t.textContent='🤖 '+modelName(m); t.title='Agente IA en uso: '+m+' (OpenCode Zen) — click para cambiar'; t.dataset.base='🤖 '+modelName(m); } }
 // context usage % appended to the tag, refreshed every few seconds
 setInterval(function(){
   try{
@@ -2248,7 +2248,34 @@ function buildLangMenu(){ const m=document.getElementById('langmenu'); if(!m) re
     const sp=document.createElement('span'); sp.textContent=code.toUpperCase()+' · '+LANGS[code];
     b.appendChild(img); b.appendChild(sp); b.onclick=()=>{ setLang(code); m.classList.add('hidden'); }; m.appendChild(b); }); }
 function toggleLangMenu(e){ if(e)e.stopPropagation(); const m=document.getElementById('langmenu'); if(m) m.classList.toggle('hidden'); }
-document.addEventListener('click',()=>{ const m=document.getElementById('langmenu'); if(m) m.classList.add('hidden'); });
+document.addEventListener('click',()=>{ const m=document.getElementById('langmenu'); if(m) m.classList.add('hidden'); const mm=document.getElementById('modelmenu'); if(mm) mm.classList.add('hidden'); });
+/* model picker: click on the #modeltag header chip to switch between free models */
+async function buildModelMenu(){
+  const m=document.getElementById('modelmenu'); if(!m) return; m.innerHTML='';
+  let models=[]; try{ models=await discoverFreeModels(); }catch(e){}
+  if(!models.length){ const d=el('<div class="px-3 py-2 text-xs text-gray-400">…</div>'); d.textContent=T('Cargando modelos…','Loading models…'); m.appendChild(d); return; }
+  models.forEach(id=>{
+    const b=el('<button class="flex items-center justify-between gap-2 w-full text-left px-2 py-1.5 text-xs hover:bg-gray-700"></button>');
+    b.appendChild(Object.assign(document.createElement('span'),{textContent:modelName(id)}));
+    if(id===MODEL){ const chk=document.createElement('span'); chk.textContent='✓'; chk.className='text-green-400'; b.appendChild(chk); }
+    else { const sp=document.createElement('span'); sp.textContent=id.replace(/-free$/,''); sp.className='text-[10px] font-mono text-gray-500'; b.appendChild(sp); }
+    b.onclick=(ev)=>{ ev.stopPropagation(); setModel(id); };
+    m.appendChild(b);
+  });
+}
+async function toggleModelMenu(e){
+  if(e)e.stopPropagation();
+  document.querySelectorAll('#langmenu').forEach(x=>x.classList.add('hidden'));
+  const m=document.getElementById('modelmenu'); if(!m) return;
+  if(m.classList.contains('hidden')){ await buildModelMenu(); }
+  m.classList.toggle('hidden');
+}
+function setModel(id){
+  MODEL=id; try{ localStorage.setItem('model',id); }catch(e){}
+  setModelTag(id);
+  const m=document.getElementById('modelmenu'); if(m) m.classList.add('hidden');
+  tool(T('Modelo: ','Model: ')+modelName(id)+' ('+id+')');
+}
 function setLang(v){ curLang=v; try{ localStorage.setItem('lang',v); }catch(e){} renderLangBtn(); refreshUI(); tool('Idioma: '+(LANGS[v]||v)); }
 // i18n: update all visible UI text when language changes
 const UI18={
@@ -2511,6 +2538,7 @@ async function slashCmd(v){
     case '/clear': clearChat(); clearDivider(); break;
     case '/cost': costCard(usage); break;
     case '/compact': await compactNow(); break;
+    case '/distill': await distillCmd(); break;
     case '/init': { const p='AGENTS.md'; const ex=await fsGet(p); if(!ex) await fsPut(p,'# Reglas del proyecto\n\n- Estilo de codigo: ...\n- No tocar: ...\n- Tests: ...\n'); refreshDisk(); initCard(p); break; }
     case '/key': tool(T('No se necesita API key: Agents Web usa los modelos gratuitos de OpenCode Zen (Ox Alpha y fallbacks automáticos).','No API key needed: Agents Web uses the free OpenCode Zen models (Ox Alpha with automatic fallbacks).')); break;
     case '/ghtoken': if(arg){ document.getElementById('ghtok').value=arg; tool(T('Token de GitHub puesto (push/pull).','GitHub token set (push/pull).')); } else tool(T('Uso: /ghtoken <token>','Usage: /ghtoken <token>')); break;
@@ -2748,7 +2776,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/perm','Permisos: allow·ask·deny por tool'],['/voice','Voz TTS: /voice lista y elige'],['/memory','Ver MEMORY.md'],['/export','Sesión a Markdown'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/classify','Clasifica ficheros con IA local'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub'],['/key','Info API key (no se necesita)'],['/clear','Limpiar conversación'],['/help','Esta ayuda']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/distill','Destila sesión → resumen + MEMORY.md'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/perm','Permisos: allow·ask·deny por tool'],['/voice','Voz TTS: /voice lista y elige'],['/memory','Ver MEMORY.md'],['/distill','Resumen+facts'],['/export','Sesión a Markdown'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/classify','Clasifica ficheros con IA local'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub'],['/key','Info API key (no se necesita)'],['/clear','Limpiar conversación'],['/help','Esta ayuda']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
@@ -2764,6 +2792,37 @@ async function compactNow(){
     convo.length=0; convo.push({role:'system',content:'Resumen previo: '+summary}); convo.push(...keep); }
   saveSession(); lastCtxWarn=0;
   compactCard(before, ctxTokens());
+}
+
+/* ===== /distill — condensa la sesión en un resumen y extrae hechos a MEMORY.md ===== */
+async function distillCmd(){
+  if(!convo.filter(m=>m.role!=='system').length){ tool('/distill: no hay conversación que destilar.'); return; }
+  setWorking(true);
+  const wait=bot('<span class="text-gray-400">🧪 destilando sesión…</span>',true);
+  try{
+    const transcript=convo.filter(m=>m.role!=='system').map(m=>m.role+': '+(m.content||'').slice(0,800)).join('\n').slice(0,24000);
+    const r=await ocChat({model:MODEL,messages:[
+      {role:'system',content:'Eres un destilador de sesiones. Responde SOLO con JSON válido: {"summary":"resumen ejecutivo de la sesión en <=150 palabras","facts":["hecho duradero 1","hecho 2"]} . Los facts son datos DURADEROS que valen para futuras sesiones (decisiones, preferencias, rutas, nombres). Máximo 8 facts.'},
+      {role:'user',content:'Destila esta sesión:\n'+transcript}]});
+    const j=await r.json();
+    let parsed=null;
+    try{ parsed=JSON.parse(((j.choices[0].message.content||'').match(/\{[\s\S]*\}/)||['{}'])[0]); }catch(e){}
+    if(!parsed||!parsed.summary){ wait.innerHTML='<span class="text-red-400">No se pudo destilar (respuesta inválida).</span>'; return; }
+    // extract facts into persistent memory
+    let added=0;
+    for(const f of (parsed.facts||[]).slice(0,8)){ await execToolRaw('remember',JSON.stringify({fact:f})); added++; }
+    // replace conversation with the distilled summary
+    const before=convo.length;
+    convo.length=0; convo.push({role:'system',content:'Sesión anterior destilada:\n'+parsed.summary});
+    saveSession(); lastCtxWarn=0;
+    const c=el('<div class="bg-gradient-to-br from-purple-900/40 to-gray-800 border border-purple-700/50 p-4 rounded-xl max-w-[90%]"></div>');
+    c.innerHTML='<h4 class="text-sm font-semibold text-purple-300 mb-2">🧪 Sesión destilada</h4>'+
+      '<p class="text-xs text-gray-200 whitespace-pre-wrap">'+md(parsed.summary)+'</p>'+
+      '<div class="text-[11px] text-gray-400 mt-2">'+added+' hecho(s) → MEMORY.md · '+before+' mensajes → 1 resumen · contexto liberado</div>';
+    chat().appendChild(c); down(); flowAdd('distill',parsed.summary.slice(0,300),'');
+    saveSession();
+  }catch(e){ wait.innerHTML='Error destilando: '+e; }
+  finally{ setWorking(false); }
 }
 
 /* ===== skills: named instruction sets (disk skills/*.md + built-ins) ===== */
