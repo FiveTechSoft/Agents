@@ -3,8 +3,10 @@ const { defineConfig } = require('@playwright/test');
 
 module.exports = defineConfig({
   testDir: 'tests/e2e',
-  timeout: 30000,
+  timeout: 20000,
+  expect: { timeout: 5000 },
   retries: 0,
+  workers: undefined,
   use: {
     channel: 'msedge',            // uses the system Edge — no browser download needed
     baseURL: 'http://127.0.0.1:8931',

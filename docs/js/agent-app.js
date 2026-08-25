@@ -5,7 +5,9 @@ window.coi={
   coepCredentialless:()=>{ var ua=navigator.userAgent; return !(/firefox/i.test(ua) || (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua))); },
   shouldRegister:()=>true, doReload:()=>window.location.reload() };
 ;
-(function(){var BUILD='u59';var last=0;try{last=+sessionStorage.getItem('coiupd')||0;}catch(e){}fetch('version.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(v){v=(v||'').trim();if(v&&v!==BUILD&&(Date.now()-last>8000)){try{sessionStorage.setItem('coiupd',Date.now());}catch(e){}var q;try{var p=new URLSearchParams(location.search);p.set('u',Date.now());q='?'+p.toString();}catch(e){q='?u='+Date.now();}location.replace(location.pathname+q+location.hash);}}).catch(function(){});})();
+// NOTE: the old version-check IIFE that lived here was removed — it duplicated
+// boot-b.js without its session-safety guards and reloaded the page mid-session,
+// killing SSH connections and running agents.
 ;
 
 /* =====================================================================
@@ -462,7 +464,7 @@ function termLine(cmd, out, cwd){
    xterm.js terminal overlay, lazy-loaded on first use.
    Gateway: Node.js ssh-proxy.js (WebSocket ↔ TCP socket).
    ===================================================================== */
-let SSH_PROXY = (()=>{ try{ return localStorage.getItem('ssh_proxy')||'ws://localhost:8080'; }catch(e){ return 'ws://localhost:8080'; } })();
+let SSH_PROXY = (()=>{ try{ return localStorage.getItem('ssh_proxy')||'ws://127.0.0.1:8080'; }catch(e){ return 'ws://127.0.0.1:8080'; } })();
 let activeSsh = null; // { ws, term, card, infoEl, target, user } — persistent SSH session
 // User-registered tools. Persist across sessions.
 let USER_TOOLS = (()=>{ try{ return new Map(JSON.parse(localStorage.getItem('user_tools')||'[]')); }catch(e){ return new Map(); } })();
@@ -474,9 +476,18 @@ async function ensureXterm(){
   xtermReady = (async()=>{
     const css=document.createElement('link'); css.rel='stylesheet';
     css.href='https://cdn.jsdelivr.net/npm/xterm@4.19.0/css/xterm.css'; document.head.appendChild(css);
+    // xterm.open() measures cells -> the stylesheet MUST be applied first,
+    // otherwise it throws "Cannot read properties of undefined (reading 'cell')"
+    await new Promise(res=>{
+      if(css.sheet) return res();
+      css.onload=res;
+      setTimeout(res,3000);   // never hang the SSH flow on CSS
+    });
     await loadScript('https://cdn.jsdelivr.net/npm/xterm@4.19.0/lib/xterm.js');
     await loadScript('https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.js');
-    return {Terminal:window.Terminal, FitAddon:window.FitAddon};
+    // the fit addon UMD exports { FitAddon: class } — unwrap it if so
+    const FA=window.FitAddon;
+    return {Terminal:window.Terminal, FitAddon:(FA && FA.FitAddon) ? FA.FitAddon : FA};
   })();
   try{ return await xtermReady; }catch(e){ xtermReady=null; throw e; }
 }
@@ -491,6 +502,9 @@ function closeSsh(){
 }
 async function sshConnect(wsUrl, target, user, fromPrompt){
   if(activeSsh){ closeSsh(); } // one active session at a time
+  // reserve the session slot immediately so the version-check reload in boot-b
+  // sees the session as busy and doesn't reload mid-connection
+  activeSsh={ ws:null, term:null, card:null, infoEl:null, target:target, user:user, close:function(){ closeSsh(); } };
   const {Terminal, FitAddon} = await ensureXterm();
 
   // compact connection card
@@ -521,7 +535,7 @@ async function sshConnect(wsUrl, target, user, fromPrompt){
     theme:{background:'#0b1020',foreground:'#e5e7eb',cursor:'#667eea'},
     rows:12, cols:80});
   const fit=new FitAddon(); term.loadAddon(fit);
-  term.open(termC); fit.fit();
+  term.open(termC); try{ fit.fit(); }catch(e){}
   term.writeln('\x1b[1;32mConectando a '+target+'...\x1b[0m');
 
   const ws=new WebSocket(wsUrl); ws.binaryType='arraybuffer';
@@ -1142,10 +1156,35 @@ function speak(text){
     speechSynthesis.cancel();   // one utterance at a time: new replies replace pending ones
     const u=new SpeechSynthesisUtterance(text.slice(0,600));
     u.lang=TTS_LOCALES[curLang]||'es-ES';
-    const v=speechSynthesis.getVoices().find(v=>v.lang && v.lang.toLowerCase().startsWith(u.lang.slice(0,2).toLowerCase()));
-    if(v) u.voice=v;
+    // user-selected voice wins; otherwise first voice matching the UI language
+    const voices=speechSynthesis.getVoices();
+    const picked=(localStorage.getItem('tts_voice')||'');
+    const v=voices.find(v=>v.voiceURI===picked) ||
+            voices.find(v=>v.lang && v.lang.toLowerCase().startsWith(u.lang.slice(0,2).toLowerCase()));
+    if(v){ u.voice=v; u.lang=v.lang; }
     speechSynthesis.speak(u);
   }catch(e){}
+}
+/* /voice — list and pick the TTS voice */
+async function voiceCmd(arg){
+  arg=(arg||'').trim();
+  if(!window.speechSynthesis){ tool(T('Tu navegador no soporta síntesis de voz.','Your browser does not support speech synthesis.')); return; }
+  const voices=speechSynthesis.getVoices();
+  if(!voices.length){ tool(T('No hay voces instaladas en este sistema.','No voices installed on this system.')); return; }
+  if(/^del$/i.test(arg)){ try{ localStorage.removeItem('tts_voice'); }catch(e){}
+    tool(T('Voz restablecida (automática según idioma).','Voice reset (automatic by language).')); return; }
+  const n=parseInt(arg);
+  if(n>=1 && n<=voices.length){
+    const v=voices[n-1];
+    try{ localStorage.setItem('tts_voice',v.voiceURI); }catch(e){}
+    tool('🔊 '+v.name+' ('+v.lang+')'+T(' seleccionada. Pulsa 🔊 para escucharla.',' selected. Press 🔊 to hear it.'));
+    speak(T('Hola, soy Agents Web.','Hello, I am Agents Web.'));
+    return;
+  }
+  if(arg){ tool(T('Índice inválido. Uso: /voice <1-'+voices.length+'> o /voice del','Invalid index. Usage: /voice <1-'+voices.length+'> or /voice del')); return; }
+  const sel=(()=>{ try{ return localStorage.getItem('tts_voice'); }catch(e){ return null; } })();
+  tool(voices.map((v,i)=>(i+1)+'. '+v.name+' ['+v.lang+']'+(v.voiceURI===sel?' ✓':'')).join('\n')+
+    '\n\n'+T('Uso: /voice <número> elige la voz · /voice del restablece','Usage: /voice <number> picks the voice · /voice del resets'));
 }
 function toggleTts(){
   TTS_ON=!TTS_ON; try{ localStorage.setItem('tts',TTS_ON?'1':'0'); }catch(e){}
@@ -1523,11 +1562,16 @@ async function cronCmd(arg){
   }
   const sp=arg.indexOf(' ');
   if(sp<0){ tool('Uso: /cron <30m|2h|1d> <comando>'); return; }
-  const everyLabel=arg.slice(0,sp), cmd=arg.slice(sp+1).trim(), ms=cronParseEvery(everyLabel);
-  if(!ms || !cmd){ tool('Uso: /cron <30m|2h|1d> <comando>   — ej: /cron 30m /action runs'); return; }
+  cronAdd(arg.slice(0,sp), arg.slice(sp+1).trim());
+}
+// register a recurring task (shared by /cron and the schedule_task tool)
+function cronAdd(everyLabel, cmd){
+  const ms=cronParseEvery(everyLabel);
+  if(!ms || !cmd){ tool('Uso: /cron <30m|2h|1d> <comando>   — ej: /cron 30m /action runs'); return null; }
   const job={id:cronJobs.reduce((mx,j)=>Math.max(mx,j.id),0)+1, ms:ms, everyLabel:everyLabel, cmd:cmd, next:Date.now()+ms};
   cronJobs.push(job); cronSave();
   tool('⏰ Tarea #'+job.id+' programada cada '+everyLabel+': "'+cmd+'"\n(activa mientras esta pestaña esté abierta; se salta si el agente está ocupado).\nPara que corra en la nube sin navegador: /cron gh "*/'+Math.max(1,Math.round(ms/60e3))+' * * * *" '+cmd);
+  return job;
 }
 setInterval(()=>{
   const now=Date.now(); let changed=false;
@@ -1575,6 +1619,7 @@ const SLASH_CMDS=[
   ['/action','GitHub Actions: list, runs, run <wf>, setup, exec "<cmd>"','GitHub Actions: list, runs, run <wf>, setup, exec "<cmd>"'],
   ['/cron','Tareas programadas: <30m|2h|1d> <cmd>, del <id>, gh "<schedule>" <tarea>','Scheduled tasks: <30m|2h|1d> <cmd>, del <id>, gh "<schedule>" <task>'],
   ['/perm','Permisos por herramienta: /perm shell ask, deny…','Per-tool permissions: /perm shell ask, deny…'],
+  ['/voice','Voz que lee las respuestas: lista y elige (1,2…, del)','Voice reading replies: list and pick (1,2…, del)'],
   ['/share','Comparte la sesión mediante un enlace','Share the session via a link'],
   ['/skill','Gestiona skills (list, run, generate…)','Manage skills (list, run, generate…)'],
   ['/tool','Registra herramientas propias del usuario','Register user-defined tools'],
@@ -1721,6 +1766,11 @@ async function run(){
   }
   const cmd0=v.split(/\s+/)[0];
   if(SHELL_CMDS.has(cmd0) || cmd0.startsWith('./')){ const cwd=SHCWD; const out=await shRun(v); flowAdd('cmd',v,(out||'').slice(0,200)); termLine(v, out, cwd); nextHint(); return; }
+  // if the agent is already working, queue the message as an interjection
+  // (a second parallel agent loop would interleave tool calls and corrupt context)
+  if(workN>0){ btwPending=(btwPending? btwPending+'\n':'')+v; user('💬 '+v);
+    tool(T('El agente está ocupado: tu mensaje se entregará entre acciones.','The agent is busy: your message will be delivered between actions.'));
+    nextHint(); return; }
   // otherwise: send to the LLM agent
   flowAdd('user',v); await agent(v); nextHint();
 }
@@ -1739,6 +1789,7 @@ const TOOLS=[
  {type:'function',function:{name:'shell',description:'Run a POSIX-like shell command on the virtual disk: ls cat echo pwd cd mkdir touch rm mv cp grep head tail wc find, with pipes (|) and redirect (> >>).',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']}}},
  {type:'function',function:{name:'sql',description:'Execute a SQL query on a .db virtual database file (SQLite via sqlite3). Use for SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP, ALTER. If the .db file does not exist, it is created automatically on CREATE TABLE. Returns rows as JSON with columns, rows, and changes count.',parameters:{type:'object',properties:{db:{type:'string',description:'Path to the .db file, e.g. "clientes.db" or "data/clientes.db"'},query:{type:'string',description:'SQL query to execute'}},required:['db','query']}}},
  {type:'function',function:{name:'python',description:'Run real Python (Pyodide/CPython in WASM). cwd is /disk so it can read/write the virtual disk files. Returns stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
+ {type:'function',function:{name:'schedule_task',description:'Schedule a RECURRING task. The task (a prompt or /command) will be executed automatically every interval while the page stays open. Use when the user asks for something periodically ("cada minuto", "every hour", "diario"). Minimum interval 1m.',parameters:{type:'object',properties:{every:{type:'string',description:'Interval with unit: 1m, 5m, 30m, 2h, 1d'},task:{type:'string',description:'What to run each time: a user-style prompt ("dime un dato curioso") or a /command ("/cost", "/action runs")'},required:['every','task']}}}},
  {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
  {type:'function',function:{name:'register_tool',description:'Register a NEW tool from a script on the disk. The tool becomes available immediately for the current and future sessions (persists in localStorage). Use this after writing a script so you can call it by name later. The script receives arguments via command line ($1, $2... in shell or sys.argv in Python).',parameters:{type:'object',properties:{name:{type:'string',description:'Tool name (lowercase, no spaces). Becomes a callable command.'},description:{type:'string',description:'What the tool does, so you remember when to use it later.'},scriptPath:{type:'string',description:'Path to the script file on disk (e.g. contar.py or backup.sh)'}},required:['name','scriptPath']}}},
  {type:'function',function:{name:'user_tools',description:'List all user-registered tools (names and descriptions).',parameters:{type:'object',properties:{}}}},
@@ -1816,6 +1867,10 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='web_fetch'){ try{ const u=(args.url||''); const r=await fetch(WEBPROXY+encodeURIComponent(u)); const t=await r.text(); if(!r.ok) throw new Error('HTTP '+r.status); return t.slice(0,6000); }catch(e){ return 'web_fetch error: '+e; } }
   if(name==='shell'){ const cwd=SHCWD; const out=await shRun(args.command||''); termLine(args.command||'', out, cwd); return out||'(ok)'; }
   if(name==='python'){ const out=await runPython(args.code||''); termLine('python ‹code›', out, SHCWD); return out; }
+  if(name==='schedule_task'){
+    const job=cronAdd(String(args.every||'').trim(), String(args.task||'').trim());
+    return job ? ('Programada: #'+job.id+' cada '+job.everyLabel+' → "'+job.cmd+'"') : 'No se pudo programar: intervalo o tarea inválidos.';
+  }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
   if(name==='register_tool'){
     const n=(args.name||'').toLowerCase().replace(/[^a-z0-9_]/g,'_');
@@ -2287,7 +2342,7 @@ async function agent(text){
   const snap=await snapshotDisk();   // for rollback on abort
   const skillsTxt=await activeSkillsPrompt();
   let rulesTxt=''; try{ const rf=(await fsGet('AGENTS.md'))||(await fsGet('CLAUDE.md')); if(rf&&rf.content&&rf.content.trim()) rulesTxt='\n\nProject rules (AGENTS.md — follow them):\n'+rf.content.slice(0,4000); }catch(e){}
-  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+rulesTxt+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. When the user asks for something PERIODIC ("cada minuto", "every hour", "daily"), use the schedule_task tool instead of answering with instructions. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+rulesTxt+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
   try{
     let step=0, limit=14;
@@ -2445,9 +2500,9 @@ async function slashCmd(v){
     case '/py': { let code=arg; if(/^[\w./-]+\.py$/.test(arg.trim())){ const f=await fsGet(shResolve(arg.trim())); code=f?f.content:''; if(!f){ tool('no existe: '+arg); break; } } setWorking(true); const out=await runPython(code); setWorking(false); termLine('python ‹code›', out, SHCWD); break; }
     case '/cc': { setWorking(true); const isFiles=/\.(c|cpp|cc|cxx)(\s|$)/i.test(arg); const out = isFiles? await ccExec(arg.split(/\s+/)) : await ccRun(arg); setWorking(false); termLine('clang '+(isFiles?arg:'‹code›'), out, SHCWD); break; }
     case '/ssh': {
-      if(!arg.trim()){ tool('Uso: /ssh [user@]host [puerto]'); break; }
-      // parse: [user@]host [port|-p port]
-      let host='', user='', port=22;
+      if(!arg.trim()){ tool('Uso: /ssh [user@]host [puerto] [contraseña]\nCon contraseña usa el modo ssh2 del gateway (shell real). Sin ella, tubería TCP cruda.'); break; }
+      // parse: [user@]host [port|-p port] [password]
+      let host='', user='', port=22, pass='';
       const parts=arg.trim().split(/\s+/);
       for(let i=0;i<parts.length;i++){
         const a=parts[i];
@@ -2455,14 +2510,16 @@ async function slashCmd(v){
         if(a.includes('@')){ const p2=a.split('@'); user=p2[0]; host=p2[1]; continue; }
         if(!host) host=a;
         else if(/^\d+$/.test(a)) port=parseInt(a)||22;   // trailing number = port
+        else if(!pass) pass=a;                           // last word = password (enables ssh2 mode)
       }
-      if(!host){ tool('Uso: /ssh [user@]host [puerto]'); break; }
-      const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'');
+      if(!host){ tool('Uso: /ssh [user@]host [puerto] [contraseña]'); break; }
+      const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'')+(pass?'&pass='+encodeURIComponent(pass):'');
       tool('🔒 Conectando a '+(user?user+'@':'')+host+':'+port+' via '+SSH_PROXY);
       sshConnect(wsUrl, host+(port!==22?':'+port:''), user, true);
       break;
     }
     case '/perm': await permCmd(arg); break;
+    case '/voice': await voiceCmd(arg); break;
     case '/cron': await cronCmd(arg); break;
     case '/classify': {
       classifyCard();
@@ -2641,7 +2698,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/perm','Permisos: allow·ask·deny por tool'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/classify','Clasifica ficheros con IA local'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub'],['/key','Info API key (no se necesita)'],['/clear','Limpiar conversación'],['/help','Esta ayuda']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/perm','Permisos: allow·ask·deny por tool'],['/voice','Voz TTS: /voice lista y elige'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/classify','Clasifica ficheros con IA local'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub'],['/key','Info API key (no se necesita)'],['/clear','Limpiar conversación'],['/help','Esta ayuda']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');

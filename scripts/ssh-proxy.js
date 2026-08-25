@@ -52,27 +52,90 @@ server.on('upgrade', (req, socket, head) => {
   );
 
   // Parse target from query string
-  let targetHost = 'localhost', targetPort = 22, targetUser = '';
+  let targetHost = 'localhost', targetPort = 22, targetUser = '', targetPass = '';
   try {
     const url = new URL(req.url, 'ws://localhost');
     targetHost = url.searchParams.get('host') || targetHost;
     targetPort = parseInt(url.searchParams.get('port')) || targetPort;
     targetUser = url.searchParams.get('user') || '';
+    targetPass = url.searchParams.get('pass') || '';
   } catch (e) {}
 
   console.log(`SSH ${targetUser ? targetUser + '@' : ''}${targetHost}:${targetPort}`);
 
-  const tcp = net.createConnection({ host: targetHost, port: targetPort }, () => {
-    console.log(`  TCP connected`);
-  });
-
   let closed = false;
+  let tcp = null;
   const close = () => {
     if (closed) return;
     closed = true;
-    tcp.destroy();
+    if (tcp) tcp.destroy();
     socket.destroy();
   };
+
+  // wrap a buffer as a WebSocket binary frame and send it to the browser
+  const wsSend = (chunk) => {
+    if (closed || socket.destroyed) return;
+    const len = chunk.length;
+    let frame;
+    if (len < 126) {
+      frame = Buffer.alloc(2 + len);
+      frame[0] = 0x82; frame[1] = len;
+      chunk.copy(frame, 2);
+    } else if (len < 65536) {
+      frame = Buffer.alloc(4 + len);
+      frame[0] = 0x82; frame[1] = 126;
+      frame.writeUInt16BE(len, 2);
+      chunk.copy(frame, 4);
+    } else {
+      frame = Buffer.alloc(10 + len);
+      frame[0] = 0x82; frame[1] = 127;
+      frame.writeBigUInt64BE(BigInt(len), 2);
+      chunk.copy(frame, 10);
+    }
+    socket.write(frame);
+  };
+
+  // ---- ssh2 mode: with pass= the gateway speaks the SSH protocol itself and
+  // pipes a ready shell over the WebSocket. Without it: raw TCP pipe (legacy).
+  if (targetPass) {
+    let Client;
+    try { Client = require('ssh2').Client; }
+    catch (e) {
+      socket.write('ssh2 module not installed on the gateway\r\n');
+      socket.destroy();
+      return;
+    }
+    // async write errors must never crash the gateway
+    socket.on('error', () => close());
+    const safeWrite = d => { if (!closed && !socket.destroyed) socket.write(d, () => {}); };
+    const conn = new Client();
+    conn.on('ready', () => {
+      console.log(`  SSH auth ok (${targetUser})`);
+      conn.shell({ term: 'xterm-256color' }, (err, stream) => {
+        console.log('  shell opened');
+        if (err) { safeWrite('shell error: ' + err.message + '\r\n'); socket.destroy(); return; }
+        stream.on('data', d => wsSend(d));
+        stream.stderr.on('data', d => wsSend(d));
+        stream.on('close', () => close('stream-closed'));
+        socket.on('data', d => { try { stream.write(d.toString()); } catch (e2) {} });
+        socket.on('close', () => { try { stream.close(); } catch (e2) {} });
+      });
+    });
+    conn.on('error', e => {
+      console.error(`  SSH error: ${e.message}`);
+      safeWrite('\r\n[ssh] ' + e.message + '\r\n');
+      close();
+    });
+    conn.connect({ host: targetHost, port: targetPort, username: targetUser || 'root',
+                   password: targetPass, readyTimeout: 25000 });
+    socket.on('close', () => { try { conn.end(); } catch (e) {} });
+    return;
+  }
+
+  const tcp2 = net.createConnection({ host: targetHost, port: targetPort }, () => {
+    console.log(`  TCP connected`);
+  });
+  tcp = tcp2;
 
   // WebSocket frame parser
   let buf = Buffer.alloc(0);
@@ -101,7 +164,7 @@ server.on('upgrade', (req, socket, head) => {
       const frameLen = offset + maskLen + payloadLen;
       if (buf.length < frameLen) break;
 
-      if (opcode === 0x8) { close(); return; }           // close
+      if (opcode === 0x8) { close('ws-close-frame'); return; }           // close
       if (opcode === 0x9) {                               // ping → pong
         const pong = Buffer.alloc(2 + payloadLen);
         pong[0] = 0x8a; pong[1] = payloadLen;
@@ -130,30 +193,13 @@ server.on('upgrade', (req, socket, head) => {
 
   tcp.on('data', (chunk) => {
     if (closed) return;
-    const len = chunk.length;
-    let frame;
-    if (len < 126) {
-      frame = Buffer.alloc(2 + len);
-      frame[0] = 0x82; frame[1] = len;
-      chunk.copy(frame, 2);
-    } else if (len < 65536) {
-      frame = Buffer.alloc(4 + len);
-      frame[0] = 0x82; frame[1] = 126;
-      frame.writeUInt16BE(len, 2);
-      chunk.copy(frame, 4);
-    } else {
-      frame = Buffer.alloc(10 + len);
-      frame[0] = 0x82; frame[1] = 127;
-      frame.writeBigUInt64BE(BigInt(len), 2);
-      chunk.copy(frame, 10);
-    }
-    if (!socket.destroyed) socket.write(frame);
+    wsSend(chunk);
   });
 
-  tcp.on('error', (e) => { console.error(`  TCP: ${e.message}`); close(); });
-  tcp.on('close', () => close());
-  socket.on('error', (e) => { console.error(`  WS: ${e.message}`); close(); });
-  socket.on('close', () => close());
+  tcp.on('error', (e) => { console.error(`  TCP: ${e.message}`); close('tcp-error'); });
+  tcp.on('close', () => close('tcp-closed'));
+  socket.on('error', (e) => { console.error(`  WS: ${e.message}`); close('ws-error'); });
+  socket.on('close', () => close('ws-closed'));
 });
 
 server.listen(PORT, () => {

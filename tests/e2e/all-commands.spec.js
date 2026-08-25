@@ -19,7 +19,7 @@ test('all slash commands are dispatched correctly', async ({ page }) => {
   for (const c of cmds) {
     await input.fill(c);
     await input.press('Enter');
-    await page.waitForTimeout(c === '/plan escribe un haiku sobre Harbour' ? 15000 : 700);
+    await page.waitForTimeout(c === '/plan escribe un haiku sobre Harbour' ? 8000 : 250);
   }
 
   const body = await page.locator('#content, main').first().innerText();

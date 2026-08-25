@@ -18,7 +18,8 @@
   },
   "homepage": "https://github.com/FiveTechSoft/Agents#readme",
   "dependencies": {
-    "@playwright/test": "^1.62.1"
+    "@playwright/test": "^1.62.1",
+    "ssh2": "^1.17.0"
   },
   "private": true
 }
