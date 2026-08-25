@@ -1965,16 +1965,56 @@ function delegationCard(tasks,contract){
     SVG('','<path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>')+
     '</div><div><h4 class="text-sm font-semibold text-gray-200">Delegando tarea…</h4><p class="text-xs text-gray-400 mt-0.5">El agente principal espera resultados.</p></div></div>'+
     (contract?'<div class="px-3 py-2 bg-purple-900/20 border-b border-purple-800/30"><div class="text-[10px] text-purple-300 font-medium uppercase tracking-wide mb-1">📋 Contrato compartido</div><div class="text-[10px] text-gray-400 max-h-16 overflow-y-auto whitespace-pre-wrap">'+escHtml(contract.slice(0,300))+(contract.length>300?'…':'')+'</div></div>':'')+
-    '<div class="dbody p-3 bg-gray-900/50 space-y-2"></div>';
+    '<div class="dbody p-3 bg-gray-900/50 space-y-2"></div>'+
+    '<div class="px-3 py-1.5 border-t border-gray-700/50 text-[10px] text-gray-500">👆 '+T('Click en un agente para ver su trabajo en detalle','Click an agent to inspect its work')+'</div>';
   const body=c.querySelector('.dbody'); const rows=[];
-  tasks.forEach((t,i)=>{ const row=el('<div class="flex items-center justify-between bg-gray-800 border border-purple-900/50 p-2.5 rounded-lg gap-2"></div>');
+  const agents=tasks.map(t=>({task:t,status:'',log:[],done:false,err:false}));
+  tasks.forEach((t,i)=>{
+    const row=el('<div class="flex items-center justify-between bg-gray-800 border border-purple-900/50 p-2.5 rounded-lg gap-2 hover:bg-gray-700/60 cursor-pointer"></div>');
+    row.title=T('Ver lo que hace este agente','See what this agent is doing');
     row.innerHTML='<div class="flex items-center gap-2.5 min-w-0"><span class="dotw relative flex h-2 w-2 shrink-0"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span></span><span class="text-xs font-medium text-purple-200 shrink-0">@Agent_'+(i+1)+'</span></div><span class="st text-[10px] text-gray-500 bg-black/40 px-1.5 py-0.5 rounded truncate"></span>';
-    row.querySelector('.st').textContent=t.slice(0,46); body.appendChild(row); rows.push(row); });
+    row.querySelector('.st').textContent=t.slice(0,46);
+    row.onclick=()=>openAgentViewer(i,agents);
+    body.appendChild(row); rows.push(row);
+  });
   chat().appendChild(c); down();
-  return { setStatus:(i,s)=>{ if(rows[i]) rows[i].querySelector('.st').textContent=String(s).slice(0,46); },
-    done:(i,err)=>{ if(rows[i]){ rows[i].querySelector('.dotw').innerHTML='<span class="relative inline-flex rounded-full h-2 w-2 '+(err?'bg-red-500':'bg-green-500')+'"></span>'; rows[i].querySelector('.st').textContent=err?'✕ error':'✓ hecho'; } } };
+  return { agents,
+    setStatus:(i,s)=>{ if(agents[i]) agents[i].status=String(s); if(rows[i]) rows[i].querySelector('.st').textContent=String(s).slice(0,46); },
+    done:(i,err)=>{ if(agents[i]){ agents[i].done=true; agents[i].err=!!err; } if(rows[i]){ rows[i].querySelector('.dotw').innerHTML='<span class="relative inline-flex rounded-full h-2 w-2 '+(err?'bg-red-500':'bg-green-500')+'"></span>'; rows[i].querySelector('.st').textContent=err?'✕ error':'✓ hecho'; } } };
 }
-async function subAgent(task,setStatus,contract){
+/* agent inspector: click a row in the delegation card to watch that sub-agent live */
+let agentViewerTimer=null;
+function closeAgentViewer(){ if(agentViewerTimer){ clearInterval(agentViewerTimer); agentViewerTimer=null; } document.querySelectorAll('#agentviewer').forEach(x=>x.remove()); }
+function renderAgentLog(a,body,stEl){
+  if(!a.log.length&&!a.done){ body.innerHTML='<div class="text-xs text-gray-500 p-4 text-center">'+T('Esperando primera acción…','Waiting for first action…')+'</div>'; return; }
+  body.innerHTML=a.log.map(ev=>{
+    if(ev.k==='tool') return '<div class="mb-2"><div class="text-[11px] font-medium text-purple-300">'+(TOOL_ICON[ev.name]||'🔧')+' '+escHtml(ev.name)+'</div>'+
+      (ev.args?'<div class="text-[10px] font-mono text-gray-500 truncate">'+escHtml(ev.args)+'</div>':'')+
+      (ev.out?'<pre class="text-[10px] font-mono text-gray-400 bg-black/40 border border-gray-800 rounded p-1.5 mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap">'+escHtml(ev.out.slice(0,800))+(ev.out.length>800?'…':'')+'</pre>':'')+'</div>';
+    return '<div class="text-xs text-gray-300 mb-2 whitespace-pre-wrap">'+escHtml(String(ev.text).slice(0,1200))+'</div>';
+  }).join('');
+  if(stEl) stEl.innerHTML='<span class="text-[10px] font-mono '+(a.done?(a.err?'text-red-400':'text-green-400'):'text-purple-300 animate-pulse')+'">'+escHtml(a.done?(a.err?'✕ error':'✓ hecho'):(a.status||'…'))+'</span>';
+  body.scrollTop=body.scrollHeight;
+}
+function openAgentViewer(i,agents){
+  const a=agents[i]; if(!a) return;
+  closeAgentViewer();
+  const ov=el('<div id="agentviewer" class="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-4"></div>');
+  const card=el('<div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl"></div>');
+  card.innerHTML='<div class="p-3 border-b border-gray-700 flex items-center justify-between gap-3">'+
+    '<div class="flex items-center gap-2 min-w-0"><span class="text-sm font-semibold text-purple-200 shrink-0">@Agent_'+(i+1)+'</span><span class="ast shrink-0"></span></div>'+
+    '<button class="back bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 shrink-0">← '+T('Volver a la vista global','Back to global view')+'</button></div>'+
+    '<div class="px-3 py-2 border-b border-gray-800 text-[11px] text-gray-400 max-h-16 overflow-y-auto whitespace-pre-wrap"></div>'+
+    '<div class="abody flex-1 overflow-y-auto p-3 bg-gray-950/60 min-h-0"></div>';
+  card.children[1].textContent='📋 '+a.task;
+  const stEl=card.querySelector('.ast'), body=card.querySelector('.abody');
+  const refresh=()=>renderAgentLog(a,body,stEl);
+  refresh(); agentViewerTimer=setInterval(refresh,700);
+  card.querySelector('.back').onclick=closeAgentViewer;
+  ov.onclick=(e)=>{ if(e.target===ov) closeAgentViewer(); };
+  ov.appendChild(card); document.body.appendChild(ov); down();
+}
+async function subAgent(task,setStatus,contract,log){
   const contractBlock = contract ? '\n\n📋 CONTRATO TÉCNICO (OBLIGATORIO — todos los sub-agentes deben seguir estos nombres exactos):\n'+contract+'\n' : '';
   const msgs=[{role:'system',content:'Eres un sub-agente. Realiza SOLO esta subtarea usando las tools del disco. Responde en '+(LANGS[curLang]||'español')+', muy breve.'},{role:'user',content:contractBlock+task}];
   for(let s=0;s<5;s++){
@@ -1983,11 +2023,20 @@ async function subAgent(task,setStatus,contract){
     const j=await r.json(); addUsage(j.usage);
     const mo=j.choices[0].message; msgs.push(mo);
     if(mo.tool_calls&&mo.tool_calls.length){
-      for(const tc of mo.tool_calls){ setStatus(tc.function.name+'…'); const out=await execTool(tc.function.name,tc.function.arguments); msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
+      if(mo.content) log.push({k:'msg',text:mo.content});
+      for(const tc of mo.tool_calls){
+        let args=''; try{ const fa=JSON.parse(tc.function.arguments||'{}'); args=Object.entries(fa).map(p=>p[0]+'='+(typeof p[1]==='string'?p[1].slice(0,80):JSON.stringify(p[1]))).join(' · '); }catch(e){ args=String(tc.function.arguments||'').slice(0,100); }
+        setStatus(tc.function.name+'…');
+        const out=await execTool(tc.function.name,tc.function.arguments);
+        log.push({k:'tool',name:tc.function.name,args:args,out:out});
+        msgs.push({role:'tool',tool_call_id:tc.id,content:out});
+      }
       continue;
     }
+    log.push({k:'final',text:mo.content||''});
     return mo.content||'';
   }
+  log.push({k:'final',text:'(límite)'});
   return '(límite)';
 }
 async function dispatchAgents(tasks,contract){
@@ -1995,7 +2044,7 @@ async function dispatchAgents(tasks,contract){
   tasks=tasks.slice(0,4);
   const card=delegationCard(tasks,contract);
   const results=await Promise.all(tasks.map((t,i)=>
-    subAgent(t,s=>card.setStatus(i,s),contract).then(r=>{card.done(i);return r;}).catch(e=>{card.done(i,true);return '(error: '+e+')';})));
+    subAgent(t,s=>card.setStatus(i,s),contract,card.agents[i].log).then(r=>{card.done(i);return r;}).catch(e=>{card.done(i,true);return '(error: '+e+')';})));
   return 'Sub-agentes terminados:\n'+tasks.map((t,i)=>(i+1)+') '+t+' => '+results[i]).join('\n');
 }
 
