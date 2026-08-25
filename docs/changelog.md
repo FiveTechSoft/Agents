@@ -34,7 +34,7 @@ Un agente IA en el navegador con disco virtual, runtimes WASM y herramientas rea
   alrededor de un **contrato técnico compartido** (nombres de tablas/columnas, firmas, rutas)
   que se antepone a cada sub-agente para evitar divergencia.
 - **web_search / web_fetch** (vía jina, CORS-friendly, sin API key).
-- **Límite de pasos** que **pregunta** antes de continuar (+14) en vez de bloquear.
+- **Límite de pasos** que **pregunta** antes de continuar (+25) en vez de bloquear.
 - **User tools dinámicas**: tools `register_tool` / `user_tools` / `unregister_tool` permiten al agente
   crear nuevas tools desde scripts. Sobreviven a recargas (localStorage).
   Python recibe `sys.argv`, shell recibe `$1..$n`. El agente se expande a sí mismo.

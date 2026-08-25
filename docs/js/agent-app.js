@@ -1192,6 +1192,32 @@ function toggleTts(){
   const b=document.getElementById('ttsbtn'); if(b) b.classList.toggle('bg-emerald-700', TTS_ON);
   tool(T('Voz: '+(TTS_ON?'ON — el agente lee sus respuestas':'OFF'),'Voice: '+(TTS_ON?'ON — the agent reads its replies aloud':'OFF')));
 }
+/* voice picker: ▾ next to the speaker button lists installed TTS voices */
+async function buildVoiceMenu(){
+  const m=document.getElementById('voicemenu'); if(!m) return; m.innerHTML='';
+  if(!window.speechSynthesis){ const d=el('<div class="px-3 py-2 text-xs text-gray-400"></div>'); d.textContent=T('Tu navegador no soporta síntesis de voz.','Your browser does not support speech synthesis.'); m.appendChild(d); return; }
+  let voices=speechSynthesis.getVoices();
+  if(!voices.length){ await new Promise(r=>setTimeout(r,500)); voices=speechSynthesis.getVoices(); }
+  if(!voices.length){ const d=el('<div class="px-3 py-2 text-xs text-gray-400"></div>'); d.textContent=T('No hay voces instaladas en este sistema.','No voices installed on this system.'); m.appendChild(d); return; }
+  const sel=(()=>{ try{ return localStorage.getItem('tts_voice'); }catch(e){ return null; } })();
+  const auto=el('<button class="flex items-center gap-2 w-full text-left px-2 py-1.5 text-xs hover:bg-gray-700"></button>');
+  auto.innerHTML='<span class="flex-1">'+T('Automática (según idioma)','Automatic (by UI language)')+'</span>'+(sel?'':'<span class="text-green-400">✓</span>');
+  auto.onclick=(e)=>{ e.stopPropagation(); try{ localStorage.removeItem('tts_voice'); }catch(err){} m.classList.add('hidden'); speak(T('Hola, soy Agents Web.','Hello, I am Agents Web.')); };
+  m.appendChild(auto);
+  voices.forEach((v,i)=>{
+    const b=el('<button class="flex items-center gap-2 w-full text-left px-2 py-1.5 text-xs hover:bg-gray-700"></button>');
+    b.innerHTML='<span class="flex-1 truncate">'+escHtml((i+1)+'. '+v.name)+'</span><span class="text-[10px] font-mono text-gray-500 shrink-0">'+escHtml(v.lang)+'</span>'+(v.voiceURI===sel?'<span class="text-green-400">✓</span>':'');
+    b.onclick=(e)=>{ e.stopPropagation(); try{ localStorage.setItem('tts_voice',v.voiceURI); }catch(err){} m.classList.add('hidden'); speak(T('Hola, soy Agents Web.','Hello, I am Agents Web.')); };
+    m.appendChild(b);
+  });
+}
+async function toggleVoiceMenu(e){
+  if(e)e.stopPropagation();
+  document.querySelectorAll('#langmenu,#modelmenu').forEach(x=>x.classList.add('hidden'));
+  const m=document.getElementById('voicemenu'); if(!m) return;
+  if(m.classList.contains('hidden')) await buildVoiceMenu();
+  m.classList.toggle('hidden');
+}
 /* dictado por micrófono */
 let REC=null, REC_ON=false;
 function toggleMic(){
@@ -2018,6 +2044,7 @@ async function subAgent(task,setStatus,contract,log){
   const contractBlock = contract ? '\n\n📋 CONTRATO TÉCNICO (OBLIGATORIO — todos los sub-agentes deben seguir estos nombres exactos):\n'+contract+'\n' : '';
   const msgs=[{role:'system',content:'Eres un sub-agente. Realiza SOLO esta subtarea usando las tools del disco. Responde en '+(LANGS[curLang]||'español')+', muy breve.'},{role:'user',content:contractBlock+task}];
   for(let s=0;s<5;s++){
+    await pauseGate();
     const r=await ocChat({model:MODEL,messages:msgs,tools:SUBTOOLS},{signal:agentAbort.signal});
     if(!r.ok) throw new Error('LLM '+r.status);
     const j=await r.json(); addUsage(j.usage);
@@ -2263,6 +2290,16 @@ let tStart=0, tTimer=null, tOutTok=0;   // live timer + token flow
 function kfmt(n){ n=n||0; return n>=1000? (n/1000).toFixed(1)+'k' : String(Math.round(n)); }
 function updStatus(){ const el=document.getElementById('status'); if(!el)return; const s=(Date.now()-tStart)/1000; const tps=s>0?tOutTok/s:0;
   el.textContent='⏱ '+s.toFixed(1)+'s · ⬆'+kfmt(usage.pin)+' ⬇'+kfmt(usage.pout)+(tOutTok?(' · '+Math.round(tps)+' tok/s'):''); }
+/* pause/resume: click the 😎 emoji to halt the agent between steps, click again to resume */
+let PAUSED=false; const pauseWaiters=[];
+function pauseGate(){ return PAUSED ? new Promise(r=>pauseWaiters.push(r)) : Promise.resolve(); }
+function togglePause(){
+  PAUSED=!PAUSED;
+  const e=document.getElementById('agi');
+  if(e){ e.textContent=PAUSED?'😴':'😎'; e.title=PAUSED?T('Reanudar el agente (click)','Resume the agent (click)'):T('Pausar / reanudar el agente','Pause / resume the agent'); }
+  tool(PAUSED?T('⏸ Agente en pausa — click en 😴 para reanudar','⏸ Agent paused — click 😴 to resume'):T('▶ Agente reanudado','▶ Agent resumed'));
+  if(!PAUSED) pauseWaiters.splice(0).forEach(r=>r());
+}
 function setWorking(b){ workN=Math.max(0,workN+(b?1:-1)); const e=document.getElementById('agi'); if(e) e.classList.toggle('blink',workN>0);
   const st=document.getElementById('status');
   if(workN>0 && !tTimer){ tStart=Date.now(); tOutTok=0; if(st)st.classList.remove('hidden'); updStatus(); tTimer=setInterval(updStatus,200); }
@@ -2297,7 +2334,7 @@ function buildLangMenu(){ const m=document.getElementById('langmenu'); if(!m) re
     const sp=document.createElement('span'); sp.textContent=code.toUpperCase()+' · '+LANGS[code];
     b.appendChild(img); b.appendChild(sp); b.onclick=()=>{ setLang(code); m.classList.add('hidden'); }; m.appendChild(b); }); }
 function toggleLangMenu(e){ if(e)e.stopPropagation(); const m=document.getElementById('langmenu'); if(m) m.classList.toggle('hidden'); }
-document.addEventListener('click',()=>{ const m=document.getElementById('langmenu'); if(m) m.classList.add('hidden'); const mm=document.getElementById('modelmenu'); if(mm) mm.classList.add('hidden'); });
+document.addEventListener('click',()=>{ const m=document.getElementById('langmenu'); if(m) m.classList.add('hidden'); const mm=document.getElementById('modelmenu'); if(mm) mm.classList.add('hidden'); const vm=document.getElementById('voicemenu'); if(vm) vm.classList.add('hidden'); });
 /* model picker: click on the #modeltag header chip to switch between free models */
 async function buildModelMenu(){
   const m=document.getElementById('modelmenu'); if(!m) return; m.innerHTML='';
@@ -2448,12 +2485,13 @@ async function agent(text){
   agentAbort=new AbortController(); setWorking(true);
   let changedFiles=[];   // files touched this turn (for multi-file review)
   try{
-    let step=0, limit=14;
+    let step=0, limit=25;
     while(true){
+      await pauseGate();
       if(step>=limit){
-        const ans=await askUser('Límite de '+limit+' pasos alcanzado. ¿Continuar?',[{label:'Sí, +14 pasos'},{label:'Detener'}]);
+        const ans=await askUser('Límite de '+limit+' pasos alcanzado. ¿Continuar?',[{label:'Sí, +25 pasos'},{label:'Detener'}]);
         if(/detener|stop|^no/i.test(ans)){ tool('Detenido por el usuario.'); break; }
-        limit+=14;
+        limit+=25;
       }
       step++;
       if(btwPending){ msgs.push({role:'user',content:'[interjección del usuario] '+btwPending}); convo.push({role:'user',content:btwPending}); btwPending=null; }
@@ -2833,6 +2871,14 @@ function helpCard(){
     b.innerHTML='<span class="text-blue-400 font-mono text-xs"></span><span class="text-[10px] text-gray-400 mt-0.5"></span>';
     b.children[0].textContent=cm; b.children[1].textContent=ds; b.onclick=()=>runCmd(cm);
     g.appendChild(b); });
+  const gh=el('<div class="mt-3 pt-3 border-t border-gray-700 text-[11px] text-gray-400 space-y-1"></div>');
+  gh.innerHTML='<div class="text-xs font-semibold text-gray-200 mb-1">💾 '+T('Panel del disco y sincronización GitHub','Disk panel & GitHub sync')+'</div>'+
+    '<div>• <b class="text-gray-300">ruta/archivo.txt +</b>: '+T('crea un fichero en el disco virtual','creates a file on the virtual disk')+'</div>'+
+    '<div>• <b class="text-gray-300">⬇ Pull repo</b>: '+T('descarga la carpeta del repo de GitHub a tu disco (sin token, repos públicos)','downloads the repo folder from GitHub to your disk (no token, public repos)')+'</div>'+
+    '<div>• <b class="text-gray-300">⬆ Push repo</b>: '+T('sube tu disco virtual a la carpeta del repo (exige token)','uploads your virtual disk to the repo folder (token required)')+'</div>'+
+    '<div>• <b class="text-gray-300">owner/name</b>: '+T('repo con el que sincronizar','repo to sync with')+' · <b class="text-gray-300">carpeta</b>: '+T('ruta dentro del repo','path inside the repo')+'</div>'+
+    '<div>• <b class="text-gray-300">'+T('Token','Token')+'</b>: '+T('solo necesario para Push. Tu disco vive en este navegador (IndexedDB); GitHub es su copia de seguridad.','only needed for Push. Your disk lives in this browser (IndexedDB); GitHub is its backup.')+'</div>';
+  c.appendChild(gh);
   chat().appendChild(c); down();
 }
 async function compactNow(){
