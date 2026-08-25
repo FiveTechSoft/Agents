@@ -1620,6 +1620,8 @@ const SLASH_CMDS=[
   ['/cron','Tareas programadas: <30m|2h|1d> <cmd>, del <id>, gh "<schedule>" <tarea>','Scheduled tasks: <30m|2h|1d> <cmd>, del <id>, gh "<schedule>" <task>'],
   ['/perm','Permisos por herramienta: /perm shell ask, deny…','Per-tool permissions: /perm shell ask, deny…'],
   ['/voice','Voz que lee las respuestas: lista y elige (1,2…, del)','Voice reading replies: list and pick (1,2…, del)'],
+  ['/memory','Muestra la memoria persistente (MEMORY.md)','Show persistent memory (MEMORY.md)'],
+  ['/export','Exporta la sesión a Markdown descargable','Export the session as downloadable Markdown'],
   ['/share','Comparte la sesión mediante un enlace','Share the session via a link'],
   ['/skill','Gestiona skills (list, run, generate…)','Manage skills (list, run, generate…)'],
   ['/tool','Registra herramientas propias del usuario','Register user-defined tools'],
@@ -1632,6 +1634,7 @@ const SLASH_CMDS=[
   ['/exit','Cierra la sesión actual','Close the current session']
 ];
 let acItems=[], acIdx=-1;
+let histR=0;   // Ctrl+R history-search cursor
 function acOpen(){ const d=document.getElementById('acdd'); return d && d.style.display==='block'; }
 function acPlace(){ const i=document.getElementById('prompt'), d=document.getElementById('acdd');
   if(!i||!d) return; const r=i.getBoundingClientRect();
@@ -1790,6 +1793,7 @@ const TOOLS=[
  {type:'function',function:{name:'sql',description:'Execute a SQL query on a .db virtual database file (SQLite via sqlite3). Use for SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP, ALTER. If the .db file does not exist, it is created automatically on CREATE TABLE. Returns rows as JSON with columns, rows, and changes count.',parameters:{type:'object',properties:{db:{type:'string',description:'Path to the .db file, e.g. "clientes.db" or "data/clientes.db"'},query:{type:'string',description:'SQL query to execute'}},required:['db','query']}}},
  {type:'function',function:{name:'python',description:'Run real Python (Pyodide/CPython in WASM). cwd is /disk so it can read/write the virtual disk files. Returns stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
  {type:'function',function:{name:'schedule_task',description:'Schedule a RECURRING task. The task (a prompt or /command) will be executed automatically every interval while the page stays open. Use when the user asks for something periodically ("cada minuto", "every hour", "diario"). Minimum interval 1m.',parameters:{type:'object',properties:{every:{type:'string',description:'Interval with unit: 1m, 5m, 30m, 2h, 1d'},task:{type:'string',description:'What to run each time: a user-style prompt ("dime un dato curioso") or a /command ("/cost", "/action runs")'},required:['every','task']}}}},
+ {type:'function',function:{name:'remember',description:'Save a durable fact to persistent memory (MEMORY.md). It will be available in FUTURE sessions. Use for: project decisions, user preferences, important paths, gotchas learned.',parameters:{type:'object',properties:{fact:{type:'string',description:'The fact to remember, one line, self-contained'}},required:['fact']}}},
  {type:'function',function:{name:'cc',description:'Compile and run C with real clang (Wasmer/WASM). Pass C source code; returns compile errors or program stdout.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
  {type:'function',function:{name:'register_tool',description:'Register a NEW tool from a script on the disk. The tool becomes available immediately for the current and future sessions (persists in localStorage). Use this after writing a script so you can call it by name later. The script receives arguments via command line ($1, $2... in shell or sys.argv in Python).',parameters:{type:'object',properties:{name:{type:'string',description:'Tool name (lowercase, no spaces). Becomes a callable command.'},description:{type:'string',description:'What the tool does, so you remember when to use it later.'},scriptPath:{type:'string',description:'Path to the script file on disk (e.g. contar.py or backup.sh)'}},required:['name','scriptPath']}}},
  {type:'function',function:{name:'user_tools',description:'List all user-registered tools (names and descriptions).',parameters:{type:'object',properties:{}}}},
@@ -1870,6 +1874,16 @@ async function execToolRaw(name,args){ try{ args=JSON.parse(args||'{}'); }catch(
   if(name==='schedule_task'){
     const job=cronAdd(String(args.every||'').trim(), String(args.task||'').trim());
     return job ? ('Programada: #'+job.id+' cada '+job.everyLabel+' → "'+job.cmd+'"') : 'No se pudo programar: intervalo o tarea inválidos.';
+  }
+  if(name==='remember'){
+    const fact=String(args.fact||'').trim().replace(/\n+/g,' ');
+    if(!fact) return 'Error: fact vacío.';
+    const mem=await fsGet('MEMORY.md');
+    let lines=(mem&&mem.content)? mem.content.trim().split('\n') : [];
+    if(lines.length>=50) lines=lines.slice(-49);
+    lines.push('- '+fact);
+    await fsPut('MEMORY.md',lines.join('\n')+'\n'); refreshDisk();
+    return 'Recordado: '+fact;
   }
   if(name==='cc'){ const out=await ccRun(args.code||''); termLine('clang ‹code›', out, SHCWD); return out; }
   if(name==='register_tool'){
@@ -2011,6 +2025,17 @@ const OC_URL='https://api.fivetechsoft.com/zen/v1';   // OpenCode Zen via fivete
 const MODEL_NAMES={'x-preview-f-free':'Ox Alpha','mimo-v2.5-free':'Mimo','deepseek-v4-flash-free':'DeepSeek Flash','hy3-free':'Hy3','nemotron-3-ultra-free':'Nemotron Ultra','nemotron-3.5-lightning-free':'Nemotron Lightning','laguna-s-2.1-free':'Laguna'};
 function modelName(m){ return MODEL_NAMES[m]||m; }
 function setModelTag(m){ const t=document.getElementById('modeltag'); if(t){ t.textContent='🤖 '+modelName(m); t.title='Agente IA en uso: '+m+' (OpenCode Zen)'; } }
+// context usage % appended to the tag, refreshed every few seconds
+setInterval(function(){
+  try{
+    if(typeof ctxTokens!=='function') return;
+    const pct=Math.min(100,Math.round(ctxTokens()/128000*100));
+    const t=document.getElementById('modeltag'); if(!t) return;
+    const base=t.dataset.base||'🤖 '+modelName(MODEL);
+    t.dataset.base=base;
+    t.textContent=base+' · ctx '+pct+'%';
+  }catch(e){}
+},5000);
 let FREE_MODELS=null;
 async function discoverFreeModels(){
   if(FREE_MODELS) return FREE_MODELS;
@@ -2342,8 +2367,10 @@ async function agent(text){
   const snap=await snapshotDisk();   // for rollback on abort
   const skillsTxt=await activeSkillsPrompt();
   let rulesTxt=''; try{ const rf=(await fsGet('AGENTS.md'))||(await fsGet('CLAUDE.md')); if(rf&&rf.content&&rf.content.trim()) rulesTxt='\n\nProject rules (AGENTS.md — follow them):\n'+rf.content.slice(0,4000); }catch(e){}
-  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. When the user asks for something PERIODIC ("cada minuto", "every hour", "daily"), use the schedule_task tool instead of answering with instructions. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+rulesTxt+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
+  let memTxt=''; try{ const mem=await fsGet('MEMORY.md'); if(mem&&mem.content&&mem.content.trim()) memTxt='\n\nPersistent memory (MEMORY.md — facts from previous sessions):\n'+mem.content.slice(0,2000)+'\nUse the remember tool to add new durable facts.'; }catch(e){}
+  const msgs=[{role:'system',content:'IMPORTANT: Write EVERY reply ONLY in '+(LANGS[curLang]||'español')+' (language "'+curLang+'"), no matter what language the user, files or tool output use. You are Agents Web. You have a virtual disk; use the tools list_files/read_file/write_file/delete_file/shell. The shell\'s filesystem root "/" IS the virtual disk itself: cloned repos and all files live at "/" (e.g. /Makefile, /src/...). There is NO /disk prefix in the shell (only Python sees the disk mirrored at /disk). The shell is simulated (no subprocesses); make is a minimal simulation, cc/clang compile real C to WASM. When the user asks for something PERIODIC ("cada minuto", "every hour", "daily"), use the schedule_task tool instead of answering with instructions. If you must choose between concrete options use ask_user. If you ask an open question, end your turn and the user will reply next. Be concise.'+rulesTxt+memTxt+skillsTxt}].concat(convo.map(m=>({role:m.role,content:m.content})));
   agentAbort=new AbortController(); setWorking(true);
+  let changedFiles=[];   // files touched this turn (for multi-file review)
   try{
     let step=0, limit=14;
     while(true){
@@ -2367,6 +2394,7 @@ async function agent(text){
           const ref=addActionRow(tc.function.name,a);
           const out=await execTool(tc.function.name,tc.function.arguments);
           markDone(ref,/^(error|rechaz)/i.test(out));
+          if(tc.function.name==='write_file'||tc.function.name==='delete_file'){ try{ const fa=JSON.parse(tc.function.arguments||'{}'); if(fa.path&&!changedFiles.includes(fa.path)) changedFiles.push(fa.path); }catch(e){} }
           msgs.push({role:'tool',tool_call_id:tc.id,content:out}); }
         continue;
       }
@@ -2374,6 +2402,15 @@ async function agent(text){
       if(res.content) flowAdd('reply',res.content.slice(0,300));
       speak(mdToText(res.content||''));   // read the final reply aloud (if TTS ON)
       AGENT_WAITING=/[?¿]/.test(res.content||'');
+      // multi-file turn review: >=3 files touched -> summary card with revert option
+      if(changedFiles.length>=3){
+        const review=el('<div class="bg-gray-800 border border-amber-700/50 p-3 rounded-xl max-w-[90%]"></div>');
+        review.innerHTML='<h4 class="text-xs font-semibold text-amber-400 mb-2">📋 '+changedFiles.length+' ficheros modificados en este turno</h4>'+
+          '<div class="text-[11px] text-gray-300 font-mono space-y-0.5 mb-2">'+changedFiles.map(f=>'• '+f).join('<br>')+'</div>';
+        const undoBtn=el('<button class="bg-red-800 hover:bg-red-700 text-white text-[11px] px-2 py-1 rounded">↩ Revertir todos</button>');
+        undoBtn.onclick=async()=>{ await restoreDisk(snap); refreshDisk(); review.classList.add('opacity-60'); tool('↻ Turno revertido ('+changedFiles.length+' ficheros).'); };
+        review.appendChild(undoBtn); chat().appendChild(review); down();
+      }
       if(AGENT_WAITING){ const p=document.getElementById('prompt'); p.placeholder='Escribe tu respuesta aquí…'; p.focus(); doneLine('Esperando respuesta del usuario…'); }
       return;
     }
@@ -2514,12 +2551,25 @@ async function slashCmd(v){
       }
       if(!host){ tool('Uso: /ssh [user@]host [puerto] [contraseña]'); break; }
       const wsUrl=SSH_PROXY+'?host='+encodeURIComponent(host)+'&port='+port+(user?'&user='+encodeURIComponent(user):'')+(pass?'&pass='+encodeURIComponent(pass):'');
+      if(location.protocol==='https:' && SSH_PROXY.startsWith('ws://')){
+        tool('⚠️ Desde HTTPS el navegador bloquea ws:// — usa un gateway wss:// (Deno Deploy, ver docs/ssh-proxy.md): sshproxy wss://tu-proyecto.deno.dev/ssh');
+        break;
+      }
       tool('🔒 Conectando a '+(user?user+'@':'')+host+':'+port+' via '+SSH_PROXY);
       sshConnect(wsUrl, host+(port!==22?':'+port:''), user, true);
       break;
     }
     case '/perm': await permCmd(arg); break;
     case '/voice': await voiceCmd(arg); break;
+    case '/memory': { const m=await fsGet('MEMORY.md'); tool(m&&m.content.trim()? m.content : 'MEMORY.md vacío. El agente guarda datos con la herramienta remember.'); break; }
+    case '/export': {
+      const md='# Agents Web — sesión '+new Date().toLocaleString()+'\n\n'+
+        convo.map(m=>'## '+(m.role==='user'?'👤 Usuario':m.role==='assistant'?'🤖 Agente':'⚙️ '+m.role)+'\n\n'+(m.content||'')).join('\n\n---\n\n');
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([md],{type:'text/markdown'}));
+      a.download='agents-sesion.md'; a.click(); URL.revokeObjectURL(a.href);
+      tool('📄 Sesión exportada como agents-sesion.md ('+convo.length+' mensajes).'); break;
+    }
     case '/cron': await cronCmd(arg); break;
     case '/classify': {
       classifyCard();
@@ -2698,7 +2748,7 @@ function clearDivider(){
   d.querySelector('span').innerHTML=IC_TRASH.replace('text-red-400','text-gray-500')+'Memoria Borrada'; chat().appendChild(d); down();
 }
 function helpCard(){
-  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/perm','Permisos: allow·ask·deny por tool'],['/voice','Voz TTS: /voice lista y elige'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/classify','Clasifica ficheros con IA local'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub'],['/key','Info API key (no se necesita)'],['/clear','Limpiar conversación'],['/help','Esta ayuda']];
+  const cmds=[['/cost','Ver gasto de sesión'],['/compact','Comprimir historial'],['/init','Crear AGENTS.md'],['/goal','Fijar objetivo'],['/plan','Generar plan'],['/run','Ejecutar plan'],['/clone','Clonar repo (git)'],['/git','status·log·commit·push'],['/action','GitHub Actions: list·runs·run <wf> [rama]'],['/cron','Programa tareas: 30m·2h·1d, del, gh'],['/perm','Permisos: allow·ask·deny por tool'],['/voice','Voz TTS: /voice lista y elige'],['/memory','Ver MEMORY.md'],['/export','Sesión a Markdown'],['/skill','Skills reutilizables'],['/tool','Herramientas del agente'],['/sh','Terminal (shell · /shell /bash)'],['/share','URL de la sesión (solo lectura)'],['/btw','¿Qué haces? (sin interrumpir)'],['/py','Python (Pyodide/WASM)'],['/cc','C con clang (WASM)'],['/classify','Clasifica ficheros con IA local'],['/ssh','SSH a servidor remoto'],['/exit','Cerrar sesión SSH'],['/proxy','CORS proxy (git real + binarios)'],['/loop','<objetivo> [maxIter] — bucle autónomo'],['/ghtoken','Token GitHub'],['/key','Info API key (no se necesita)'],['/clear','Limpiar conversación'],['/help','Esta ayuda']];
   const c=el('<div class="bg-gray-800 border border-gray-700 p-4 rounded-xl max-w-[90%]"></div>');
   c.innerHTML='<h4 class="text-sm font-semibold text-gray-200 mb-3 border-b border-gray-700 pb-2">Comandos Disponibles</h4><div class="grid grid-cols-2 gap-2 chc"></div>';
   const g=c.querySelector('.chc');
@@ -2886,6 +2936,15 @@ document.getElementById('fileinp').addEventListener('change', async (e)=>{
   refreshDisk(); e.target.value=''; });
 document.addEventListener('keydown',(e)=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); clearChat(); clearDivider(); }
+  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='l'){ e.preventDefault(); clearChat(); clearDivider(); }
+  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='r'){
+    e.preventDefault();
+    const p=document.getElementById('prompt'); const q=p.value.trim();
+    // cycle history entries matching current text (or all history when empty)
+    const matches=hist.filter(h=>!q || (h!==q && h.toLowerCase().includes(q.toLowerCase())));
+    if(!matches.length){ tool('Sin coincidencias en el historial.'); return; }
+    histR=(histR+1)%matches.length; p.value=matches[histR]; p.focus(); acUpdate();
+  }
   else if(e.key==='Escape'){ stopAgent(); } });
 
 buildLangMenu(); renderLangBtn();

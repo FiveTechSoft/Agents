@@ -139,3 +139,29 @@ test('/help card shows every documented command', async ({ page }) => {
     expect(txt).toContain(c);
   }
 });
+
+test('remember tool persists to MEMORY.md and /memory shows it', async ({ page }) => {
+  await page.goto('/index.html');
+  const input = page.locator('#prompt');
+  await expect(input).toBeVisible({ timeout: 20000 });
+  const res = await page.evaluate(async () =>
+    execToolRaw('remember', JSON.stringify({ fact: 'El servidor SSH es un DGX Spark' })));
+  expect(res).toContain('Recordado');
+  const mem = await page.evaluate(async () => (await fsGet('MEMORY.md')).content);
+  expect(mem).toContain('DGX Spark');
+  await input.fill('/memory');
+  await input.press('Enter');
+  await expect(page.getByText(/DGX Spark/)).toBeVisible({ timeout: 10000 });
+});
+
+test('/export downloads a markdown file', async ({ page }) => {
+  await page.goto('/index.html');
+  const input = page.locator('#prompt');
+  await expect(input).toBeVisible({ timeout: 20000 });
+  const dl = page.waitForEvent('download', { timeout: 10000 });
+  await input.fill('/export');
+  await input.press('Enter');
+  const download = await dl;
+  expect(download.suggestedFilename()).toBe('agents-sesion.md');
+  await expect(page.getByText(/exportada/)).toBeVisible({ timeout: 5000 });
+});
